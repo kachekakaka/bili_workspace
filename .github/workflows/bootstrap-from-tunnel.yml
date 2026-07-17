@@ -1,0 +1,53 @@
+name: Bootstrap v0.5.2 source
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-v052
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: ${{ !contains(github.event.head_commit.message, '[source-ready]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download and verify source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://biliworkspace-v052-kachekakaka.serveo.net/bili_workspace_v0.5.2_source_bootstrap_latest.tar.xz'
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 "$url" -o /tmp/source.tar.xz; then
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+          test -s /tmp/source.tar.xz
+          echo '1576300dcd26255f8cffc4e6dfb4695462374a1bc7f6cee9ddb6bebd81effe1e  /tmp/source.tar.xz' | sha256sum --check -
+          mkdir -p /tmp/source
+          tar -xJf /tmp/source.tar.xz -C /tmp/source
+          test -f /tmp/source/README.md
+          test -f /tmp/source/.env.default
+          test -f /tmp/source/config/config.json.default
+
+      - name: Replace bootstrap tree with verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
+          cp -a /tmp/source/. .
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Release v0.5.2 with reproducible setup and persistent config [source-ready]'
+          git push origin HEAD:main

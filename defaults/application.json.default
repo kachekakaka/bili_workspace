@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "downloads": {
+    "concurrency": 1,
+    "minimum_free_media_bytes": 1073741824,
+    "minimum_free_temp_bytes": 1073741824
+  },
+  "exports": {
+    "ttl_hours": 24,
+    "delete_after_complete_send": true
+  },
+  "media": {
+    "prefer_original_playback": true,
+    "compat_transcode_concurrency": 1
+  }
+}

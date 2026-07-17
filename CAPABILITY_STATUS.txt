@@ -1,0 +1,1 @@
+GitHub connector repository write capability confirmed.

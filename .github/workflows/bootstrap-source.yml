@@ -1,0 +1,55 @@
+name: Bootstrap complete v0.5.1 source tree
+
+on:
+  push:
+    branches: [main]
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-source-main
+  cancel-in-progress: false
+
+jobs:
+  unpack-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bootstrap commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify and extract source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE=.bootstrap/bili_workspace-v0.5.1.tar.gz
+          test -f "$ARCHIVE"
+          echo "a0215d820b330cda73bc18cbb70ff87f295d9e1409788db455d226d7d58fdd73  $ARCHIVE" | sha256sum -c -
+          python - <<'PY'
+          from pathlib import PurePosixPath
+          import tarfile
+          archive = '.bootstrap/bili_workspace-v0.5.1.tar.gz'
+          with tarfile.open(archive, 'r:gz') as tf:
+              for member in tf.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or member.issym() or member.islnk():
+                      raise SystemExit(f'Unsafe archive member: {member.name}')
+              tf.extractall(filter='data')
+          PY
+          rm -rf .bootstrap
+          rm -f .github/workflows/bootstrap-source.yml
+
+      - name: Commit complete source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Release v0.5.1 with update-safe configuration"
+          git push origin HEAD:main
