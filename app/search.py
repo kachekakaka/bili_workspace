@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import re
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -23,6 +27,10 @@ ORDER_MAP = {
 }
 
 _TAG_RE = re.compile(r"<[^>]+>")
+_CACHE_TTL = 180.0
+_CACHE_LIMIT = 160
+_CACHE_LOCK = threading.RLock()
+_SEARCH_CACHE: dict[tuple[str, str, int, str], tuple[float, dict[str, Any]]] = {}
 
 
 class SearchError(Exception):
@@ -100,6 +108,34 @@ def _normalize_item(item: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _cookie_token(cookie: str) -> str:
+    return hashlib.sha256(cookie.encode("utf-8")).hexdigest()[:16] if cookie else "guest"
+
+
+def _cached(key: tuple[str, str, int, str]) -> dict[str, Any] | None:
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        row = _SEARCH_CACHE.get(key)
+        if not row:
+            return None
+        created, value = row
+        if now - created > _CACHE_TTL:
+            _SEARCH_CACHE.pop(key, None)
+            return None
+        return copy.deepcopy(value)
+
+
+def _store_cache(key: tuple[str, str, int, str], value: dict[str, Any]) -> None:
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        _SEARCH_CACHE[key] = (now, copy.deepcopy(value))
+        if len(_SEARCH_CACHE) > _CACHE_LIMIT:
+            for old_key, _ in sorted(_SEARCH_CACHE.items(), key=lambda item: item[1][0])[
+                : len(_SEARCH_CACHE) - _CACHE_LIMIT
+            ]:
+                _SEARCH_CACHE.pop(old_key, None)
+
+
 def search_videos(
     keyword: str,
     *,
@@ -116,8 +152,14 @@ def search_videos(
     page = max(1, int(page))
 
     cookie = read_cookie_string(bbdown_dir)
+    cache_key = (keyword.casefold(), order_key, page, _cookie_token(cookie))
+    cached = _cached(cache_key)
+    if cached is not None:
+        cached["cached"] = True
+        return cached
+
     owns_client = client is None
-    # Avoid broken system HTTP(S)_PROXY (common cause of empty 502 to Bilibili APIs).
+    # Ignore broken system HTTP(S)_PROXY values when talking to Bilibili APIs.
     client = client or httpx.Client(timeout=20.0, trust_env=False)
     try:
         if wbi_keys:
@@ -144,14 +186,24 @@ def search_videos(
             norm = _normalize_item(item)
             if norm:
                 results.append(norm)
-        return {
+        pages = int(data.get("numPages") or data.get("num_pages") or 0)
+        total = int(data.get("numResults") or data.get("num_results") or len(results))
+        result = {
             "keyword": keyword,
             "order": order_key,
             "page": page,
-            "numPages": data.get("numPages") or 0,
-            "numResults": data.get("numResults") or len(results),
+            "pages": pages,
+            "total": total,
+            # Keep both historical spellings for old and new frontends.
+            "numPages": pages,
+            "numResults": total,
+            "num_pages": pages,
+            "num_results": total,
             "items": results,
+            "cached": False,
         }
+        _store_cache(cache_key, result)
+        return result
     finally:
         if owns_client:
             client.close()
