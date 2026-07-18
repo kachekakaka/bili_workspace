@@ -21,3 +21,6 @@
 *.whl binary
 *.exe binary
 *.zip binary
+
+# Integrated Windows runtime packs are regular Git binary objects, not Git LFS.
+vendor/windows/*.pack binary
