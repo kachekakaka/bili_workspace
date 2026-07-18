@@ -13,7 +13,7 @@ def _search_item(bvid: str, title: str) -> dict:
     return {
         "bvid": bvid,
         "title": title,
-        "author": "测试UP",
+        "author": "UP主",
         "url": f"https://www.bilibili.com/video/{bvid}",
         "cover": "",
         "duration": "01:00",
