@@ -12,6 +12,7 @@ from app.api import SESSION_COOKIE, router as api_router
 from app.constants import MAX_REQUEST_BODY_BYTES
 from app.enhancement_api import compat_router, router as enhancement_router
 from app.paths import ROOT
+from app.refinement_api import router as refinement_router
 from app.state import AppState
 from app.tag_store import TagStore
 
@@ -142,7 +143,8 @@ def create_app(state: AppState | None = None) -> FastAPI:
     def healthz():
         return {"ok": True, "version": __version__, "mode": app_state.runtime.mode}
 
-    # Compatibility overrides must be registered before the historical API router.
+    # Compatibility/refinement overrides must be registered before historical routes.
+    app.include_router(refinement_router)
     app.include_router(compat_router)
     app.include_router(api_router)
     app.include_router(enhancement_router)
