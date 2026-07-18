@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -19,18 +17,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
-      - name: Build full repository snapshot
+      - name: Record base tree
         shell: bash
         run: |
-          git archive --format=zip --output=repository-full.zip HEAD
-          git ls-files | sort > repository-files.txt
+          git rev-parse HEAD^1^{tree} | tee main-tree-sha.txt
+          git ls-tree -r HEAD^1 > main-tree.txt
 
-      - name: Upload full repository snapshot
+      - name: Upload base tree metadata
         uses: actions/upload-artifact@v4
         with:
-          name: repository-full
+          name: main-tree
           path: |
-            repository-full.zip
-            repository-files.txt
+            main-tree-sha.txt
+            main-tree.txt
           retention-days: 1
