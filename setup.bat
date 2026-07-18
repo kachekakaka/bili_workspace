@@ -2,59 +2,71 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title bili_workspace v0.5.3 - 初始化环境
+title bili_workspace v0.5.4 - Setup
 
+set "PY_CMD="
 where py >nul 2>nul
 if not errorlevel 1 (
-  set "PY_CMD=py -3"
-) else (
-  where python >nul 2>nul
-  if errorlevel 1 (
-    echo [错误] 未找到 Python。请安装 64 位 Python 3.11、3.12 或 3.13，并勾选 Add Python to PATH。
-    pause
-    exit /b 1
+  for %%V in (3.13 3.12 3.11) do (
+    if not defined PY_CMD (
+      py -%%V -c "import struct; raise SystemExit(0 if struct.calcsize('P')*8==64 else 1)" >nul 2>nul
+      if not errorlevel 1 set "PY_CMD=py -%%V"
+    )
   )
-  set "PY_CMD=python"
 )
-
-%PY_CMD% -c "import struct,sys; ok=(3,11)<=sys.version_info[:2]<=(3,13) and struct.calcsize('P')*8==64; print('Python',sys.version.split()[0],str(struct.calcsize('P')*8)+'-bit'); raise SystemExit(0 if ok else 1)"
-if errorlevel 1 (
-  echo [错误] 需要 64 位 Python 3.11、3.12 或 3.13。
+if not defined PY_CMD (
+  where python >nul 2>nul
+  if not errorlevel 1 (
+    python -c "import struct,sys; raise SystemExit(0 if (3,11)<=sys.version_info[:2]<=(3,13) and struct.calcsize('P')*8==64 else 1)" >nul 2>nul
+    if not errorlevel 1 set "PY_CMD=python"
+  )
+)
+if not defined PY_CMD (
+  echo [ERROR] 64-bit Python 3.11, 3.12, or 3.13 was not found.
+  echo Install a supported version with Python Launcher or Add Python to PATH enabled.
   pause
   exit /b 1
 )
 
+%PY_CMD% -c "import struct,sys; print('Python',sys.version.split()[0],str(struct.calcsize('P')*8)+'-bit')"
+if errorlevel 1 goto :failed
+
+echo [1/4] Preparing verified Windows runtime and offline wheels...
+%PY_CMD% -m tools.bootstrap_windows_runtime
+if errorlevel 1 goto :failed
+
 if not exist ".venv\Scripts\python.exe" (
-  echo [1/3] 创建本地虚拟环境...
+  echo [2/4] Creating local virtual environment...
   %PY_CMD% -m venv .venv
   if errorlevel 1 goto :failed
+) else (
+  echo [2/4] Reusing local virtual environment...
 )
 
 set "VENV_PY=.venv\Scripts\python.exe"
-echo [2/3] 安装固定版本依赖...
+echo [3/4] Installing locked Python dependencies...
 if exist "wheelhouse" (
   "%VENV_PY%" -m pip install --disable-pip-version-check --no-index --find-links "wheelhouse" -r requirements.lock
   if errorlevel 1 (
-    echo [提示] 离线依赖与当前 Python 不匹配，改用在线源安装...
+    echo [INFO] Offline wheels did not match this Python. Retrying from configured package index...
     "%VENV_PY%" -m pip install --disable-pip-version-check -r requirements.lock
   )
 ) else (
   "%VENV_PY%" -m pip install --disable-pip-version-check -r requirements.lock
 )
 if errorlevel 1 goto :failed
-
 "%VENV_PY%" -m pip check
 if errorlevel 1 goto :failed
 
-echo [3/3] 创建或升级本地配置...
+echo [4/4] Creating or upgrading runtime configuration...
 "%VENV_PY%" -m tools.config_sync
 if errorlevel 1 goto :failed
 
-echo 环境初始化完成。
-echo Run verify.bat for full self-check, or start.bat to launch the website.
+echo Setup completed.
+echo Run verify.bat for the full self-check, then start.bat.
 exit /b 0
 
 :failed
-echo [错误] 初始化失败，请查看上方错误信息。
+echo [ERROR] Setup failed. Review the message above.
 pause
 exit /b 1

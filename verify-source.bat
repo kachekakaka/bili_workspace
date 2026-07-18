@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title bili_workspace v0.5.3 - 源码自检
+title bili_workspace v0.5.4 - 源码自检
 
 if not exist ".venv\Scripts\python.exe" (
   call setup.bat
@@ -33,7 +33,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo ===== v0.5.3 源码自检全部通过 =====
+echo ===== v0.5.4 源码自检全部通过 =====
 pause
 exit /b 0
 

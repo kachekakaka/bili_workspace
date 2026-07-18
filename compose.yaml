@@ -2,7 +2,7 @@ name: bili-workspace
 
 services:
   app:
-    image: bili-workspace:0.5.3
+    image: bili-workspace:0.5.4
     build:
       context: .
       dockerfile: Dockerfile

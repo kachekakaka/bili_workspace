@@ -18,7 +18,17 @@ def _valid_host(value: str) -> bool:
         ipaddress.ip_address(host.strip("[]"))
         return True
     except ValueError:
-        return all(part and part.replace("-", "").isalnum() for part in host.rstrip(".").split("."))
+        normalized = host.rstrip(".")
+        if not normalized or len(normalized) > 253:
+            return False
+        labels = normalized.split(".")
+        return all(
+            1 <= len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(char.isalnum() or char == "-" for char in label)
+            for label in labels
+        )
 
 
 def main() -> int:

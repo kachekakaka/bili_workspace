@@ -1,4 +1,4 @@
-# bili_workspace v0.5.3
+# bili_workspace v0.5.4
 
 `bili_workspace` 是一个可运行在 **Windows 本机** 和 **QNAP NAS / Docker** 上的私人 Bilibili 下载与媒体库网站。
 
@@ -70,14 +70,21 @@ verify.bat
 start.bat
 ```
 
-源码仓库不携带 Windows 第三方二进制。没有 BBDown/FFmpeg 时，网站和媒体库可以启动，但真实搜索、扫码登录、下载、混流和兼容转码不可用。请将已验证的工具放到：
+源码仓库本身不把第三方 EXE、离线 wheelhouse 或 `.venv` 写入 Git 历史。`setup.bat` 会优先复用已有文件；缺失时从 `v0.5.4` GitHub Release 下载固定的 Windows 运行包，校验整个 ZIP 和内部逐文件 SHA-256，然后安装到：
 
 ```text
 BBDown_portable/BBDown.exe
 BBDown_portable/ffmpeg/bin/ffmpeg.exe
+wheelhouse/*.whl
 ```
 
-随后重新运行 `verify.bat`。
+网络受限时，也可以把下面的文件放在仓库根目录，再运行 `setup.bat`：
+
+```text
+bili_workspace_v0.5.4_windows_runtime.zip
+```
+
+完整 Windows 发布包已经包含这些文件，因此可以离线创建 `.venv`。运行包和完整包作为 GitHub Release 资产保存，而不是进入普通源码提交。
 
 ### 后续更新
 
@@ -214,7 +221,7 @@ python -m pip install -r requirements.lock
 ./verify-source.sh
 ```
 
-验证项目包括配置模板边界、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及完整 Windows 包中的 BBDown/FFmpeg 冒烟测试。
+验证项目包括配置模板边界、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及工具存在时的 BBDown/FFmpeg 真实启动冒烟测试。
 
 ## 仓库边界
 
@@ -229,11 +236,11 @@ SQLite 数据库
 Windows BBDown.exe、ffmpeg.exe 与 wheelhouse
 ```
 
-不提交 `.venv` 是因为它包含创建机器的绝对路径、Python ABI 和平台相关启动器，跨目录、跨 Python 小版本或跨 Windows/Linux 不可靠。依赖由锁定文件和 `setup.bat` 重建；Docker 运行环境由镜像重建。
+不提交 `.venv` 是因为它包含创建机器的绝对路径、Python ABI 和平台相关启动器，跨目录、跨 Python 小版本或跨 Windows/Linux 不可靠。依赖由锁定文件、Release 运行包和 `setup.bat` 重建；Docker 运行环境由镜像重建。
 
 更多说明见 [源码仓库与发布包](docs/源码仓库与发布包.md)。
 
-完整需求映射见 [V0.5.3 需求落实清单](docs/需求落实清单.md)，长期开发依据见 [产品需求与架构基线](docs/产品需求与架构基线.md)，发布边界见 [V0.5.3 发布与验证说明](docs/V0.5.3_发布与验证说明.md)，配置目录说明见 [config/README.md](config/README.md)。
+完整需求映射见 [V0.5.4 需求落实清单](docs/需求落实清单.md)，长期开发依据见 [产品需求与架构基线](docs/产品需求与架构基线.md)，发布边界见 [V0.5.4 发布与验证说明](docs/V0.5.4_发布与验证说明.md)，配置目录说明见 [config/README.md](config/README.md)，可恢复源文件与发布资产见 [源文件与恢复清单](docs/源文件与恢复清单.md)。
 
 ## 项目目录
 

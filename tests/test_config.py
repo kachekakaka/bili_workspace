@@ -56,3 +56,20 @@ def test_source_config_allows_missing_third_party_tools(tmp_env):
         initial={**tmp_env.initial, "bbdown_dir": str(empty_tools)},
     )
     assert store.get().bbdown_path() == empty_tools.resolve()
+
+
+def test_invalid_bind_hostname_in_json_is_rejected(tmp_path):
+    from app.config import ConfigStore
+
+    bbdown = tmp_path / "BBDown_portable"
+    bbdown.mkdir()
+    with pytest.raises(ValueError, match="host"):
+        ConfigStore(
+            path=tmp_path / "config.json",
+            initial={
+                "host": "nas-.home",
+                "port": 3398,
+                "download_dir": str(tmp_path / "downloads"),
+                "bbdown_dir": str(bbdown),
+            },
+        )

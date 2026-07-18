@@ -102,3 +102,66 @@ def test_server_can_bind_all_interfaces_on_port_3389(monkeypatch, tmp_path):
     assert settings.port == 3389
     assert settings.auth_required is True
     assert settings.allow_ip_hosts is True
+
+
+def test_config_hostname_promotes_local_runtime_and_updates_trusted_hosts(
+    monkeypatch, tmp_env, tmp_path
+):
+    from app.state import AppState
+    from tests.conftest import StaticCookieChecker, artifact_runner
+
+    monkeypatch.setenv("BILI_APP_MODE", "local")
+    monkeypatch.delenv("BILI_HOST", raising=False)
+    monkeypatch.setenv("BILI_CONFIG_DIR", str(tmp_path / "runtime-config"))
+    monkeypatch.setenv("BILI_MEDIA_DIR", str(tmp_path / "runtime-media"))
+    monkeypatch.setenv("BILI_CACHE_DIR", str(tmp_path / "runtime-cache"))
+    monkeypatch.setenv("BILI_TEMP_DIR", str(tmp_path / "runtime-tmp"))
+    monkeypatch.setenv("BILI_TRUSTED_HOSTS", "127.0.0.1,localhost,testserver")
+
+    initial = dict(tmp_env.initial)
+    initial["host"] = "nas-box.home"
+    state = AppState.create(
+        config_path=tmp_env.config_path,
+        initial_config=initial,
+        runner=artifact_runner(),
+        cookie_checker=StaticCookieChecker(),
+    )
+    try:
+        assert state.runtime.server_mode is True
+        assert state.runtime.auth_required is True
+        assert state.runtime.host == "nas-box.home"
+        assert "nas-box.home" in state.runtime.trusted_hosts
+    finally:
+        state.stop()
+
+
+def test_invalid_bind_hostname_is_rejected(monkeypatch, tmp_path):
+    _base(monkeypatch, tmp_path)
+    monkeypatch.setenv("BILI_HOST", "-invalid.home")
+    with pytest.raises(ValueError, match="BILI_HOST"):
+        RuntimeSettings.from_env()
+
+
+def test_explicit_environment_port_overrides_local_json_config(monkeypatch, tmp_env, tmp_path):
+    from app.state import AppState
+    from tests.conftest import StaticCookieChecker, artifact_runner
+
+    monkeypatch.setenv("BILI_APP_MODE", "local")
+    monkeypatch.setenv("BILI_HOST", "127.0.0.1")
+    monkeypatch.setenv("BILI_PORT", "34177")
+    monkeypatch.setenv("BILI_CONFIG_DIR", str(tmp_path / "runtime-config"))
+    monkeypatch.setenv("BILI_MEDIA_DIR", str(tmp_path / "runtime-media"))
+    monkeypatch.setenv("BILI_CACHE_DIR", str(tmp_path / "runtime-cache"))
+    monkeypatch.setenv("BILI_TEMP_DIR", str(tmp_path / "runtime-tmp"))
+
+    state = AppState.create(
+        config_path=tmp_env.config_path,
+        initial_config=tmp_env.initial,
+        runner=artifact_runner(),
+        cookie_checker=StaticCookieChecker(),
+    )
+    try:
+        assert state.runtime.port == 34177
+        assert state.config_store.get().port == 34177
+    finally:
+        state.stop()

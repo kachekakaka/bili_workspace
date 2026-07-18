@@ -82,6 +82,29 @@ def _is_loopback_host(value: str) -> bool:
         return False
 
 
+def _valid_bind_host(value: str) -> bool:
+    host = value.strip()
+    if not host or any(char.isspace() for char in host):
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        normalized = host.rstrip(".")
+        if not normalized or len(normalized) > 253:
+            return False
+        labels = normalized.split(".")
+        return all(
+            1 <= len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(char.isalnum() or char == "-" for char in label)
+            for label in labels
+        )
+
+
 def _regular(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
 
@@ -240,6 +263,8 @@ class ConfigStore:
         return data
 
     def _validate(self, data: dict[str, Any]) -> None:
+        if not _valid_bind_host(str(data["host"])):
+            raise ValueError("host 必须是有效 IP 地址或主机名")
         if not self.server_mode and not _is_loopback_host(str(data["host"])):
             # A non-loopback bind is automatically treated as server mode so
             # LAN access never accidentally runs without administrator auth.
@@ -249,10 +274,9 @@ class ConfigStore:
             try:
                 ipaddress.ip_address(host)
             except ValueError:
-                # Uvicorn also accepts a local interface hostname. Keep domain
-                # access controlled separately by the HTTP Host guard.
-                if not host or any(char.isspace() for char in host):
-                    raise ValueError("服务器模式 host 必须是 IP 地址或有效主机名")
+                # Hostname syntax has already been validated above. Domain
+                # access remains controlled separately by the HTTP Host guard.
+                pass
         if not (1 <= int(data["port"]) <= 65535):
             raise ValueError("port 必须在 1–65535")
         if not (200 <= int(data["poll_hint_ms"]) <= 60_000):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -59,13 +60,19 @@ class AppState:
             config_path = runtime.config_dir / "config.json"
 
         startup_overrides: dict[str, object] = {}
+        explicit_host = os.getenv("BILI_HOST", "").strip()
+        explicit_port = os.getenv("BILI_PORT", "").strip()
+        if explicit_host:
+            startup_overrides["host"] = runtime.host
+        if explicit_port:
+            startup_overrides["port"] = runtime.port
         if runtime.server_mode:
-            startup_overrides = {
-                "host": runtime.host,
-                "port": runtime.port,
-                "download_dir": str(runtime.media_dir),
-                "bbdown_dir": str(runtime.bbdown_dir),
-            }
+            startup_overrides.update(
+                {
+                    "download_dir": str(runtime.media_dir),
+                    "bbdown_dir": str(runtime.bbdown_dir),
+                }
+            )
         store = ConfigStore(
             path=config_path,
             initial=initial_config,
@@ -77,15 +84,28 @@ class AppState:
         # A non-loopback host in config automatically becomes authenticated
         # server mode, allowing phone/LAN access without an unsafe local bind.
         if store.server_mode and not runtime.server_mode:
+            bind_host = cfg.host.strip().strip("[]").rstrip(".")
+            trusted_hosts = runtime.trusted_hosts
+            if (
+                bind_host
+                and bind_host not in {"0.0.0.0", "::"}
+                and bind_host not in trusted_hosts
+            ):
+                # When the bind address comes from config.json rather than
+                # .env, keep the HTTP Host guard in sync. IP hosts remain
+                # permitted by allow_ip_hosts, while configured interface
+                # hostnames need an explicit trusted-host entry.
+                trusted_hosts = (*trusted_hosts, bind_host)
             runtime = replace(
                 runtime,
                 mode="server",
                 host=cfg.host,
                 port=cfg.port,
+                trusted_hosts=trusted_hosts,
                 auth_required=True,
                 allow_ip_hosts=True,
             )
-        elif not runtime.server_mode:
+        else:
             runtime = replace(runtime, host=cfg.host, port=cfg.port)
 
         # Tests and custom local configurations keep all V0.5 state beside their config.

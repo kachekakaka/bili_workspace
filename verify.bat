@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title bili_workspace v0.5.3 - 完整自检
+title bili_workspace v0.5.4 - 完整自检
 
 if not exist ".venv\Scripts\python.exe" (
   call setup.bat
@@ -10,10 +10,11 @@ if not exist ".venv\Scripts\python.exe" (
 )
 set "PY=.venv\Scripts\python.exe"
 set "SMOKE_DIR=%TEMP%\bili_workspace_verify_%RANDOM%_%RANDOM%"
-set "RELEASE_MODE=1"
-if not exist "RELEASE_MANIFEST.sha256" set "RELEASE_MODE=0"
-if not exist "BBDown_portable\BBDown.exe" set "RELEASE_MODE=0"
-if not exist "BBDown_portable\ffmpeg\bin\ffmpeg.exe" set "RELEASE_MODE=0"
+set "TOOLS_AVAILABLE=1"
+if not exist "BBDown_portable\BBDown.exe" set "TOOLS_AVAILABLE=0"
+if not exist "BBDown_portable\ffmpeg\bin\ffmpeg.exe" set "TOOLS_AVAILABLE=0"
+set "RELEASE_MODE=0"
+if exist "RELEASE_MANIFEST.sha256" if "%TOOLS_AVAILABLE%"=="1" set "RELEASE_MODE=1"
 mkdir "%SMOKE_DIR%" >nul 2>nul
 
 echo [准备] 创建或升级本地配置...
@@ -31,7 +32,7 @@ if errorlevel 1 goto :failed
 
 
 echo [2/6] Windows 第三方工具冒烟测试...
-if "%RELEASE_MODE%"=="1" (
+if "%TOOLS_AVAILABLE%"=="1" (
   "BBDown_portable\BBDown.exe" --help > "%SMOKE_DIR%\bbdown.txt" 2>&1
   if errorlevel 1 (
     echo [错误] BBDown.exe 无法正常启动。输出：
@@ -56,7 +57,7 @@ if "%RELEASE_MODE%"=="1" (
   )
   echo [通过] BBDown 与 FFmpeg 均可在当前 Windows 环境启动。
 ) else (
-  echo [跳过] 源码仓库不提交 BBDown.exe 和 ffmpeg.exe；请使用 Releases 完整包或按说明放入工具。
+  echo [跳过] Windows 工具未就绪；重新运行 setup.bat 可从 Release 运行包安装。
 )
 
 
@@ -88,11 +89,11 @@ if errorlevel 1 (
 
 if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
 echo.
-echo ===== v0.5.3 自检全部通过 =====
-if "%RELEASE_MODE%"=="1" (
-  echo Windows 完整发布包可直接运行 start.bat。
+echo ===== v0.5.4 自检全部通过 =====
+if "%TOOLS_AVAILABLE%"=="1" (
+  echo Windows 运行工具已就绪，可运行 start.bat。
 ) else (
-  echo 当前为源码模式；保留旧包中的 BBDown_portable，或按 BBDown_portable\README.md 补齐工具。
+  echo 当前为媒体库源码模式；运行 setup.bat 或按 BBDown_portable\README.md 补齐工具。
 )
 echo QNAP 部署请阅读 docs\QNAP_Docker部署指南.md。
 pause

@@ -62,6 +62,29 @@ def _is_loopback_host(value: str) -> bool:
         return False
 
 
+def _valid_bind_host(value: str) -> bool:
+    host = value.strip()
+    if not host or any(char.isspace() for char in host):
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        normalized = host.rstrip(".")
+        if not normalized or len(normalized) > 253:
+            return False
+        labels = normalized.split(".")
+        return all(
+            1 <= len(label) <= 63
+            and label[0].isalnum()
+            and label[-1].isalnum()
+            and all(char.isalnum() or char == "-" for char in label)
+            for label in labels
+        )
+
+
 def _prepare_env_files() -> None:
     """Materialize tracked defaults while preserving user-owned runtime files."""
     # A system service or Docker Compose may already provide BILI_APP_MODE. In
@@ -119,6 +142,8 @@ class RuntimeSettings:
 
         default_host = "0.0.0.0" if requested_mode in {"server", "nas", "docker"} else "127.0.0.1"
         host = os.getenv("BILI_HOST", default_host).strip() or default_host
+        if not _valid_bind_host(host):
+            raise ValueError("BILI_HOST 必须是有效 IP 地址或主机名")
         if requested_mode == "auto":
             mode = "local" if _is_loopback_host(host) else "server"
         elif requested_mode == "local" and not _is_loopback_host(host):

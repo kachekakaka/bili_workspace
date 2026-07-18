@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title bili_workspace v0.5.3
+title bili_workspace v0.5.4
 
 if not exist ".venv\Scripts\python.exe" (
   call setup.bat
