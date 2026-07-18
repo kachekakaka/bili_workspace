@@ -22,8 +22,8 @@ function Get-Sha256([string]$Path) {
 }
 
 function Assert-SafeRelativePath([string]$Name) {
-    $normalized = $Name.Replace('\\', '/')
-    if ([string]::IsNullOrWhiteSpace($normalized) -or $normalized.StartsWith('/') -or $normalized.StartsWith('\\')) {
+    $normalized = $Name.Replace('\', '/')
+    if ([string]::IsNullOrWhiteSpace($normalized) -or $normalized.StartsWith('/') -or $normalized.StartsWith('\')) {
         throw "运行包包含不安全路径: $Name"
     }
     $parts = $normalized.Split([char[]]'/', [System.StringSplitOptions]::RemoveEmptyEntries)
@@ -84,7 +84,7 @@ function Expand-VerifiedPack([string]$PackPath, [string]$ExpectedSha256, [string
             if ($line -notmatch '^([0-9a-fA-F]{64})\s{2}(.+)$') {
                 throw "运行包内部清单格式错误: $line"
             }
-            $relative = $Matches[2].Replace('\\', '/')
+            $relative = $Matches[2].Replace('\', '/')
             Assert-SafeRelativePath $relative | Out-Null
             if ($expectedFiles.ContainsKey($relative)) {
                 throw "运行包内部清单包含重复路径: $relative"
@@ -92,7 +92,7 @@ function Expand-VerifiedPack([string]$PackPath, [string]$ExpectedSha256, [string
             $expectedFiles[$relative] = $Matches[1].ToLowerInvariant()
         }
         $actualFiles = Get-ChildItem -LiteralPath $temp -File -Recurse | ForEach-Object {
-            $_.FullName.Substring($temp.Length).TrimStart([char[]]'\/').Replace('\\', '/')
+            $_.FullName.Substring($temp.Length).TrimStart([char[]]'\/').Replace('\', '/')
         } | Where-Object { $_ -ne 'runtime_manifest.sha256' }
         foreach ($relative in $actualFiles) {
             if (-not $expectedFiles.ContainsKey($relative)) {
