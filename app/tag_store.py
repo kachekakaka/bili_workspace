@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 import time
-from pathlib import Path
 from typing import Any, Iterable
 
 from app.config_files import ensure_json_from_default
