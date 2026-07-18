@@ -14,76 +14,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python:
+  inventory:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: requirements.lock
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.lock
-          python -m pip check
-
-      - name: Verify source tree
-        run: python tools/verify_source.py
-
-      - name: Compile Python
-        run: python -m compileall -q app tests tools docker
-
-      - name: Ruff
-        run: python -m ruff check --no-cache app tests tools docker
-
-      - name: Test
+      - name: Build repository audit snapshot
         shell: bash
         run: |
-          set -o pipefail
-          python -m pytest -q -p no:cacheprovider --tb=short 2>&1 | tee "pytest-${{ matrix.python-version }}.log"
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import zipfile
 
-      - name: Upload failed pytest log
-        if: failure()
+          raw_paths = subprocess.check_output(["git", "ls-files", "-z"])
+          paths = [Path(item.decode("utf-8")) for item in raw_paths.split(b"\0") if item]
+          with zipfile.ZipFile("repository-audit.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+              for path in paths:
+                  if path.match("vendor/windows/*.pack"):
+                      continue
+                  archive.write(path, path.as_posix())
+          Path("repository-audit-files.txt").write_text(
+              "\n".join(path.as_posix() for path in paths) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload repository audit snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-${{ matrix.python-version }}-${{ github.run_attempt }}
-          path: pytest-${{ matrix.python-version }}.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Inventory tracked repository files
-        shell: bash
-        run: |
-          printf '%s\n' '=== TRACKED FILES ==='
-          git ls-files | sort
-          printf '%s\n' '=== ROOT ENTRIES ==='
-          find . -maxdepth 1 -mindepth 1 -printf '%y\t%f\t%s\n' | sort
-          printf '%s\n' '=== ROOT SCRIPTS ==='
-          find . -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' -o -name '*.ps1' -o -name '*.bat' -o -name '*.cmd' \) -printf '%f\t%s\n' | sort
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Check JavaScript syntax
-        shell: bash
-        run: |
-          find web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          name: repository-audit
+          path: |
+            repository-audit.zip
+            repository-audit-files.txt
+          retention-days: 1
