@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.constants import MAX_LOG_FILE_BYTES
 from app.path_safety import resolve_under
+from app.paths import ROOT
 from app.progress import clean_terminal_text
 
 _TASK_ID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -35,14 +36,35 @@ def redact_sensitive(text: str) -> str:
     return value
 
 
+def _under_project(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _configured_log_root(download_dir: Path) -> Path:
+    download_root = Path(download_dir).resolve()
     raw_userdata = os.getenv("BILI_USERDATA_DIR", "").strip()
     if raw_userdata:
-        return (Path(raw_userdata).expanduser().resolve() / "task_logs").resolve()
+        candidate = Path(raw_userdata).expanduser()
+        if candidate.is_absolute():
+            return (candidate.resolve() / "task_logs").resolve()
+        # Relative defaults belong to the repository runtime. Standalone queues
+        # created against isolated temporary directories keep their logs beside
+        # that temporary download root instead of leaking into project userdata.
+        if _under_project(download_root):
+            return ((ROOT / candidate).resolve() / "task_logs").resolve()
+        return (download_root / ".bili_logs").resolve()
     raw_database = os.getenv("BILI_DATABASE_PATH", "").strip()
     if raw_database:
-        return (Path(raw_database).expanduser().resolve().parent / "task_logs").resolve()
-    return (Path(download_dir).resolve() / ".bili_logs").resolve()
+        candidate = Path(raw_database).expanduser()
+        if candidate.is_absolute():
+            return (candidate.resolve().parent / "task_logs").resolve()
+        if _under_project(download_root):
+            return ((ROOT / candidate).resolve().parent / "task_logs").resolve()
+    return (download_root / ".bili_logs").resolve()
 
 
 def task_log_path(download_dir: Path, task_id: str) -> Path:
