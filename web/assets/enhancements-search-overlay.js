@@ -90,6 +90,14 @@
     return `<div class="enh-pagination enh-search-pagination-v2"><button type="button" class="btn small" data-search-overlay-page="${Math.max(1, search.page - 1)}" ${search.page <= 1 ? 'disabled' : ''}>上一页</button>${buttons}${more}<button type="button" class="btn small" data-search-overlay-page="${Math.min(pages, search.page + 1)}" ${search.page >= pages ? 'disabled' : ''}>下一页</button><input class="input enh-page-jump" id="enhSearchOverlayJump" type="number" min="1" max="${pages}" value="${search.page}"><button type="button" class="btn small" id="enhSearchOverlayJumpButton">跳转</button></div>`;
   }
 
+  function recolorTagChips(view) {
+    if (typeof E.catalogTagColor !== 'function') return;
+    $$('.enh-tag-chip', view).forEach(chip => {
+      const definition = state.tags.find(tag => tag.name === chip.textContent.trim());
+      chip.style.setProperty('--tag-color', E.catalogTagColor(definition || chip.textContent.trim()));
+    });
+  }
+
   function enhanceView() {
     if (currentPage() !== 'search') return;
     const view = $('[data-enhanced-view="search"]');
@@ -119,9 +127,13 @@
     }
 
     const box = $('#enhSearchResults', view);
-    const oldPagination = $('.enh-pagination', box);
-    if (oldPagination && !oldPagination.classList.contains('enh-search-pagination-v2')) {
-      oldPagination.outerHTML = paginationHtml();
+    if (box && search.data && !$('.loading-card', box)) {
+      const oldPagination = $('.enh-pagination', box);
+      if (oldPagination && !oldPagination.classList.contains('enh-search-pagination-v2')) {
+        oldPagination.outerHTML = paginationHtml();
+      } else if (!oldPagination) {
+        box.insertAdjacentHTML('beforeend', paginationHtml());
+      }
     }
     const summary = $('#enhSearchSummary', view);
     if (summary && search.data) {
@@ -129,6 +141,7 @@
       const suffix = search.mode === 'raw' ? 'B站原始结果' : `${MODE_LABELS[search.mode]} · ${terms.length} 个词`;
       if (!summary.textContent.includes(suffix)) summary.textContent += ` · ${suffix}`;
     }
+    recolorTagChips(view);
   }
 
   document.addEventListener('click', event => {
@@ -149,7 +162,6 @@
     if (target.id === 'enhSearchMoreTen') {
       event.preventDefault();
       search.pageLimit = Math.min(Math.max(1, search.pages), Number(search.pageLimit || 10) + 10);
-      enhanceView();
       const pager = $('.enh-search-pagination-v2');
       if (pager) pager.outerHTML = paginationHtml();
       return;
