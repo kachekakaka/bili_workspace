@@ -9,7 +9,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import SESSION_COOKIE, router as api_router
+from app.catalog_overrides import router as catalog_router
 from app.constants import MAX_REQUEST_BODY_BYTES
+from app.deletion_store import DeletionStore
 from app.enhancement_api import compat_router, router as enhancement_router
 from app.paths import ROOT
 from app.refinement_api import router as refinement_router
@@ -27,10 +29,12 @@ _PUBLIC_API = {
 def create_app(state: AppState | None = None) -> FastAPI:
     app_state = state or AppState.create()
     tag_store = TagStore(app_state.runtime)
+    deletion_store = DeletionStore(app_state.runtime)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
+        deletion_store.close()
         tag_store.close()
         app_state.stop()
 
@@ -44,6 +48,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
     )
     app.state.app_state = app_state
     app.state.tag_store = tag_store
+    app.state.deletion_store = deletion_store
 
     def host_allowed(value: str) -> bool:
         raw = value.strip()
@@ -143,7 +148,8 @@ def create_app(state: AppState | None = None) -> FastAPI:
     def healthz():
         return {"ok": True, "version": __version__, "mode": app_state.runtime.mode}
 
-    # Compatibility/refinement overrides must be registered before historical routes.
+    # Catalog/compatibility overrides must be registered before historical routes.
+    app.include_router(catalog_router)
     app.include_router(refinement_router)
     app.include_router(compat_router)
     app.include_router(api_router)
