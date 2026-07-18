@@ -209,7 +209,7 @@ def build_python_pack(cache: Path, build: Path, output: Path) -> Path:
             "--target",
             str(site_packages),
             "-r",
-            str(ROOT / "requirements.lock"),
+            str(ROOT / "requirements" / "dev.lock"),
         ],
         check=True,
     )

@@ -99,7 +99,7 @@ start.bat
 verify.bat
 ```
 
-也可以双击 `update.bat` 完成拉取、配置同步和自检。实际配置、SQLite、任务、分组、下载媒体和 Bilibili 凭据均保持未跟踪，不会被 `git pull` 覆盖。
+也可以双击 `update.bat` 完成拉取、配置同步和自检。根目录只保留 `start.bat`、`update.bat`、`verify.bat` 三个常用入口；可选和开发脚本统一收纳在 [`scripts/`](scripts/README.md)。实际配置、SQLite、任务、分组、下载媒体和 Bilibili 凭据均保持未跟踪，不会被 `git pull` 覆盖。
 
 ## IP、端口和手机访问
 
@@ -109,7 +109,7 @@ verify.bat
 127.0.0.1:3398
 ```
 
-双击 `configure_network.bat` 可设置任意合法监听地址和 `1–65535` 端口。手机访问电脑时通常设置：
+网站设置页可直接启用局域网访问；命令行备用入口为 `scripts\windows\configure-network.bat`。监听地址和端口支持任意合法值，其中手机访问电脑时通常设置：
 
 ```text
 监听地址：0.0.0.0
@@ -137,7 +137,7 @@ ghcr.io/kachekakaka/bili_workspace:latest
 ```bash
 git clone https://github.com/kachekakaka/bili_workspace.git
 cd bili_workspace
-chmod +x docker/*.sh verify-source.sh
+chmod +x docker/*.sh
 cp docker/.env.default docker/.env
 # 修改 QNAP 三个宿主机目录、PUID/PGID、端口和域名设置
 ./docker/build-and-start.sh
@@ -214,8 +214,8 @@ verify.bat
 Linux/macOS 源码环境：
 
 ```bash
-python -m pip install -r requirements.lock
-./verify-source.sh
+python -m pip install -r requirements/dev.lock
+sh scripts/dev/verify-source.sh
 ```
 
 验证内容包括配置模板边界、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及 Windows 上的 Portable Python、BBDown 和 FFmpeg 冒烟测试。
@@ -230,7 +230,7 @@ Git 仓库不提交：
 BBDown.data
 SQLite 数据库
 媒体文件、任务快照、索引、日志、缓存和临时文件
-解压后的 .runtime、BBDown.exe、ffmpeg.exe 与 wheelhouse
+解压后的 .runtime、BBDown.exe 与 ffmpeg.exe
 ```
 
 仓库提交的是校验后的 `vendor/windows/python-runtime.pack` 与 `media-runtime.pack`，而不是不可移植的 `.venv`。运行时在本机解压；Docker 使用 GHCR 多架构镜像。

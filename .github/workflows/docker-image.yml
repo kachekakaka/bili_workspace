@@ -11,7 +11,7 @@ on:
       - docker/**
       - Dockerfile
       - compose.yaml
-      - requirements-runtime.lock
+      - requirements/runtime.lock
       - .github/workflows/docker-image.yml
     tags:
       - "v*"

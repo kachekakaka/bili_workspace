@@ -17,7 +17,9 @@ REQUIRED = (
     ".env.default",
     "config/config.json.default",
     "config/runtime.env.default",
+    "config/tags.json.default",
     "config/README.md",
+    "userdata/README.md",
     "docker/.env.default",
     "README.md",
     "CHANGELOG.md",
@@ -25,8 +27,8 @@ REQUIRED = (
     "Dockerfile",
     "compose.yaml",
     "compose.build.yaml",
-    "requirements.lock",
-    "requirements-runtime.lock",
+    "requirements/dev.lock",
+    "requirements/runtime.lock",
     "app/__main__.py",
     "app/api.py",
     "app/config_files.py",
@@ -38,26 +40,53 @@ REQUIRED = (
     "tests/test_config_files.py",
     "tests/test_configure_network.py",
     "tests/test_integrated_runtime.py",
-    "tools/bootstrap_windows_runtime.py",
-    "tools/bootstrap_portable.ps1",
+    "tests/test_repository_layout.py",
     "tools/build_integrated_runtime.py",
-    "docs/源码仓库与发布包.md",
+    "scripts/README.md",
+    "scripts/windows/bootstrap-portable.ps1",
+    "scripts/windows/bootstrap-runtime.bat",
+    "scripts/windows/prepare-runtime.bat",
+    "scripts/windows/configure-network.bat",
+    "scripts/windows/bilibili-login.bat",
+    "scripts/dev/verify-source.sh",
+    "docs/README.md",
     "docs/需求落实清单.md",
     "docs/产品需求与架构基线.md",
-    "docs/V0.5.6_发布与验证说明.md",
     "docs/发布与回滚流程.md",
     "docs/源文件与恢复清单.md",
+    "docs/archive/README.md",
     ".github/workflows/ci.yml",
     ".github/workflows/build-integrated-runtime.yml",
     ".github/workflows/docker-image.yml",
-    "bootstrap.bat",
-    "configure_network.bat",
-    "run.bat",
+    "start.bat",
     "update.bat",
-    "verify-source.sh",
-    "verify-source.bat",
+    "verify.bat",
 )
 
+ALLOWED_ROOT_SCRIPTS = {"start.bat", "update.bat", "verify.bat"}
+ROOT_SCRIPT_SUFFIXES = {".bat", ".cmd", ".ps1", ".sh"}
+OBSOLETE_RELATIVE = {
+    "bootstrap.bat",
+    "configure_network.bat",
+    "login.bat",
+    "run.bat",
+    "setup.bat",
+    "verify-source.bat",
+    "verify-source.sh",
+    "requirements-dev.txt",
+    "requirements.txt",
+    "requirements.lock",
+    "requirements-runtime.lock",
+    "pytest.ini",
+    "tools/bootstrap_portable.ps1",
+    "tools/bootstrap_windows_runtime.py",
+    "tools/build_release_manifest.py",
+    "tools/verify_package.py",
+    "tests/test_bootstrap_windows_runtime.py",
+    "tests/test_release_tools.py",
+    "docs/源码仓库与发布包.md",
+    "docs/GitHub仓库网页搭建与协作分工指南.md",
+}
 FORBIDDEN_NAMES = {
     ".env",
     "BBDown.data",
@@ -87,9 +116,25 @@ SECRET_RE = re.compile(
 )
 ABSOLUTE_PATH_RE = re.compile(r"(?:[A-Za-z]:\\Users\\|/home/[^/]+/|/mnt/data/)")
 TEXT_SUFFIXES = {
-    ".py", ".ps1", ".js", ".css", ".html", ".md", ".txt", ".json", ".bat",
-    ".ini", ".toml", ".yml", ".yaml", ".gitignore", ".gitattributes",
-    ".dockerignore", ".sh", ".lock", ".default",
+    ".py",
+    ".ps1",
+    ".js",
+    ".css",
+    ".html",
+    ".md",
+    ".txt",
+    ".json",
+    ".bat",
+    ".ini",
+    ".toml",
+    ".yml",
+    ".yaml",
+    ".gitignore",
+    ".gitattributes",
+    ".dockerignore",
+    ".sh",
+    ".lock",
+    ".default",
 }
 
 
@@ -147,6 +192,24 @@ def _runtime_packs(errors: list[str]) -> dict[str, str]:
         return {}
 
 
+def _check_root_layout(errors: list[str]) -> None:
+    root_scripts = {
+        path.name
+        for path in ROOT.iterdir()
+        if path.is_file() and path.suffix.lower() in ROOT_SCRIPT_SUFFIXES
+    }
+    unexpected = sorted(root_scripts - ALLOWED_ROOT_SCRIPTS)
+    missing = sorted(ALLOWED_ROOT_SCRIPTS - root_scripts)
+    if unexpected:
+        errors.append("根目录包含非用户入口脚本: " + ", ".join(unexpected))
+    if missing:
+        errors.append("根目录缺少 Windows 用户入口: " + ", ".join(missing))
+
+    obsolete = sorted(rel for rel in OBSOLETE_RELATIVE if (ROOT / rel).exists())
+    if obsolete:
+        errors.append("仓库重新出现已淘汰文件: " + ", ".join(obsolete))
+
+
 def main() -> int:
     errors: list[str] = []
     tracked = _tracked_files()
@@ -156,6 +219,8 @@ def main() -> int:
         path = ROOT / rel
         if not path.is_file() or path.is_symlink():
             errors.append(f"缺少源码文件或类型异常: {rel}")
+
+    _check_root_layout(errors)
 
     for path in ROOT.rglob("*"):
         rel = path.relative_to(ROOT).as_posix()
@@ -193,7 +258,7 @@ def main() -> int:
         return 1
 
     runtime_text = "，集成运行包哈希正常" if runtime_packs else "（运行包等待 GitHub 构建工作流生成）"
-    print(f"[通过] 源码结构、默认配置、文件大小和敏感信息边界正常{runtime_text}。")
+    print(f"[通过] 源码结构、根目录边界、文件大小和敏感信息边界正常{runtime_text}。")
     return 0
 
 
