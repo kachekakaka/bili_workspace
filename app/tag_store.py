@@ -28,6 +28,24 @@ CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag, source_key);
 """
 
 
+def _duration_seconds(value: Any) -> int:
+    """Convert stored ``H:MM:SS · nP``/``MM:SS`` text into sortable seconds."""
+    text = str(value or "").split("·", 1)[0].strip()
+    if not text:
+        return 0
+    try:
+        parts = [int(part.strip()) for part in text.split(":")]
+    except (TypeError, ValueError):
+        return 0
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return max(0, minutes * 60 + seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return max(0, hours * 3600 + minutes * 60 + seconds)
+    return 0
+
+
 class TagStore:
     """Small persistent tag layer backed by the existing media-library SQLite DB."""
 
@@ -41,6 +59,12 @@ class TagStore:
             self.path, timeout=30, check_same_thread=False, isolation_level=None
         )
         self._conn.row_factory = sqlite3.Row
+        try:
+            self._conn.create_function(
+                "bili_duration_seconds", 1, _duration_seconds, deterministic=True
+            )
+        except TypeError:  # pragma: no cover - compatibility with older sqlite bindings
+            self._conn.create_function("bili_duration_seconds", 1, _duration_seconds)
         with self._lock:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -235,7 +259,9 @@ class TagStore:
         params: list[Any] = []
         if query.strip():
             needle = f"%{query.strip()}%"
-            clauses.append("(m.title LIKE ? OR m.bvid LIKE ? OR m.author LIKE ? OR m.source_key LIKE ?)")
+            clauses.append(
+                "(m.title LIKE ? OR m.bvid LIKE ? OR m.author LIKE ? OR m.source_key LIKE ?)"
+            )
             params += [needle, needle, needle, needle]
         if group_id:
             clauses.append("m.group_id=?")
@@ -247,26 +273,68 @@ class TagStore:
             clauses.append("COALESCE(m.selected_height,0)>=?")
             params.append(int(min_height))
         if tag.strip():
-            clauses.append("EXISTS (SELECT 1 FROM item_tags it WHERE it.source_key=m.source_key AND it.tag=? COLLATE NOCASE)")
+            clauses.append(
+                "EXISTS (SELECT 1 FROM item_tags it "
+                "WHERE it.source_key=m.source_key AND it.tag=? COLLATE NOCASE)"
+            )
             params.append(tag.strip())
         watched = watched.strip().lower()
         if watched in {"completed", "in_progress", "watching", "unwatched"}:
-            progress_sql = "SELECT 1 FROM watch_progress wp WHERE wp.media_id=m.id AND wp.user_id=? "
+            progress_sql = (
+                "SELECT 1 FROM watch_progress wp WHERE wp.media_id=m.id AND wp.user_id=? "
+            )
             params.append(user_id)
             if watched == "completed":
                 clauses.append(f"EXISTS ({progress_sql}AND wp.completed=1)")
             elif watched in {"in_progress", "watching"}:
-                clauses.append(f"EXISTS ({progress_sql}AND wp.completed=0 AND wp.position_sec>0)")
+                clauses.append(
+                    f"EXISTS ({progress_sql}AND wp.completed=0 AND wp.position_sec>0)"
+                )
             else:
                 clauses.append(f"NOT EXISTS ({progress_sql}AND wp.position_sec>0)")
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
+
+        tag_name_sql = (
+            "(SELECT MIN(it.tag) FROM item_tags it "
+            "WHERE it.source_key=m.source_key)"
+        )
+        duration_sql = "bili_duration_seconds(m.duration_text)"
         order_sql = {
-            "newest": "m.downloaded_at DESC",
-            "oldest": "m.downloaded_at ASC",
-            "title": "m.title COLLATE NOCASE",
-            "size": "m.total_size DESC",
+            "newest": "m.downloaded_at DESC,m.title COLLATE NOCASE ASC",
+            "oldest": "m.downloaded_at ASC,m.title COLLATE NOCASE ASC",
+            "title": "m.title COLLATE NOCASE ASC",
+            "size": "m.total_size DESC,m.title COLLATE NOCASE ASC",
             "recent": "COALESCE(w.updated_at,0) DESC,m.downloaded_at DESC",
-        }.get(sort, "m.downloaded_at DESC")
+            "newest_desc": "m.downloaded_at DESC,m.title COLLATE NOCASE ASC",
+            "newest_asc": "m.downloaded_at ASC,m.title COLLATE NOCASE ASC",
+            "recent_desc": "COALESCE(w.updated_at,0) DESC,m.downloaded_at DESC",
+            "recent_asc": "COALESCE(w.updated_at,0) ASC,m.downloaded_at ASC",
+            "title_asc": "m.title COLLATE NOCASE ASC",
+            "title_desc": "m.title COLLATE NOCASE DESC",
+            "duration_asc": (
+                f"CASE WHEN {duration_sql}>0 THEN 0 ELSE 1 END ASC,"
+                f"{duration_sql} ASC,m.title COLLATE NOCASE ASC"
+            ),
+            "duration_desc": f"{duration_sql} DESC,m.title COLLATE NOCASE ASC",
+            "size_asc": "m.total_size ASC,m.title COLLATE NOCASE ASC",
+            "size_desc": "m.total_size DESC,m.title COLLATE NOCASE ASC",
+            "group_asc": (
+                "CASE WHEN COALESCE(g.display_name,'')<>'' THEN 0 ELSE 1 END ASC,"
+                "g.display_name COLLATE NOCASE ASC,m.title COLLATE NOCASE ASC"
+            ),
+            "group_desc": (
+                "CASE WHEN COALESCE(g.display_name,'')<>'' THEN 0 ELSE 1 END ASC,"
+                "g.display_name COLLATE NOCASE DESC,m.title COLLATE NOCASE ASC"
+            ),
+            "tag_asc": (
+                f"CASE WHEN {tag_name_sql} IS NULL THEN 1 ELSE 0 END ASC,"
+                f"{tag_name_sql} COLLATE NOCASE ASC,m.title COLLATE NOCASE ASC"
+            ),
+            "tag_desc": (
+                f"CASE WHEN {tag_name_sql} IS NULL THEN 1 ELSE 0 END ASC,"
+                f"{tag_name_sql} COLLATE NOCASE DESC,m.title COLLATE NOCASE ASC"
+            ),
+        }.get(sort, "m.downloaded_at DESC,m.title COLLATE NOCASE ASC")
         total = int(
             (self._one(f"SELECT COUNT(*) AS n FROM media m {where}", tuple(params)) or {}).get("n")
             or 0
