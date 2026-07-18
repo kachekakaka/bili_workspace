@@ -70,7 +70,16 @@
       chips.className = 'enh-library-chip-filters';
       filterCard.insertBefore(chips, grid);
     }
-    chips.innerHTML = `<div class="enh-chip-filter-row"><span class="enh-chip-filter-label">▦ 分组</span><div class="enh-chip-strip">${groupChips()}</div></div><div class="enh-chip-filter-row"><span class="enh-chip-filter-label">⌁ 标签</span><div class="enh-chip-strip">${tagChips()}</div></div>`;
+    const signature = JSON.stringify({
+      group: state.library.groupId || '',
+      tag: state.library.tag || '',
+      groups: state.groups.map(group => [group.id, group.display_name]),
+      tags: state.tags.map(tag => [tag.name, tag.color]),
+    });
+    if (chips.dataset.signature !== signature) {
+      chips.dataset.signature = signature;
+      chips.innerHTML = `<div class="enh-chip-filter-row"><span class="enh-chip-filter-label">▦ 分组</span><div class="enh-chip-strip">${groupChips()}</div></div><div class="enh-chip-filter-row"><span class="enh-chip-filter-label">⌁ 标签</span><div class="enh-chip-strip">${tagChips()}</div></div>`;
+    }
   }
 
   function ensureMoveButtons(view) {
@@ -125,7 +134,7 @@
 
   function enhanceModal() {
     const modal = $('#modalRoot:not(.hidden)');
-    if (!modal || !lastOpenedMediaId) return;
+    if (!modal || !lastOpenedMediaId || !$('#enhMediaPlayer', modal)) return;
     const toolbar = $('.modal-body .toolbar', modal);
     if (!toolbar || $('#enhMoveCurrentMediaGroup', toolbar)) return;
     const button = document.createElement('button');
