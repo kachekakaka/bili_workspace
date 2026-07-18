@@ -2,8 +2,17 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title bili_workspace v0.5.4 - Setup
+title bili_workspace v0.5.6 - Setup
 
+if exist "vendor\windows\runtime-manifest.json" (
+  echo [1/2] Preparing repository-integrated Windows runtime...
+  call bootstrap.bat
+  if errorlevel 1 goto :failed
+  set "PY=.runtime\python\python.exe"
+  goto :configure
+)
+
+echo [兼容模式] 当前提交尚未包含集成运行时，使用本机 Python 环境。
 set "PY_CMD="
 where py >nul 2>nul
 if not errorlevel 1 (
@@ -22,66 +31,39 @@ if not defined PY_CMD (
   )
 )
 if not defined PY_CMD (
-  echo [ERROR] 64-bit Python 3.11, 3.12, or 3.13 was not found.
-  echo Install a supported version with Python Launcher or Add Python to PATH enabled.
-  pause
-  exit /b 1
+  echo [错误] 当前提交没有集成运行时，且未找到 64 位 Python 3.11-3.13。
+  goto :failed
 )
 
-%PY_CMD% -c "import struct,sys; print('Python',sys.version.split()[0],str(struct.calcsize('P')*8)+'-bit')"
-if errorlevel 1 goto :failed
-
-echo [1/4] Preparing verified Windows runtime and offline wheels...
 %PY_CMD% -m tools.bootstrap_windows_runtime
 if errorlevel 1 goto :failed
-
 if not exist ".venv\Scripts\python.exe" (
-  echo [2/4] Creating local virtual environment...
   %PY_CMD% -m venv .venv
   if errorlevel 1 goto :failed
-) else (
-  echo [2/4] Reusing local virtual environment...
 )
-
-set "VENV_PY=.venv\Scripts\python.exe"
+set "PY=.venv\Scripts\python.exe"
 set "PIP_ARGS=--disable-pip-version-check --timeout 120 --retries 10"
-echo [3/4] Installing locked Python dependencies...
 if exist "wheelhouse\*.whl" (
-  "%VENV_PY%" -m pip install %PIP_ARGS% --no-index --find-links "wheelhouse" -r requirements.lock
-  if errorlevel 1 (
-    echo [INFO] Offline wheels did not match this Python. Retrying from the configured package index...
-    call :install_online
-  )
+  "%PY%" -m pip install %PIP_ARGS% --no-index --find-links "wheelhouse" -r requirements.lock
 ) else (
-  call :install_online
+  "%PY%" -m pip install %PIP_ARGS% -r requirements.lock
 )
 if errorlevel 1 goto :failed
-"%VENV_PY%" -m pip check
+"%PY%" -m pip check
 if errorlevel 1 goto :failed
 
-echo [4/4] Creating or upgrading runtime configuration...
-"%VENV_PY%" -m tools.config_sync
+:configure
+echo [2/2] Creating or upgrading runtime configuration...
+"%PY%" -m tools.config_sync
 if errorlevel 1 goto :failed
 
-echo Setup completed.
-echo Run verify.bat for the full self-check, then start.bat.
+echo.
+echo ===== v0.5.6 环境已就绪 =====
+echo 以后 git pull 后可直接运行 start.bat；无需重新安装 Python 或下载依赖。
 exit /b 0
 
-:install_online
-set "PIP_ATTEMPT=1"
-:install_online_loop
-echo [INFO] Online dependency install attempt %PIP_ATTEMPT%/3 ^(timeout 120s, retries 10^)...
-"%VENV_PY%" -m pip install %PIP_ARGS% -r requirements.lock
-if not errorlevel 1 exit /b 0
-if "%PIP_ATTEMPT%"=="3" exit /b 1
-set /a PIP_ATTEMPT+=1
-echo [INFO] Network installation failed; keeping the pip cache and retrying in 5 seconds...
-timeout /t 5 /nobreak >nul
-goto :install_online_loop
-
 :failed
-echo [ERROR] Setup failed. Review the message above.
-echo [TIP] For an offline install, place bili_workspace_v0.5.4_windows_runtime.zip beside setup.bat and run setup.bat again.
-echo [TIP] To use another pip index, configure the standard PIP_INDEX_URL environment variable before running setup.bat.
+echo.
+echo ===== 环境准备失败，请查看上方信息 =====
 pause
 exit /b 1
