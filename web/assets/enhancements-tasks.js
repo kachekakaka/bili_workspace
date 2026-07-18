@@ -4,18 +4,57 @@
   if (!E) return;
   const { VERSION, state, $, $$, esc, currentPage, formatBytes, toast, api, register } = E;
   const actionApi = () => E.taskActions;
+  const QUERY_FIELDS = new Set(['title', 'bvid', 'group', 'error']);
+
+  function normalizeQueryField(tasks) {
+    if (!QUERY_FIELDS.has(tasks.queryField)) tasks.queryField = 'title';
+    return tasks.queryField;
+  }
+
+  function queryPlaceholder(field) {
+    return ({
+      title: '输入任务标题',
+      bvid: '输入 BV / av / ep / ss 标识',
+      group: '输入分组名称',
+      error: '输入错误或进度信息',
+    })[field] || '输入筛选内容';
+  }
 
   async function renderTasks(root) {
     const tasks = state.tasks;
+    const queryField = normalizeQueryField(tasks);
     root.innerHTML = `<div data-enhanced-view="tasks" data-version="${VERSION}">
-      <section class="card"><div class="card-head"><div><h2>任务中心</h2><p>通过服务端事件实时更新进度；仅在 BBDown 输出可用数据时显示百分比、大小、速度与剩余时间。</p></div><span class="badge brand">实时任务</span></div><div class="toolbar"><select id="enhTaskStatus" class="select enh-inline-select"><option value="">全部状态</option><option value="running">下载中</option><option value="queued">排队中</option><option value="paused">已暂停</option><option value="success">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select><select id="enhTaskDestination" class="select enh-inline-select"><option value="">全部目标</option><option value="library">媒体库</option><option value="device">设备导出</option></select><input id="enhTaskQuery" class="input" style="width:min(320px,100%)" value="${esc(tasks.q)}" placeholder="标题 / BV / 分组 / 错误"></div><div class="enh-batch-bar" style="margin-top:14px"><span id="enhTaskSummary" class="metric-foot">正在读取任务…</span><span class="enh-spacer"></span><button type="button" id="enhTaskSelectVisible" class="btn small">全选当前列表</button><button type="button" id="enhTaskSelectFailed" class="btn small">选择失败/取消</button><button type="button" id="enhTaskClearSelection" class="btn small">清空选择</button><button type="button" data-enh-task-batch="retry" class="btn small">批量重试</button><button type="button" id="enhTaskRetryAllFailed" class="btn small">全部重试失败</button><button type="button" data-enh-task-batch="pause" class="btn small">批量暂停</button><button type="button" data-enh-task-batch="resume" class="btn small">批量继续</button><button type="button" data-enh-task-batch="cancel" class="btn danger small">批量取消</button><button type="button" data-enh-task-batch="delete" class="btn danger small">删除选中</button><button type="button" id="enhTaskClearFailed" class="btn danger small">清理失败/取消</button></div></section>
+      <section class="card">
+        <div class="card-head"><div><h2>任务中心</h2><p>通过服务端事件实时更新进度；筛选字段分开选择，不再把标题、BV、分组和错误混在一个输入框中。</p></div><span class="badge brand">实时任务</span></div>
+        <div class="enh-task-filter-strip">
+          <div class="enh-select-shell" data-icon="◉" title="按任务状态筛选"><select id="enhTaskStatus" class="select"><option value="">全部状态</option><option value="running">下载中</option><option value="queued">排队中</option><option value="paused">已暂停</option><option value="success">已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select></div>
+          <div class="enh-select-shell" data-icon="⇩" title="按下载目标筛选"><select id="enhTaskDestination" class="select"><option value="">全部目标</option><option value="library">媒体库</option><option value="device">设备导出</option></select></div>
+          <div class="enh-select-shell" data-icon="⌕" title="选择文字筛选字段"><select id="enhTaskQueryField" class="select"><option value="title">按标题</option><option value="bvid">按 BV / 编号</option><option value="group">按分组</option><option value="error">按错误 / 进度</option></select></div>
+          <div class="enh-input-shell enh-task-query-shell" data-icon="⌕"><input id="enhTaskQuery" class="input" value="${esc(tasks.q)}" placeholder="${esc(queryPlaceholder(queryField))}"></div>
+          <button type="button" id="enhTaskResetFilters" class="icon-button enh-filter-reset" title="清除筛选" aria-label="清除筛选">×</button>
+        </div>
+        <div class="enh-batch-layout" style="margin-top:14px"><span id="enhTaskSummary" class="metric-foot">正在读取任务…</span><div class="enh-batch-actions"><button type="button" id="enhTaskSelectVisible" class="btn small" title="选择当前筛选列表"><span aria-hidden="true">✓</span> 当前</button><button type="button" id="enhTaskSelectFailed" class="btn small"><span aria-hidden="true">!</span> 失败</button><button type="button" id="enhTaskClearSelection" class="btn small"><span aria-hidden="true">×</span> 清空</button><button type="button" data-enh-task-batch="retry" class="btn small"><span aria-hidden="true">↻</span> 重试</button><button type="button" id="enhTaskRetryAllFailed" class="btn small">全部重试失败</button><button type="button" data-enh-task-batch="pause" class="btn small"><span aria-hidden="true">Ⅱ</span> 暂停</button><button type="button" data-enh-task-batch="resume" class="btn small"><span aria-hidden="true">▶</span> 继续</button><button type="button" data-enh-task-batch="cancel" class="btn danger small"><span aria-hidden="true">■</span> 取消</button><button type="button" data-enh-task-batch="delete" class="btn danger small"><span aria-hidden="true">⌫</span> 删除</button><button type="button" id="enhTaskClearFailed" class="btn danger small">清理失败/取消</button></div></div>
+      </section>
       <section id="enhTaskResults" style="margin-top:16px"><div class="loading-card">正在读取任务…</div></section>
     </div>`;
     $('#enhTaskStatus').value = tasks.status;
     $('#enhTaskDestination').value = tasks.destination;
+    $('#enhTaskQueryField').value = queryField;
     $('#enhTaskStatus').onchange = () => { tasks.status = $('#enhTaskStatus').value; renderTaskResults(); };
     $('#enhTaskDestination').onchange = () => { tasks.destination = $('#enhTaskDestination').value; renderTaskResults(); };
+    $('#enhTaskQueryField').onchange = () => {
+      tasks.queryField = $('#enhTaskQueryField').value;
+      $('#enhTaskQuery').placeholder = queryPlaceholder(tasks.queryField);
+      renderTaskResults();
+    };
     $('#enhTaskQuery').oninput = () => { tasks.q = $('#enhTaskQuery').value; renderTaskResults(); };
+    $('#enhTaskResetFilters').onclick = () => {
+      tasks.status = '';
+      tasks.destination = '';
+      tasks.queryField = 'title';
+      tasks.q = '';
+      renderTasks(root);
+    };
     $('#enhTaskSelectVisible').onclick = () => { for (const task of filteredTasks()) tasks.selected.add(task.id); renderTaskResults(); };
     $('#enhTaskSelectFailed').onclick = () => {
       for (const task of tasks.data) if (task.status === 'failed' || task.status === 'cancelled') tasks.selected.add(task.id);
@@ -64,14 +103,22 @@
     return task.status === 'cancelled' && String(task.error || task.progress_message || '').includes('已暂停');
   }
 
+  function taskQueryText(task, field) {
+    if (field === 'bvid') return [task.bvid, task.key, task.url].join(' ');
+    if (field === 'group') return [task.group, task.group_folder].join(' ');
+    if (field === 'error') return [task.error, task.progress_message, task.phase_label].join(' ');
+    return [task.title, task.display_title].join(' ');
+  }
+
   function filteredTasks() {
     const filter = state.tasks;
+    const field = normalizeQueryField(filter);
     const query = String(filter.q || '').trim().toLowerCase();
     return filter.data.filter(task => {
       const effectiveStatus = isPausedTask(task) ? 'paused' : task.status;
       if (filter.status && effectiveStatus !== filter.status) return false;
       if (filter.destination && task.destination !== filter.destination) return false;
-      if (query && ![task.title, task.display_title, task.bvid, task.key, task.group, task.error, task.progress_message].join(' ').toLowerCase().includes(query)) return false;
+      if (query && !taskQueryText(task, field).toLowerCase().includes(query)) return false;
       return true;
     });
   }

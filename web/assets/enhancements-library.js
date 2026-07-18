@@ -7,38 +7,65 @@
     assignTags, bindTagButtons, coverUrl, bindCoverFallback, register,
   } = window.BiliEnhancements;
 
+  const SORT_ALIASES = {
+    newest: ['newest', 'desc'], oldest: ['newest', 'asc'], recent: ['recent', 'desc'],
+    title: ['title', 'asc'], size: ['size', 'desc'],
+  };
+  const SORT_FIELDS = new Set(['newest', 'recent', 'title', 'duration', 'size', 'group', 'tag']);
+
+  function splitSort(value) {
+    const text = String(value || 'newest');
+    if (SORT_ALIASES[text]) return SORT_ALIASES[text];
+    const match = text.match(/^(newest|recent|title|duration|size|group|tag)_(asc|desc)$/);
+    return match ? [match[1], match[2]] : ['newest', 'desc'];
+  }
+
+  function sortValue(field, direction) {
+    const safeField = SORT_FIELDS.has(field) ? field : 'newest';
+    return `${safeField}_${direction === 'asc' ? 'asc' : 'desc'}`;
+  }
+
   async function renderLibrary(root) {
     const library = state.library;
+    const [sortField, sortDirection] = splitSort(library.sort);
     root.innerHTML = `<div data-enhanced-view="library" data-version="${VERSION}">
-      <section class="card"><div class="card-head"><div><h2>作品库</h2><p>作品信息、标签、任务快照和观看记录来自 userdata 中的数据库。</p></div><span class="badge brand">SQLite 作品库</span></div><div class="form-grid">
-        <div class="field full"><label>作品关键词</label><input id="enhLibraryQuery" class="input" value="${esc(library.q)}" placeholder="标题、BV号或UP主"></div>
-        <div class="field"><label>分组</label><select id="enhLibraryGroup" class="select">${groupOptions(library.groupId, true)}</select></div>
-        <div class="field"><label>标签</label><select id="enhLibraryTag" class="select">${tagOptions(library.tag, true)}</select></div>
-        <div class="field"><label>排序</label><select id="enhLibrarySort" class="select"><option value="newest">最新下载</option><option value="recent">最近观看</option><option value="title">标题</option><option value="size">文件大小</option><option value="oldest">最早下载</option></select></div>
-        <div class="field"><label>视频编码</label><select id="enhLibraryCodec" class="select"><option value="">全部编码</option><option value="AVC">AVC / H.264</option><option value="HEVC">HEVC / H.265</option><option value="AV1">AV1</option></select></div>
-        <div class="field"><label>最低实际清晰度</label><select id="enhLibraryHeight" class="select">${qualityOptions(library.minHeight)}</select></div>
-        <div class="field"><label>观看状态</label><select id="enhLibraryWatched" class="select"><option value="">全部</option><option value="unwatched">未观看</option><option value="watching">观看中</option><option value="completed">已看完</option></select></div>
-        <div class="field" style="align-self:end"><button type="button" id="enhLibraryApply" class="btn primary">应用筛选</button></div>
-      </div></section>
-      <section class="enh-library-toolbar" style="margin-top:16px"><div class="enh-batch-bar"><span id="enhLibrarySummary" class="metric-foot">正在读取作品库…</span><span class="enh-spacer"></span><button type="button" id="enhLibrarySelectVisible" class="btn small">全选本页</button><button type="button" id="enhLibraryClear" class="btn small">清空选择</button><select id="enhLibraryBatchTag" class="select enh-inline-select">${tagOptions()}</select><button type="button" id="enhLibraryAddTag" class="btn small">加标签</button><button type="button" id="enhLibraryRemoveTag" class="btn small">移除标签</button><button type="button" id="enhLibraryDownload" class="btn small">下载到设备（${library.selected.size}）</button><button type="button" id="enhLibraryDelete" class="btn danger small">删除选中（${library.selected.size}）</button></div></section>
+      <section class="card enh-library-filter-card">
+        <div class="card-head"><div><h2>作品库</h2><p>筛选、标签、排序和批量操作都使用 userdata 中的作品数据库。</p></div><span class="badge brand">SQLite 作品库</span></div>
+        <div class="enh-filter-grid">
+          <div class="field enh-filter-wide"><label>作品关键词</label><div class="enh-input-shell" data-icon="⌕"><input id="enhLibraryQuery" class="input" value="${esc(library.q)}" placeholder="标题、BV号或UP主"></div></div>
+          <div class="field"><label>分组</label><div class="enh-select-shell" data-icon="▦"><select id="enhLibraryGroup" class="select">${groupOptions(library.groupId, true)}</select></div></div>
+          <div class="field"><label>标签</label><div class="enh-select-shell" data-icon="⌁"><select id="enhLibraryTag" class="select">${tagOptions(library.tag, true)}</select></div></div>
+          <div class="field"><label>排序字段</label><div class="enh-select-shell" data-icon="⇅"><select id="enhLibrarySortField" class="select"><option value="newest">下载时间</option><option value="recent">最近观看</option><option value="title">标题</option><option value="duration">时长</option><option value="size">文件大小</option><option value="group">分组</option><option value="tag">标签</option></select></div></div>
+          <div class="field"><label>排序方向</label><div class="enh-select-shell" data-icon="↕"><select id="enhLibrarySortDirection" class="select"><option value="desc">降序 / 新→旧 / 大→小</option><option value="asc">升序 / 旧→新 / 小→大</option></select></div></div>
+          <div class="field"><label>视频编码</label><div class="enh-select-shell" data-icon="◫"><select id="enhLibraryCodec" class="select"><option value="">全部编码</option><option value="AVC">AVC / H.264</option><option value="HEVC">HEVC / H.265</option><option value="AV1">AV1</option></select></div></div>
+          <div class="field"><label>最低实际清晰度</label><div class="enh-select-shell" data-icon="▣"><select id="enhLibraryHeight" class="select">${qualityOptions(library.minHeight)}</select></div></div>
+          <div class="field"><label>观看状态</label><div class="enh-select-shell" data-icon="▶"><select id="enhLibraryWatched" class="select"><option value="">全部</option><option value="unwatched">未观看</option><option value="watching">观看中</option><option value="completed">已看完</option></select></div></div>
+          <div class="field enh-filter-submit"><button type="button" id="enhLibraryApply" class="btn primary"><span aria-hidden="true">↻</span> 应用筛选</button></div>
+        </div>
+      </section>
+      <section class="enh-library-toolbar" style="margin-top:16px"><div class="enh-batch-layout"><span id="enhLibrarySummary" class="metric-foot">正在读取作品库…</span><div class="enh-batch-actions"><button type="button" id="enhLibrarySelectVisible" class="btn small" title="选择当前页全部作品"><span aria-hidden="true">✓</span> 本页</button><button type="button" id="enhLibraryClear" class="btn small" title="清空跨页选择"><span aria-hidden="true">×</span> 清空</button><div class="enh-select-shell enh-batch-select" data-icon="⌁"><select id="enhLibraryBatchTag" class="select enh-inline-select">${tagOptions()}</select></div><button type="button" id="enhLibraryAddTag" class="btn small"><span aria-hidden="true">＋</span> 标签</button><button type="button" id="enhLibraryRemoveTag" class="btn small"><span aria-hidden="true">－</span> 标签</button><button type="button" id="enhLibraryDownload" class="btn small"><span aria-hidden="true">↓</span> 下载 ${library.selected.size}</button><button type="button" id="enhLibraryDelete" class="btn danger small"><span aria-hidden="true">⌫</span> 删除 ${library.selected.size}</button></div></div></section>
       <section id="enhLibraryResults" style="margin-top:16px"><div class="loading-card">正在读取作品库…</div></section>
     </div>`;
-    $('#enhLibrarySort').value = library.sort;
+    $('#enhLibrarySortField').value = sortField;
+    $('#enhLibrarySortDirection').value = sortDirection;
     $('#enhLibraryCodec').value = library.codec;
     $('#enhLibraryHeight').value = String(library.minHeight || 0);
     $('#enhLibraryWatched').value = library.watched;
-    $('#enhLibraryApply').onclick = () => {
+    const applyFilters = () => {
       library.q = $('#enhLibraryQuery').value.trim();
       library.groupId = $('#enhLibraryGroup').value;
       library.tag = $('#enhLibraryTag').value;
-      library.sort = $('#enhLibrarySort').value;
+      library.sort = sortValue($('#enhLibrarySortField').value, $('#enhLibrarySortDirection').value);
       library.codec = $('#enhLibraryCodec').value;
       library.minHeight = Number($('#enhLibraryHeight').value);
       library.watched = $('#enhLibraryWatched').value;
       library.page = 1;
       loadLibrary();
     };
-    $('#enhLibraryQuery').onkeydown = event => { if (event.key === 'Enter') $('#enhLibraryApply').click(); };
+    $('#enhLibraryApply').onclick = applyFilters;
+    $('#enhLibraryQuery').onkeydown = event => { if (event.key === 'Enter') applyFilters(); };
+    $('#enhLibrarySortField').onchange = applyFilters;
+    $('#enhLibrarySortDirection').onchange = applyFilters;
     $('#enhLibrarySelectVisible').onclick = () => {
       for (const item of library.data?.items || []) library.selected.add(item.id);
       renderLibraryResults();
@@ -88,8 +115,8 @@
     if (summary) summary.textContent = `共 ${data.total || 0} 个作品 · 第 ${data.page || 1} / ${data.pages || 0} 页 · 已选择 ${state.library.selected.size}`;
     const download = $('#enhLibraryDownload');
     const remove = $('#enhLibraryDelete');
-    if (download) download.textContent = `下载到设备（${state.library.selected.size}）`;
-    if (remove) remove.textContent = `删除选中（${state.library.selected.size}）`;
+    if (download) download.innerHTML = `<span aria-hidden="true">↓</span> 下载 ${state.library.selected.size}`;
+    if (remove) remove.innerHTML = `<span aria-hidden="true">⌫</span> 删除 ${state.library.selected.size}`;
     box.innerHTML = (data.items || []).length
       ? `<div class="media-grid">${data.items.map(libraryCard).join('')}</div>${paginationHtml(data.page || 1, data.pages || 1, 'library')}`
       : '<div class="empty">没有符合条件的作品</div>';
