@@ -132,6 +132,11 @@ class RuntimeSettings:
     def server_mode(self) -> bool:
         return self.mode in {"server", "nas", "docker"}
 
+    @property
+    def userdata_dir(self) -> Path:
+        """Root for persistent library, task and account data."""
+        return self.database_path.parent
+
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
         _prepare_env_files()
@@ -156,10 +161,12 @@ class RuntimeSettings:
         containerized = mode in {"nas", "docker"}
         data_root = Path("/data") if containerized else ROOT
         config_dir = _path("BILI_CONFIG_DIR", data_root / "config")
-        media_dir = _path("BILI_MEDIA_DIR", data_root / "media" if containerized else ROOT / "downloads")
-        cache_dir = _path("BILI_CACHE_DIR", data_root / "cache" if containerized else ROOT / ".cache")
-        temp_dir = _path("BILI_TEMP_DIR", data_root / "tmp" if containerized else ROOT / ".tmp")
-        database_path = _path("BILI_DATABASE_PATH", config_dir / "bili_workspace.db")
+        userdata_dir = _path("BILI_USERDATA_DIR", data_root / "userdata")
+        media_default = Path("/downloads") if containerized else ROOT / "downloads"
+        media_dir = _path("BILI_MEDIA_DIR", media_default)
+        cache_dir = _path("BILI_CACHE_DIR", userdata_dir / "cache")
+        temp_dir = _path("BILI_TEMP_DIR", userdata_dir / "tmp")
+        database_path = _path("BILI_DATABASE_PATH", userdata_dir / "bili_workspace.db")
         default_bbdown = config_dir / "bbdown" if containerized else ROOT / "BBDown_portable"
         bbdown_dir = _path("BILI_BBDOWN_DIR", default_bbdown)
         port = _int("BILI_PORT", 3398, 1, 65535)
@@ -209,7 +216,14 @@ class RuntimeSettings:
         min_free_gib = _float("BILI_MIN_FREE_GIB", 2.0 if server else 1.0, 0.0, 1024.0)
         download_concurrency = _int("BILI_DOWNLOAD_CONCURRENCY", 1, 1, 3)
         transcode_threads = _int("BILI_TRANSCODE_THREADS", 0, 0, 128)
-        for directory in (config_dir, media_dir, cache_dir, temp_dir, database_path.parent):
+        for directory in (
+            config_dir,
+            userdata_dir,
+            media_dir,
+            cache_dir,
+            temp_dir,
+            database_path.parent,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
         return cls(
