@@ -4,8 +4,19 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title bili_workspace v0.5.4 - 源码自检
 
-if not exist ".venv\Scripts\python.exe" (
-  echo [准备] 源码自检仅创建 Python 环境，不下载 Windows 媒体运行包。
+set "NEED_SETUP=0"
+if not exist ".venv\Scripts\python.exe" set "NEED_SETUP=1"
+if "%NEED_SETUP%"=="0" (
+  ".venv\Scripts\python.exe" -c "import fastapi,httpx,pydantic,pytest,uvicorn" >nul 2>nul
+  if errorlevel 1 set "NEED_SETUP=1"
+)
+if "%NEED_SETUP%"=="0" (
+  ".venv\Scripts\python.exe" -m ruff --version >nul 2>nul
+  if errorlevel 1 set "NEED_SETUP=1"
+)
+
+if "%NEED_SETUP%"=="1" (
+  echo [准备] 创建或修复源码自检 Python 环境；不下载 Windows 媒体运行包。
   set "BILI_SKIP_RUNTIME_DOWNLOAD=1"
   call setup.bat
   if errorlevel 1 exit /b 1
