@@ -68,6 +68,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Inventory tracked repository files
+        shell: bash
+        run: |
+          printf '%s\n' '=== TRACKED FILES ==='
+          git ls-files | sort
+          printf '%s\n' '=== ROOT ENTRIES ==='
+          find . -maxdepth 1 -mindepth 1 -printf '%y\t%f\t%s\n' | sort
+          printf '%s\n' '=== ROOT SCRIPTS ==='
+          find . -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' -o -name '*.ps1' -o -name '*.bat' -o -name '*.cmd' \) -printf '%f\t%s\n' | sort
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
