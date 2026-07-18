@@ -9,7 +9,12 @@
 - 集成运行包由 GitHub Windows Runner 从固定官方来源构建，校验上游和成品 SHA-256，并执行冒烟测试；
 - 两个运行包均小于普通 Git 的 100 MiB 单文件限制，不要求 Git LFS；
 - Docker 默认拉取 GHCR 的 amd64/arm64 预构建镜像，同时保留 `BUILD_LOCAL=true` 的本机构建后备；
-- 保持配置模板增量补字段以及 `/data/config`、`/data/media`、`/data/cache`、`/data/tmp` 持久化映射。
+- 持久化目录调整为 `config/`、`userdata/`、`downloads/`，Docker 分别映射 `/data/config`、`/data/userdata`、`/downloads`；
+- SQLite、任务快照、下载索引、任务日志、缓存和临时文件统一放入 `userdata/`，媒体目录只保留媒体文件，并提供旧数据安全迁移；
+- 搜索支持精准/模糊/原始模式，精准与模糊只对一次 B站原始搜索返回的标题做全部词或任意词匹配；
+- 搜索可屏蔽已下载和已删除作品，删除记录使用独立 tombstone，显式重新下载成功后清除；
+- 作品库新增标签/无标签与分组 chip、修改分组和多字段正逆序排序，任务中心补齐批量控制与真实进度；
+- 当前主线文档、根 README、配置目录和运行数据目录说明统一到实际持久化布局，并增加自动回归检查。
 
 ## 0.5.5 - 2026-07-18
 
