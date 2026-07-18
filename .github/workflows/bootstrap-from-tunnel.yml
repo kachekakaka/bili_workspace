@@ -1,4 +1,4 @@
-name: Bootstrap v0.5.2 source
+name: Restore complete source tree
 
 on:
   push:
@@ -9,45 +9,71 @@ permissions:
   contents: write
 
 concurrency:
-  group: bootstrap-v052
+  group: restore-complete-source-tree
   cancel-in-progress: false
 
 jobs:
-  bootstrap:
-    if: ${{ !contains(github.event.head_commit.message, '[source-ready]') }}
+  restore:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out bootstrap commit
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Download and verify source archive
+      - name: Decode and validate repository-contained source archive
         shell: bash
         run: |
           set -euo pipefail
-          url='https://biliworkspace-v052-kachekakaka.serveo.net/bili_workspace_v0.5.2_source_bootstrap_latest.tar.xz'
-          for attempt in 1 2 3 4 5; do
-            if curl --fail --location --retry 3 --connect-timeout 20 --max-time 180 "$url" -o /tmp/source.tar.xz; then
-              break
-            fi
-            sleep $((attempt * 5))
-          done
-          test -s /tmp/source.tar.xz
-          echo '1576300dcd26255f8cffc4e6dfb4695462374a1bc7f6cee9ddb6bebd81effe1e  /tmp/source.tar.xz' | sha256sum --check -
-          mkdir -p /tmp/source
-          tar -xJf /tmp/source.tar.xz -C /tmp/source
-          test -f /tmp/source/README.md
-          test -f /tmp/source/.env.default
-          test -f /tmp/source/config/config.json.default
 
-      - name: Replace bootstrap tree with verified source
+          test -f bootstrap/source.part001
+          test -f bootstrap/source.part002
+          test -f bootstrap/source.part003
+
+          cat bootstrap/source.part001 bootstrap/source.part002 bootstrap/source.part003 \
+            | tr -d '\r\n\t ' \
+            | base64 --decode > /tmp/bili-workspace-source.tar.gz
+
+          gzip -t /tmp/bili-workspace-source.tar.gz
+          mkdir -p /tmp/bili-workspace-unpacked
+          tar -xzf /tmp/bili-workspace-source.tar.gz -C /tmp/bili-workspace-unpacked
+
+          main_file="$(find /tmp/bili-workspace-unpacked -maxdepth 4 -type f -path '*/app/main.py' -print -quit)"
+          test -n "$main_file"
+          source_root="$(dirname "$(dirname "$main_file")")"
+
+          test -f "$source_root/README.md"
+          test -f "$source_root/app/main.py"
+          test -f "$source_root/app/runtime.py"
+          test -f "$source_root/setup.bat"
+          test -f "$source_root/verify.bat"
+          test -f "$source_root/update.bat"
+          test -f "$source_root/Dockerfile"
+          test -f "$source_root/compose.yaml"
+          test -f "$source_root/.env.default"
+          test -f "$source_root/config/config.json.default"
+          test -f "$source_root/config/runtime.env.default"
+
+          if find "$source_root" -type f \( -name 'BBDown.data' -o -name 'bootstrap-token.txt' \) -print -quit | grep -q .; then
+            echo 'Refusing to publish credentials or bootstrap tokens.' >&2
+            exit 1
+          fi
+
+          python -m compileall -q "$source_root/app" "$source_root/tools" "$source_root/tests"
+          printf '%s\n' "$source_root" > /tmp/bili-workspace-source-root
+
+      - name: Replace placeholder files with the validated source tree
         shell: bash
         run: |
           set -euo pipefail
+          source_root="$(cat /tmp/bili-workspace-source-root)"
+
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf -- {} +
-          cp -a /tmp/source/. .
+          cp -a "$source_root"/. .
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'Release v0.5.2 with reproducible setup and persistent config [source-ready]'
+          git diff --cached --quiet && { echo 'Nothing to restore.'; exit 0; }
+          git commit -m 'Restore complete v0.5.2 source tree [source-ready]'
           git push origin HEAD:main
