@@ -86,6 +86,14 @@ bili_workspace_v0.5.4_windows_runtime.zip
 
 完整 Windows 发布包已经包含这些文件，因此可以离线创建 `.venv`。运行包和完整包作为 GitHub Release 资产保存，而不是进入普通源码提交。
 
+只检查源码、不安装 BBDown/FFmpeg 时，可以直接运行：
+
+```bat
+verify-source.bat
+```
+
+首次运行时它会创建 `.venv` 并安装 Python 依赖，但会显式跳过 Windows 媒体运行包下载；需要真实下载、混流和扫码登录时，再运行 `setup.bat` 补齐运行包。
+
 ### 后续更新
 
 双击：
@@ -125,99 +133,159 @@ http://电脑局域网IP:端口/
 http://192.168.1.50:3398/
 ```
 
-非回环监听会自动切换为服务器模式并强制网站管理员认证。Windows 防火墙还需允许该端口进入；若电脑启用了远程桌面，TCP 3389 很可能已被占用，建议使用 3398、8080 或其他端口。
+非回环监听会自动切换到服务器模式，并强制创建管理员账号。Windows 防火墙需要允许所选 TCP 端口的“专用网络”访问。
 
-也可以编辑 `.env`：
-
-```env
-BILI_APP_MODE=auto
-BILI_HOST=0.0.0.0
-BILI_PORT=3398
-```
-
-环境变量优先于 JSON 配置。
+`3389` 可以配置，但 Windows 远程桌面常使用该端口；如有冲突，请使用 `3398`、`8080` 或其他空闲端口。
 
 ## QNAP / Docker
 
-完整步骤见 [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)。基本流程：
+推荐目录映射：
 
-```bash
-git clone https://github.com/kachekakaka/bili_workspace.git
-cd bili_workspace
-chmod +x docker/*.sh verify-source.sh
-./docker/ensure-env.sh
-vi docker/.env
-./docker/verify-config.sh
-./docker/build-and-start.sh
+```text
+/data/config  配置、SQLite、管理员、任务、分组、会话、Bilibili 登录凭据
+/data/media   永久媒体文件
+/data/cache   封面和兼容播放副本
+/data/tmp     下载、混流、导出和转码临时文件
 ```
 
-`docker/.env` 中配置 QNAP 宿主机目录：
+QNAP `.env` 示例：
 
 ```env
 CONFIG_DIR=/share/Container/bili-workspace/config
 MEDIA_DIR=/share/Multimedia/Bilibili
 CACHE_DIR=/share/Container/bili-workspace/cache
 TEMP_DIR=/share/Container/bili-workspace/tmp
-BIND_IP=0.0.0.0
+
+HOST_BIND_IP=0.0.0.0
 HTTP_PORT=3398
+PUID=1000
+PGID=100
+TZ=Asia/Shanghai
+
+PUBLIC_BASE_URL=https://bili.example.com
+TRUSTED_HOSTS=bili.example.com
+TRUSTED_PROXY_IPS=QNAP反向代理实际来源IP
+COOKIE_SECURE=true
+ENABLE_HSTS=false
 ```
 
-容器内固定映射：
+启动：
+
+```bash
+cp docker/.env.default docker/.env
+# 编辑 docker/.env
+./docker/verify-config.sh
+./docker/build-and-start.sh
+```
+
+容器使用非 root 用户、只读根文件系统、`cap_drop: ALL`、`no-new-privileges` 和健康检查；无需 privileged，也不挂载 Docker socket。
+
+公网部署建议：
 
 ```text
-/data/config  配置、SQLite、任务、分组、管理员、会话和 Bilibili 凭据
-/data/media   永久媒体文件与兼容旧版的下载索引
-/data/cache   封面缓存和手动生成的兼容播放副本
-/data/tmp     下载、混流、转码和设备导出的临时文件
+手机/浏览器 → HTTPS 443 → QNAP 反向代理 → 容器 HTTP_PORT
 ```
 
-更新代码和重建容器不会删除这些宿主机映射目录。
+只公开 443，不要将应用管理端口直接裸露到公网。确认 HTTPS、Cookie 和登录均正常后再启用 HSTS。
 
-## 域名访问
+## 数据持久化
 
-推荐拓扑：
+SQLite 和用户数据位于配置目录。Docker 中为：
 
 ```text
-https://bili.example.com:443
-        ↓ QNAP HTTPS 反向代理
-NAS 局域网地址:3398
-        ↓
-bili-workspace 容器
+/data/config/bili_workspace.db
 ```
 
-公网只开放 HTTPS 443，不建议同时把应用端口直接暴露到互联网。域名、可信 Host、可信代理、安全 Cookie 和 HSTS 的设置见 [域名与反向代理配置](docs/域名与反向代理配置.md)。
+Windows 默认位于项目运行数据目录。数据库记录管理员、服务端会话、逻辑分组、媒体文件、观看进度、任务快照、设备导出、兼容转码和审计日志。
 
-## 数据和备份
+容器或 NAS 重启后：
 
-Docker 必须备份：
+- 已完成任务保持不变；
+- 排队任务恢复排队；
+- 运行中的任务标记为中断，可重新提交；
+- 分组、作品库、账号和播放进度不会丢失；
+- 设备导出临时文件继续按 TTL 管理。
+
+备份重点：
 
 ```text
 CONFIG_DIR
 MEDIA_DIR
 ```
 
-Windows 建议备份：
+`CACHE_DIR` 可以按需要备份，`TEMP_DIR` 不需要备份。
+
+## 设备导出
+
+下载目标选择“导出到当前设备”时：
+
+1. NAS 在 `/data/tmp` 中完成下载和混流；
+2. 单文件以附件流式返回，多文件自动打包 ZIP；
+3. 响应体全部发送后立即删除对应临时目录；
+4. 客户端中断时保留文件，允许重试；
+5. 超过 TTL 的残留由清理任务删除。
+
+服务器只能确认响应字节已全部发出，不能确认浏览器最终写入磁盘成功。唯一重要内容建议先保存到媒体库，再从作品库下载到设备。
+
+## 浏览器播放
+
+媒体接口支持：
 
 ```text
-config/
-downloads/
-BBDown_portable/BBDown.data（敏感，需加密保存）
+HEAD
+Range
+206 Partial Content
+416 Range Not Satisfiable
+ETag
+Last-Modified
+Accept-Ranges
 ```
 
-`cache` 可重建，`tmp` 无需备份。详见 [备份恢复与 V0.4 迁移](docs/备份恢复与V0.4迁移.md)。
-
-## 验证
-
-Windows：
+默认优先播放原始文件。浏览器不支持 HEVC、AV1 或音频编码时，可以手动创建：
 
 ```text
-verify.bat
+H.264 + AAC + MP4
 ```
 
-Linux/macOS 源码环境：
+兼容副本保存在缓存目录，不覆盖原文件，默认转码并发为 1。
+
+## Bilibili 网页扫码登录
+
+账号页可以创建二维码，并显示：
+
+```text
+等待扫码
+已扫码，等待确认
+登录成功
+二维码过期
+```
+
+完整 Cookie 只由后端写入配置秘密目录，不通过浏览器 API 返回，不进入日志或 Git。退出登录会删除对应凭据。
+
+BBDown v1.6.3 已停止维护；未来若 Bilibili 登录或解析接口变化，需要更换下载适配层。
+
+## 开发与验证
+
+支持 Python：
+
+```text
+3.11
+3.12
+3.13
+```
+
+安装开发依赖：
 
 ```bash
 python -m pip install -r requirements.lock
+```
+
+运行：
+
+```bash
+python -m compileall -q app tests tools docker
+python -m ruff check --no-cache app tests tools docker
+python -m pytest -q -p no:cacheprovider
 ./verify-source.sh
 ```
 
@@ -225,14 +293,18 @@ python -m pip install -r requirements.lock
 
 ## 仓库边界
 
-Git 仓库不提交：
+不提交：
 
 ```text
-实际配置和 .env
-.venv
+真实 .env 和 JSON 配置
 BBDown.data
+管理员初始化令牌
 SQLite 数据库
-媒体文件、日志、缓存和临时文件
+任务日志
+下载视频
+导出和转码临时文件
+封面缓存
+.venv
 Windows BBDown.exe、ffmpeg.exe 与 wheelhouse
 ```
 
@@ -241,25 +313,3 @@ Windows BBDown.exe、ffmpeg.exe 与 wheelhouse
 更多说明见 [源码仓库与发布包](docs/源码仓库与发布包.md)。
 
 完整需求映射见 [V0.5.4 需求落实清单](docs/需求落实清单.md)，长期开发依据见 [产品需求与架构基线](docs/产品需求与架构基线.md)，发布边界见 [V0.5.4 发布与验证说明](docs/V0.5.4_发布与验证说明.md)，配置目录说明见 [config/README.md](config/README.md)，可恢复源文件与发布资产见 [源文件与恢复清单](docs/源文件与恢复清单.md)。
-
-## 项目目录
-
-```text
-app/                     FastAPI 后端、队列、SQLite、认证和媒体流
-web/                     响应式网页
-config/*.default         应用和运行时配置模板
-BBDown_portable/         Windows 工具放置位置和第三方许可证
-Dockerfile               Docker 镜像构建
-compose.yaml             QNAP/NAS Compose 配置
-docker/                  配置同步、启动、入口和健康检查
-docs/                    部署、迁移、安全、备份和验收文档
-tests/                   回归与专项测试
-tools/                   配置同步和发布/源码校验工具
-```
-
-## 已知边界
-
-- BBDown 上游已停止维护，Bilibili 接口或扫码协议变化后可能需要替换下载适配层；
-- 当前是单管理员私人媒体库，不提供开放注册或匿名公开分享；
-- 不自动为所有作品生成 HLS/多码率版本，兼容副本按需生成；
-- Docker 首次构建需要访问基础镜像、Python 软件源、Debian 软件源和固定 BBDown 发布文件。
