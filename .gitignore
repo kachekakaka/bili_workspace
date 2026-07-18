@@ -29,6 +29,7 @@ downloads/*
 !downloads/.gitkeep
 userdata/*
 !userdata/.gitkeep
+!userdata/README.md
 *.db
 *.db-shm
 *.db-wal
