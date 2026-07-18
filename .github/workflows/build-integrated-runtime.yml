@@ -1,0 +1,72 @@
+name: Build integrated Windows runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - requirements.lock
+      - tools/build_integrated_runtime.py
+      - tools/bootstrap_portable.ps1
+      - LICENSES/**
+      - .github/workflows/build-integrated-runtime.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: integrated-windows-runtime
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.13.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.14"
+          cache: pip
+          cache-dependency-path: requirements.lock
+
+      - name: Build and smoke-test repository runtime packs
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python tools/build_integrated_runtime.py --output vendor/windows
+          Get-ChildItem vendor/windows/*-runtime.pack | Format-Table Name,Length
+
+      - name: Commit generated runtime packs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config http.postBuffer 524288000
+          git add -f vendor/windows/python-runtime.pack \
+                     vendor/windows/media-runtime.pack \
+                     vendor/windows/runtime-manifest.json
+          if git diff --cached --quiet; then
+            echo 'Integrated runtime is already current.'
+            exit 0
+          fi
+          git commit -m 'Integrate portable Windows runtime v0.5.6 [skip ci]'
+          git push origin HEAD:main
+
+      - name: Upload a recovery artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-workspace-windows-runtime-v0.5.6
+          path: |
+            vendor/windows/python-runtime.pack
+            vendor/windows/media-runtime.pack
+            vendor/windows/runtime-manifest.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,6 @@
+services:
+  app:
+    image: "bili-workspace:local"
+    build:
+      context: .
+      dockerfile: Dockerfile

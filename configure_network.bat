@@ -4,9 +4,12 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title bili_workspace - 网络配置
 
-if not exist ".venv\Scripts\python.exe" (
-  call setup.bat
-  if errorlevel 1 exit /b 1
+call setup.bat
+if errorlevel 1 exit /b 1
+if exist ".runtime\python\python.exe" (
+  set "PY=.runtime\python\python.exe"
+) else (
+  set "PY=.venv\Scripts\python.exe"
 )
-".venv\Scripts\python.exe" -m tools.configure_network
+"%PY%" -m tools.configure_network
 if errorlevel 1 pause

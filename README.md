@@ -1,4 +1,4 @@
-# bili_workspace v0.5.4
+# bili_workspace v0.5.6
 
 `bili_workspace` 是一个可运行在 **Windows 本机** 和 **QNAP NAS / Docker** 上的私人 Bilibili 下载与媒体库网站。
 
@@ -37,149 +37,110 @@ config/runtime.env
 docker/.env
 ```
 
-每次安装、启动或更新都会执行以下规则：
+每次启动或更新都会执行：
 
 1. 实际配置不存在时，从同名 `.default` 模板创建；
 2. 实际配置已存在时，保留用户当前值和额外字段；
 3. 新版模板增加字段时，只递归补入缺少的字段和默认值；
 4. JSON 使用原子写入和备份；
-5. 损坏的主配置不会被默认模板静默覆盖，存在备份时由配置存储恢复。
+5. 损坏的主配置不会被默认模板静默覆盖。
 
-因此 `git pull`、重新构建容器或升级默认模板不会重置端口、目录映射、分组、任务数据库和账号设置。
+因此 `git pull`、重建容器或升级模板不会重置端口、目录映射、分组、任务数据库和账号设置。
 
-## Windows 使用
+## Windows 开箱即用
 
-### 从完整 Windows 包更新
+V0.5.6 将 Windows x64 的 Python 3.13.14、锁定 Python 依赖、BBDown 和 FFmpeg 集成到 Git 仓库。
 
-最方便的方式是保留完整包目录中的：
-
-```text
-BBDown_portable/BBDown.exe
-BBDown_portable/ffmpeg/bin/ffmpeg.exe
-```
-
-这两个文件和 `BBDown.data` 都被 `.gitignore` 排除，拉取源码更新时不会被删除或覆盖。
-
-### 从全新 Git 克隆运行
+全新安装：
 
 ```bat
 git clone https://github.com/kachekakaka/bili_workspace.git
 cd bili_workspace
-setup.bat
-verify.bat
 start.bat
 ```
 
-源码仓库本身不把第三方 EXE、离线 wheelhouse 或 `.venv` 写入 Git 历史。`setup.bat` 会优先复用已有文件；缺失时从 `v0.5.4` GitHub Release 下载固定的 Windows 运行包，校验整个 ZIP 和内部逐文件 SHA-256，然后安装到：
-
-```text
-BBDown_portable/BBDown.exe
-BBDown_portable/ffmpeg/bin/ffmpeg.exe
-wheelhouse/*.whl
-```
-
-网络受限时，也可以把下面的文件放在仓库根目录，再运行 `setup.bat`：
-
-```text
-bili_workspace_v0.5.4_windows_runtime.zip
-```
-
-完整 Windows 发布包已经包含这些文件，因此可以离线创建 `.venv`。运行包和完整包作为 GitHub Release 资产保存，而不是进入普通源码提交。
-
-只检查源码、不安装 BBDown/FFmpeg 时，可以直接运行：
+已有目录更新：
 
 ```bat
-verify-source.bat
+git pull --ff-only origin main
+start.bat
 ```
 
-首次运行时它会创建 `.venv` 并安装 Python 依赖，但会显式跳过 Windows 媒体运行包下载；需要真实下载、混流和扫码登录时，再运行 `setup.bat` 补齐运行包。
+`start.bat` 会自动校验仓库中的 `vendor/windows/*.pack`，安全解压到被 Git 忽略的 `.runtime/` 和 `BBDown_portable/`，同步配置并启动。它不访问 PyPI、不下载 GitHub Release，也不要求系统预装 Python、pip、BBDown 或 FFmpeg。
 
-### 后续更新
+完整自检：
 
-双击：
-
-```text
-update.bat
+```bat
+verify.bat
 ```
 
-它会检查受 Git 管理的本地修改，执行 `git pull --ff-only origin main`，同步依赖和配置，再运行完整自检。
+也可以双击 `update.bat` 完成拉取、配置同步和自检。实际配置、SQLite、任务、分组、下载媒体和 Bilibili 凭据均保持未跟踪，不会被 `git pull` 覆盖。
 
 ## IP、端口和手机访问
 
-默认只允许本机访问：
+默认仅本机访问：
 
 ```text
 127.0.0.1:3398
 ```
 
-双击 `configure_network.bat` 可以设置任意合法监听地址和 `1–65535` 端口。
-
-手机访问电脑时通常设置：
+双击 `configure_network.bat` 可设置任意合法监听地址和 `1–65535` 端口。手机访问电脑时通常设置：
 
 ```text
 监听地址：0.0.0.0
 端口：3398、3389 或其他未被占用的端口
 ```
 
-然后手机在同一局域网访问：
+然后访问：
 
 ```text
 http://电脑局域网IP:端口/
 ```
 
-例如：
-
-```text
-http://192.168.1.50:3398/
-```
-
-非回环监听会自动切换为服务器模式并强制网站管理员认证。Windows 防火墙还需允许该端口进入；若电脑启用了远程桌面，TCP 3389 很可能已被占用，建议使用 3398、8080 或其他端口。
-
-也可以编辑 `.env`：
-
-```env
-BILI_APP_MODE=auto
-BILI_HOST=0.0.0.0
-BILI_PORT=3398
-```
-
-环境变量优先于 JSON 配置。
+非回环监听会自动切换为服务器模式并强制管理员认证。Windows 防火墙需允许相应端口；若远程桌面占用 TCP 3389，请使用 3398、8080 或其他端口。
 
 ## QNAP / Docker
 
-完整步骤见 [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)。基本流程：
+Docker 默认使用 GHCR 多架构镜像：
+
+```text
+ghcr.io/kachekakaka/bili_workspace:latest
+```
+
+支持 `linux/amd64` 和 `linux/arm64`。第一次部署：
 
 ```bash
 git clone https://github.com/kachekakaka/bili_workspace.git
 cd bili_workspace
 chmod +x docker/*.sh verify-source.sh
-./docker/ensure-env.sh
-vi docker/.env
-./docker/verify-config.sh
+cp docker/.env.default docker/.env
+# 修改 QNAP 四个宿主机目录、PUID/PGID、端口和域名设置
 ./docker/build-and-start.sh
 ```
 
-`docker/.env` 中配置 QNAP 宿主机目录：
+以后更新：
 
-```env
-CONFIG_DIR=/share/Container/bili-workspace/config
-MEDIA_DIR=/share/Multimedia/Bilibili
-CACHE_DIR=/share/Container/bili-workspace/cache
-TEMP_DIR=/share/Container/bili-workspace/tmp
-BIND_IP=0.0.0.0
-HTTP_PORT=3398
+```bash
+git pull --ff-only origin main
+./docker/build-and-start.sh
 ```
 
-容器内固定映射：
+默认 `BUILD_LOCAL=false`，直接拉取预构建镜像。无法访问 GHCR 或需要自行构建时设置：
+
+```env
+BUILD_LOCAL=true
+```
+
+固定持久化映射：
 
 ```text
 /data/config  配置、SQLite、任务、分组、管理员、会话和 Bilibili 凭据
-/data/media   永久媒体文件与兼容旧版的下载索引
-/data/cache   封面缓存和手动生成的兼容播放副本
-/data/tmp     下载、混流、转码和设备导出的临时文件
+/data/media   永久媒体文件与下载索引
+/data/cache   封面缓存和兼容播放副本
+/data/tmp     下载、混流、转码和设备导出临时文件
 ```
 
-更新代码和重建容器不会删除这些宿主机映射目录。
+完整步骤见 [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)。
 
 ## 域名访问
 
@@ -193,7 +154,7 @@ NAS 局域网地址:3398
 bili-workspace 容器
 ```
 
-公网只开放 HTTPS 443，不建议同时把应用端口直接暴露到互联网。域名、可信 Host、可信代理、安全 Cookie 和 HSTS 的设置见 [域名与反向代理配置](docs/域名与反向代理配置.md)。
+公网只开放 HTTPS 443，不建议同时暴露应用端口。详细设置见 [域名与反向代理配置](docs/域名与反向代理配置.md)。
 
 ## 数据和备份
 
@@ -212,7 +173,7 @@ downloads/
 BBDown_portable/BBDown.data（敏感，需加密保存）
 ```
 
-`cache` 可重建，`tmp` 无需备份。详见 [备份恢复与 V0.4 迁移](docs/备份恢复与V0.4迁移.md)。
+`cache` 可重建，`tmp` 无需备份。
 
 ## 验证
 
@@ -229,7 +190,7 @@ python -m pip install -r requirements.lock
 ./verify-source.sh
 ```
 
-验证项目包括配置模板边界、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及工具存在时的 BBDown/FFmpeg 真实启动冒烟测试。
+验证内容包括配置模板边界、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及 Windows 上的 Portable Python、BBDown 和 FFmpeg 冒烟测试。
 
 ## 仓库边界
 
@@ -241,33 +202,21 @@ Git 仓库不提交：
 BBDown.data
 SQLite 数据库
 媒体文件、日志、缓存和临时文件
-Windows BBDown.exe、ffmpeg.exe 与 wheelhouse
+解压后的 .runtime、BBDown.exe、ffmpeg.exe 与 wheelhouse
 ```
 
-不提交 `.venv` 是因为它包含创建机器的绝对路径、Python ABI 和平台相关启动器，跨目录、跨 Python 小版本或跨 Windows/Linux 不可靠。依赖由锁定文件、Release 运行包和 `setup.bat` 重建；Docker 运行环境由镜像重建。
+仓库提交的是校验后的 `vendor/windows/python-runtime.pack` 与 `media-runtime.pack`，而不是不可移植的 `.venv`。运行时在本机解压；Docker 使用 GHCR 多架构镜像。
 
-更多说明见 [源码仓库与发布包](docs/源码仓库与发布包.md)。
+更多文档：
 
-完整需求映射见 [V0.5.4 需求落实清单](docs/需求落实清单.md)，长期开发依据见 [产品需求与架构基线](docs/产品需求与架构基线.md)，发布边界见 [V0.5.4 发布与验证说明](docs/V0.5.4_发布与验证说明.md)，配置目录说明见 [config/README.md](config/README.md)，可恢复源文件与发布资产见 [源文件与恢复清单](docs/源文件与恢复清单.md)。
-
-## 项目目录
-
-```text
-app/                     FastAPI 后端、队列、SQLite、认证和媒体流
-web/                     响应式网页
-config/*.default         应用和运行时配置模板
-BBDown_portable/         Windows 工具放置位置和第三方许可证
-Dockerfile               Docker 镜像构建
-compose.yaml             QNAP/NAS Compose 配置
-docker/                  配置同步、启动、入口和健康检查
-docs/                    部署、迁移、安全、备份和验收文档
-tests/                   回归与专项测试
-tools/                   配置同步和发布/源码校验工具
-```
+- [V0.5.6 需求落实清单](docs/需求落实清单.md)
+- [产品需求与架构基线](docs/产品需求与架构基线.md)
+- [V0.5.6 发布与验证说明](docs/V0.5.6_发布与验证说明.md)
+- [配置目录说明](config/README.md)
+- [源文件与恢复清单](docs/源文件与恢复清单.md)
 
 ## 已知边界
 
 - BBDown 上游已停止维护，Bilibili 接口或扫码协议变化后可能需要替换下载适配层；
 - 当前是单管理员私人媒体库，不提供开放注册或匿名公开分享；
-- 不自动为所有作品生成 HLS/多码率版本，兼容副本按需生成；
-- Docker 首次构建需要访问基础镜像、Python 软件源、Debian 软件源和固定 BBDown 发布文件。
+- 不自动为所有作品生成 HLS/多码率版本，兼容副本按需生成。

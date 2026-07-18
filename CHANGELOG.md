@@ -2,16 +2,29 @@
 
 本项目遵循语义化版本号。
 
+## 0.5.6 - 2026-07-18
+
+- Windows x64 集成可移植 Python 3.13.14、锁定依赖、BBDown 和 FFmpeg，`git pull` 后直接运行 `start.bat`；
+- 删除 Windows 首次启动对 PyPI、GitHub Release 和系统 Python 的依赖；
+- 集成运行包由 GitHub Windows Runner 从固定官方来源构建，校验上游和成品 SHA-256，并执行冒烟测试；
+- 两个运行包均小于普通 Git 的 100 MiB 单文件限制，不要求 Git LFS；
+- Docker 默认拉取 GHCR 的 amd64/arm64 预构建镜像，同时保留 `BUILD_LOCAL=true` 的本机构建后备；
+- 保持配置模板增量补字段以及 `/data/config`、`/data/media`、`/data/cache`、`/data/tmp` 持久化映射。
+
+## 0.5.5 - 2026-07-18
+
+- 将 GitHub `main` 恢复为直接可审查源码树，删除 Base64、临时隧道和 Actions 源码恢复链路；
+- Windows 全新克隆新增 BBDown 官方固定发布包与 PyPI 固定 FFmpeg wheel 的 SHA-256 校验后备；
+- 将后续需求、性能优化、配置边界和原始基线包哈希固化到仓库文档；
+- 保持配置模板自动补字段、可配置 IP/端口、QNAP 四目录持久化、媒体库、分组、设备导出和网页扫码登录。
+
 ## 0.5.4 - 2026-07-18
 
-- 修复 Windows 网络较慢时 `pip` 下载依赖因默认读取超时而中断的问题：在线安装使用 120 秒超时、10 次传输重试和最多 3 轮完整安装重试，并保留下载缓存；
-- 修复依赖安装中断后 `.venv` 虽已创建、`verify-source.bat` 却不再补装缺失依赖的问题；
-- 修复 `verify-source.bat` 在仅做源码自检时仍强制下载 Windows 运行包、Release 资产尚未上传时被 HTTP 404 阻断的问题；
-- Windows 源码克隆新增经过固定 SHA-256 验证的运行包安装器，可从 GitHub Release 或本地运行包补齐 BBDown、FFmpeg 和离线 wheelhouse；
-- `verify.bat` 将源码校验和第三方工具冒烟测试解耦，源码克隆安装工具后同样执行真实 EXE 启动检查；
+- 修复 Windows 网络较慢时 `pip` 下载依赖因默认读取超时而中断的问题；
+- 修复依赖安装中断后 `.venv` 虽已创建、源码自检却不再补装缺失依赖的问题；
+- 修复源码自检仍强制下载 Windows 运行包、Release 资产尚未上传时被 HTTP 404 阻断的问题；
 - 修复从 `config/config.json` 设置局域网主机名时，HTTP 可信 Host 未同步导致手机或域名访问被拒绝的问题；
-- 加强监听主机名校验，拒绝标签首尾连字符、空标签和超长标签；
-- 增加源文件恢复清单、运行包清单和一键正式发布工具，后续不再使用 Base64/Actions 恢复源码。
+- 加强监听主机名校验，拒绝标签首尾连字符、空标签和超长标签。
 
 ## 0.5.3 - 2026-07-18
 
@@ -27,11 +40,8 @@
 - 配置改为 `.default` 模板与实际文件分离，启动和更新时递归补充新增字段而不覆盖用户值；
 - 支持旧根目录 `config.json` 自动迁移到 `config/config.json`；
 - IP、监听地址和端口可配置，非回环监听自动启用服务器模式和管理员认证；
-- 数字 IP Host 可用于手机和局域网访问，域名仍需加入可信 Host；
 - Windows 新增 `configure_network.bat` 和 `update.bat`；
 - Docker/QNAP 使用四个固定持久化目录，`docker/.env` 从 `.env.default` 自动生成和增量升级；
-- 源码缺少 Windows BBDown/FFmpeg 时允许网站和媒体库启动，并在状态页明确报告工具未就绪；
-- 修复 V0.5 Windows 自检中的 Ruff 配置与测试同步问题；
 - 自动化测试扩展到 130 项。
 
 ## 0.5.0 - 2026-07-17

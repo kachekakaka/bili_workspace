@@ -1,9 +1,20 @@
 @echo off
 chcp 65001 >nul
 setlocal EnableExtensions
-cd /d "%~dp0BBDown_portable"
+cd /d "%~dp0"
 title bili_workspace - B站登录
 
+if exist "vendor\windows\runtime-manifest.json" (
+  call bootstrap.bat -Quiet
+  if errorlevel 1 exit /b 1
+) else (
+  if not exist "BBDown_portable\BBDown.exe" (
+    call setup.bat
+    if errorlevel 1 exit /b 1
+  )
+)
+
+cd /d "%~dp0BBDown_portable"
 if not exist "BBDown.exe" (
   echo [错误] 缺少 BBDown.exe。
   pause
