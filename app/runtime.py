@@ -48,6 +48,15 @@ def _path(name: str, default: Path) -> Path:
     return Path(raw).expanduser().resolve() if raw else default.resolve()
 
 
+def _rooted_path(name: str, default: Path, root: Path) -> Path:
+    """Resolve relative runtime paths beside the selected config directory."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default.resolve()
+    value = Path(raw).expanduser()
+    return value.resolve() if value.is_absolute() else (root / value).resolve()
+
+
 def _csv(name: str, default: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in os.getenv(name, default).split(",") if part.strip())
 
@@ -161,14 +170,17 @@ class RuntimeSettings:
         containerized = mode in {"nas", "docker"}
         data_root = Path("/data") if containerized else ROOT
         config_dir = _path("BILI_CONFIG_DIR", data_root / "config")
-        userdata_dir = _path("BILI_USERDATA_DIR", data_root / "userdata")
+        runtime_root = config_dir.parent
+        userdata_dir = _rooted_path("BILI_USERDATA_DIR", data_root / "userdata", runtime_root)
         media_default = Path("/downloads") if containerized else ROOT / "downloads"
-        media_dir = _path("BILI_MEDIA_DIR", media_default)
-        cache_dir = _path("BILI_CACHE_DIR", userdata_dir / "cache")
-        temp_dir = _path("BILI_TEMP_DIR", userdata_dir / "tmp")
-        database_path = _path("BILI_DATABASE_PATH", userdata_dir / "bili_workspace.db")
+        media_dir = _rooted_path("BILI_MEDIA_DIR", media_default, runtime_root)
+        cache_dir = _rooted_path("BILI_CACHE_DIR", userdata_dir / "cache", runtime_root)
+        temp_dir = _rooted_path("BILI_TEMP_DIR", userdata_dir / "tmp", runtime_root)
+        database_path = _rooted_path(
+            "BILI_DATABASE_PATH", userdata_dir / "bili_workspace.db", runtime_root
+        )
         default_bbdown = config_dir / "bbdown" if containerized else ROOT / "BBDown_portable"
-        bbdown_dir = _path("BILI_BBDOWN_DIR", default_bbdown)
+        bbdown_dir = _rooted_path("BILI_BBDOWN_DIR", default_bbdown, runtime_root)
         port = _int("BILI_PORT", 3398, 1, 65535)
 
         public = os.getenv("BILI_PUBLIC_BASE_URL", "").strip().rstrip("/")
