@@ -5,6 +5,8 @@ cd /d "%~dp0"
 title bili_workspace v0.5.4 - 源码自检
 
 if not exist ".venv\Scripts\python.exe" (
+  echo [准备] 源码自检仅创建 Python 环境，不下载 Windows 媒体运行包。
+  set "BILI_SKIP_RUNTIME_DOWNLOAD=1"
   call setup.bat
   if errorlevel 1 exit /b 1
 )
