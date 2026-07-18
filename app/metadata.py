@@ -43,16 +43,15 @@ def safe_cover_url(value: str) -> str:
     return text
 
 
-def _duration_text(seconds: Any) -> str:
+def _duration_text(seconds: Any, part_count: int = 1) -> str:
     try:
         total = max(0, int(seconds))
     except (TypeError, ValueError):
         return ""
     hours, remain = divmod(total, 3600)
     minutes, secs = divmod(remain, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes}:{secs:02d}"
+    value = f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+    return f"{value} · {part_count}P" if part_count > 1 else value
 
 
 def fetch_video_metadata(
@@ -82,12 +81,20 @@ def fetch_video_metadata(
         data = payload.get("data") or {}
         owner = data.get("owner") or {}
         stat = data.get("stat") or {}
+        pages = [item for item in data.get("pages") or [] if isinstance(item, dict)]
+        part_count = max(1, len(pages))
+        page_total = sum(
+            max(0, int(item.get("duration") or 0))
+            for item in pages
+            if isinstance(item.get("duration"), (int, float))
+        )
+        duration_seconds = page_total or data.get("duration")
         return {
             "title": str(data.get("title") or "")[:300],
             "cover": safe_cover_url(str(data.get("pic") or "")),
             "author": str(owner.get("name") or "")[:300],
             "pubdate": data.get("pubdate") if isinstance(data.get("pubdate"), int) else None,
-            "duration": _duration_text(data.get("duration")),
+            "duration": _duration_text(duration_seconds, part_count),
             "play": stat.get("view") if isinstance(stat.get("view"), int) else None,
             "url": f"https://www.bilibili.com/video/{target.bvid}",
             "bvid": target.bvid,
