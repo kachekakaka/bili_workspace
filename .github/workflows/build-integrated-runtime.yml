@@ -8,6 +8,11 @@ on:
       - requirements.lock
       - tools/build_integrated_runtime.py
       - tools/bootstrap_portable.ps1
+      - bootstrap.bat
+      - setup.bat
+      - start.bat
+      - verify.bat
+      - verify-source.bat
       - LICENSES/**
       - .github/workflows/build-integrated-runtime.yml
 
@@ -21,7 +26,7 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -29,19 +34,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python 3.13.14
+      - name: Set up builder Python 3.13.14
         uses: actions/setup-python@v5
         with:
           python-version: "3.13.14"
           cache: pip
           cache-dependency-path: requirements.lock
 
-      - name: Build and smoke-test repository runtime packs
+      - name: Build repository runtime packs
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python tools/build_integrated_runtime.py --output vendor/windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem vendor/windows/*-runtime.pack | Format-Table Name,Length
+
+      - name: Test the exact git-pull and start runtime path
+        shell: pwsh
+        run: |
+          cmd /c bootstrap.bat -Force
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $PWD '.runtime/python/python.exe'
+          & $python tools/verify_source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m compileall -q app tests tools docker
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m ruff check --no-cache app tests tools docker
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m pytest -q -p no:cacheprovider
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Commit generated runtime packs
         shell: bash
