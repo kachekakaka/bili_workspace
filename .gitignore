@@ -1,0 +1,66 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local configuration and secrets
+.env
+*.local
+config.json.bak
+bootstrap-token.txt
+BBDown_portable/BBDown.data
+**/BBDown.data
+
+# Runtime state
+downloads/*
+!downloads/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+.server/
+.v05_state/
+.cache/
+.tmp/
+
+# Third-party executables and offline release payloads
+BBDown_portable/BBDown.exe
+BBDown_portable/ffmpeg/bin/*
+!BBDown_portable/ffmpeg/bin/.gitkeep
+wheelhouse/
+RELEASE_MANIFEST.sha256
+
+# Build and release outputs
+build/
+dist/
+release/
+*.zip
+*.rar
+*.tar
+*.tar.gz
+*.sha256
+
+# Generated configuration files (tracked templates use .default)
+config.json
+config/config.json
+config/config.json.bak
+config/runtime.env
+config/runtime.env.bak
+docker/.env
+docker/.env.bak

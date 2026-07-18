@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _text(name: str) -> str:
+    return (ROOT / name).read_text(encoding="utf-8")
+
+
+def test_dockerfile_bundles_runtime_and_fixed_bbdown_release():
+    dockerfile = _text("Dockerfile")
+    assert "python:3.13-slim-bookworm" in dockerfile
+    assert "BBDOWN_VERSION=1.6.3" in dockerfile
+    assert "BBDown_${BBDOWN_VERSION}_${BBDOWN_RELEASE_DATE}_linux-${asset_arch}.zip" in dockerfile
+    assert "apt-get install" in dockerfile and "ffmpeg" in dockerfile
+    assert "USER 1000:1000" in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert "BBDown.data" in dockerfile
+
+
+def test_compose_has_four_persistent_mappings_and_server_security():
+    compose = _text("compose.yaml")
+    for target in ("/data/config", "/data/media", "/data/cache", "/data/tmp"):
+        assert f"target: {target}" in compose
+    assert "BILI_AUTH_REQUIRED: \"true\"" in compose
+    assert "read_only: true" in compose
+    assert "no-new-privileges:true" in compose
+    assert "cap_drop:" in compose and "- ALL" in compose
+    assert "docker.sock" not in compose
+    assert "privileged:" not in compose
+
+
+def test_entrypoint_preserves_credentials_and_rejects_unwritable_volumes():
+    entrypoint = _text("docker/entrypoint.sh")
+    assert "BBDown.data" not in entrypoint
+    assert "Directory is not writable" in entrypoint
+    assert "copy_if_changed /opt/bbdown/BBDown" in entrypoint
+    assert "exec \"$@\"" in entrypoint
+
+
+def test_default_environment_files_do_not_contain_real_secrets():
+    local_env = _text(".env.default")
+    docker_env = _text("docker/.env.default")
+    combined = local_env + "\n" + docker_env
+    assert "BOOTSTRAP_TOKEN=" in docker_env
+    assert "SESSDATA=" not in combined
+    assert "bili_jct=" not in combined
+    assert "PUBLIC_BASE_URL=" in docker_env
+    assert "COOKIE_SECURE=false" in docker_env
+    assert "ENABLE_HSTS=false" in docker_env
+    assert not (ROOT / ".env").is_file() or ".env" in _text(".gitignore")
+    assert not (ROOT / "docker" / ".env").is_file() or "docker/.env" in _text(".gitignore")
+
+
+def test_qnap_helper_scripts_are_present_and_hardened():
+    verify = (ROOT / "docker" / "verify-config.sh").read_text(encoding="utf-8")
+    start = (ROOT / "docker" / "build-and-start.sh").read_text(encoding="utf-8")
+    entry = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+    assert "TRUSTED_HOSTS must not contain *" in verify
+    assert "docker compose --env-file" in verify
+    assert "build --pull" in start
+    assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR" in entry
+    assert 'exec "$@"' in entry
+
+
+def test_docker_runtime_directories_are_explicit():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    for value in (
+        "HOME=/data/config/home",
+        "XDG_CACHE_HOME=/data/cache",
+        "DOTNET_BUNDLE_EXTRACT_BASE_DIR=/data/cache/dotnet",
+        "TMPDIR=/data/tmp",
+    ):
+        assert value in dockerfile
+    assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/cache/dotnet" in compose

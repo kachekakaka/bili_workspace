@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="description" content="bili workspace 私人 NAS 媒体库、下载与设备导出">
+  <meta name="theme-color" content="#111827">
+  <title>bili workspace</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div id="authRoot" class="auth-root hidden"></div>
+  <div id="appRoot" class="app-root hidden">
+    <aside class="sidebar">
+      <a class="brand" href="#/dashboard"><span class="brand-mark">b</span><span><strong>bili workspace</strong><small id="brandMode">V0.5.3</small></span></a>
+      <nav id="desktopNav" class="nav-list"></nav>
+      <div class="sidebar-footer"><span id="connectionDot" class="dot"></span><span id="connectionText">正在连接</span><button id="logoutButton" class="link-button hidden">退出网站</button></div>
+    </aside>
+    <section class="workspace">
+      <header class="topbar">
+        <div><span id="pageKicker" class="kicker">PRIVATE MEDIA WORKSPACE</span><h1 id="pageTitle">概览</h1></div>
+        <div class="topbar-actions"><span id="biliBadge" class="badge neutral">B站状态</span><button class="icon-button" id="refreshButton" title="刷新">↻</button></div>
+      </header>
+      <main id="pageRoot" class="page-root"><div class="loading-card">正在载入…</div></main>
+    </section>
+    <nav id="mobileNav" class="mobile-nav"></nav>
+  </div>
+  <div id="toastRoot" class="toast-root"></div>
+  <div id="modalRoot" class="modal-root hidden"></div>
+  <script src="/assets/qrcode.min.js"></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

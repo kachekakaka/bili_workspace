@@ -1,0 +1,13 @@
+{
+  "config_schema_version": 2,
+  "host": "127.0.0.1",
+  "port": 3398,
+  "download_dir": "downloads",
+  "bbdown_dir": "BBDown_portable",
+  "poll_hint_ms": 1500,
+  "download_timeout_sec": 3600,
+  "dfn_priority": "",
+  "encoding_priority": "",
+  "default_group": "未分组",
+  "default_min_height": 1080
+}

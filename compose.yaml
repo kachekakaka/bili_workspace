@@ -1,0 +1,69 @@
+name: bili-workspace
+
+services:
+  app:
+    image: bili-workspace:0.5.3
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${BIND_IP:-0.0.0.0}:${HTTP_PORT:-3398}:3398"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      BILI_APP_MODE: docker
+      BILI_CONFIG_DIR: /data/config
+      BILI_MEDIA_DIR: /data/media
+      BILI_CACHE_DIR: /data/cache
+      BILI_TEMP_DIR: /data/tmp
+      BILI_BBDOWN_DIR: /data/config/bbdown
+      BILI_HOST: 0.0.0.0
+      BILI_PORT: 3398
+      BILI_AUTH_REQUIRED: "true"
+      HOME: /data/config/home
+      XDG_CACHE_HOME: /data/cache
+      DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/cache/dotnet
+      TMPDIR: /data/tmp
+      BILI_PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      BILI_TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"
+      BILI_TRUSTED_PROXY_IPS: "${TRUSTED_PROXY_IPS:-127.0.0.1}"
+      BILI_COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      BILI_HSTS: "${ENABLE_HSTS:-false}"
+      BILI_BOOTSTRAP_TOKEN: "${BOOTSTRAP_TOKEN:-}"
+      BILI_EXPORT_TTL_SEC: "${EXPORT_TTL_SEC:-86400}"
+      BILI_MIN_FREE_GIB: "${MIN_FREE_GIB:-2}"
+      BILI_DOWNLOAD_CONCURRENCY: "${DOWNLOAD_CONCURRENCY:-1}"
+      BILI_TRANSCODE_THREADS: "${TRANSCODE_THREADS:-0}"
+    volumes:
+      - type: bind
+        source: "${CONFIG_DIR}"
+        target: /data/config
+      - type: bind
+        source: "${MEDIA_DIR}"
+        target: /data/media
+      - type: bind
+        source: "${CACHE_DIR}"
+        target: /data/cache
+      - type: bind
+        source: "${TEMP_DIR}"
+        target: /data/tmp
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
