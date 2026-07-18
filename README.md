@@ -1,21 +1,44 @@
 # bili_workspace v0.5.6
 
-`bili_workspace` 是一个可运行在 **Windows 本机** 和 **QNAP NAS / Docker** 上的私人 Bilibili 下载与媒体库网站。
+`bili_workspace` 是一个可运行在 **Windows 本机** 和 **QNAP NAS / Docker** 上的私人 Bilibili 搜索、下载、任务管理与媒体库网站。
 
 > 仅下载、保存和播放你有权使用的内容，并遵守适用法律、平台规则与版权要求。
 
 ## 主要能力
 
-- 搜索作品、查看标题/BV/封面，并在下载前预览可用清晰度；
-- 设置最低清晰度和目标档位，下载完成后显示实际分辨率、编码、帧率和文件大小；
-- 下载时选择已有分组或立即新建分组，分组页支持浏览、重命名、合并和删除空分组；
+- 原始、精准和模糊三种搜索；精准/模糊只调用一次 Bilibili 原始搜索，再仅按返回标题匹配全部词或任意词；
+- 数字分页默认显示 10 页，并可每次继续增加 10 页；
+- 搜索默认屏蔽已下载和已删除作品，关闭屏蔽后可辨识并确认重新下载；
+- 下载前预览可用清晰度，支持最低清晰度与目标档位，下载后核对实际分辨率、编码、帧率和文件大小；
+- 任务中心显示真实进度、大小、速度、ETA、分 P 和日志，支持原 ID 重试、画质编辑及批量暂停、继续、取消、重试和删除；
+- 作品库支持标签、无标签、分组/标签 chip、修改分组，以及按时间、观看、标题、时长、大小、分组和标签正逆序排序；
+- 删除作品会移除作品库记录和媒体文件，同时在独立删除记录中保留搜索隐藏状态；显式重新下载成功后清除记录；
 - 下载目标可选“保存到媒体库”或“导出到当前设备”；设备导出完整发送后立即删除服务器临时文件，中断时保留到 TTL 到期；
 - 手机、平板和电脑浏览器在线播放，支持 `HEAD`、`Range`、`206`、`416`、拖动和续播；
 - 默认优先播放原文件，不兼容时可手动生成 H.264/AAC MP4 兼容副本；
-- SQLite 持久化管理员、会话、任务、逻辑分组、作品库和观看进度；
 - 服务器模式强制管理员认证，并提供 CSRF、可信 Host/代理、登录限速、安全 Cookie 和审计日志；
 - 网页 Bilibili 扫码登录，完整 Cookie 只保存在服务器端；
-- Docker 镜像内构建 Python、固定依赖、Linux BBDown、FFmpeg 和 FFprobe。
+- Docker 镜像内包含 Python、固定依赖、Linux BBDown、FFmpeg 和 FFprobe。
+
+## 持久化目录
+
+本机和 Docker 都遵循同一职责边界：
+
+```text
+config/     配置、标签定义，以及容器内的 Bilibili 凭据
+userdata/   SQLite、任务快照、下载索引、任务日志、缓存和临时文件
+downloads/  只保存永久媒体文件
+```
+
+Docker 中分别映射为：
+
+```text
+/data/config
+/data/userdata
+/downloads
+```
+
+旧版位于 `config/` 的数据库，以及位于 `downloads/` 的索引和任务日志，会在目标不存在且文件安全可迁移时移动到 `userdata/`。不要把数据库、索引、日志或缓存重新放回媒体目录。
 
 ## 配置文件不会被 Git 覆盖
 
@@ -25,6 +48,7 @@
 .env.default
 config/config.json.default
 config/runtime.env.default
+config/tags.json.default
 docker/.env.default
 ```
 
@@ -34,6 +58,7 @@ docker/.env.default
 .env
 config/config.json
 config/runtime.env
+config/tags.json
 docker/.env
 ```
 
@@ -114,7 +139,7 @@ git clone https://github.com/kachekakaka/bili_workspace.git
 cd bili_workspace
 chmod +x docker/*.sh verify-source.sh
 cp docker/.env.default docker/.env
-# 修改 QNAP 四个宿主机目录、PUID/PGID、端口和域名设置
+# 修改 QNAP 三个宿主机目录、PUID/PGID、端口和域名设置
 ./docker/build-and-start.sh
 ```
 
@@ -134,10 +159,9 @@ BUILD_LOCAL=true
 固定持久化映射：
 
 ```text
-/data/config  配置、SQLite、任务、分组、管理员、会话和 Bilibili 凭据
-/data/media   永久媒体文件与下载索引
-/data/cache   封面缓存和兼容播放副本
-/data/tmp     下载、混流、转码和设备导出临时文件
+/data/config    配置、标签定义和 Bilibili 凭据
+/data/userdata  SQLite、任务、分组、会话、观看进度、删除记录、索引、日志、缓存和临时文件
+/downloads      永久媒体文件；不保存数据库、索引、日志或缓存
 ```
 
 完整步骤见 [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)。
@@ -158,22 +182,26 @@ bili-workspace 容器
 
 ## 数据和备份
 
-Docker 必须备份：
+Docker/QNAP 至少备份三个宿主机映射目录：
 
 ```text
 CONFIG_DIR
+USERDATA_DIR
 MEDIA_DIR
 ```
+
+其中 `USERDATA_DIR/cache` 与 `USERDATA_DIR/tmp` 可重建，可按备份策略排除；SQLite、任务状态、索引和日志仍位于 `USERDATA_DIR`，不能只备份配置和媒体。
 
 Windows 建议备份：
 
 ```text
 config/
+userdata/
 downloads/
 BBDown_portable/BBDown.data（敏感，需加密保存）
 ```
 
-`cache` 可重建，`tmp` 无需备份。
+复制正在运行的 SQLite 数据库前应先停止应用，或使用支持 SQLite 一致性快照的备份方式。
 
 ## 验证
 
@@ -201,7 +229,7 @@ Git 仓库不提交：
 .venv
 BBDown.data
 SQLite 数据库
-媒体文件、日志、缓存和临时文件
+媒体文件、任务快照、索引、日志、缓存和临时文件
 解压后的 .runtime、BBDown.exe、ffmpeg.exe 与 wheelhouse
 ```
 
@@ -209,10 +237,12 @@ SQLite 数据库
 
 更多文档：
 
-- [V0.5.6 需求落实清单](docs/需求落实清单.md)
+- [文档索引](docs/README.md)
+- [当前需求落实清单](docs/需求落实清单.md)
 - [产品需求与架构基线](docs/产品需求与架构基线.md)
-- [V0.5.6 发布与验证说明](docs/V0.5.6_发布与验证说明.md)
+- [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)
 - [配置目录说明](config/README.md)
+- [运行数据目录说明](userdata/README.md)
 - [源文件与恢复清单](docs/源文件与恢复清单.md)
 
 ## 已知边界
