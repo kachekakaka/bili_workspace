@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_VERSION = "0.5.4"
+APP_VERSION = "0.5.6"
 
 MAX_BATCH_ITEMS = 100
 MAX_PENDING_TASKS = 100
