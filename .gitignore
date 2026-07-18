@@ -38,8 +38,9 @@ downloads/*
 .v05_state/
 .cache/
 .tmp/
+.runtime/
 
-# Third-party executables and offline release payloads
+# Third-party executables extracted from repository-integrated packs
 BBDown_portable/BBDown.exe
 BBDown_portable/ffmpeg/bin/*
 !BBDown_portable/ffmpeg/bin/.gitkeep
@@ -55,6 +56,8 @@ release/
 *.tar
 *.tar.gz
 *.sha256
+vendor/windows/.build/
+vendor/windows/*.tmp
 
 # Generated configuration files (tracked templates use .default)
 config.json
