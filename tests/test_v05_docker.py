@@ -84,3 +84,28 @@ def test_docker_runtime_directories_are_explicit():
     ):
         assert value in dockerfile
     assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/userdata/cache/dotnet" in compose
+
+
+def test_current_persistence_documentation_matches_runtime_layout():
+    current_docs = (
+        "README.md",
+        "docs/README.md",
+        "docs/QNAP_Docker部署指南.md",
+        "docs/需求落实清单.md",
+        "docs/产品需求与架构基线.md",
+        "config/README.md",
+        "userdata/README.md",
+    )
+    for name in current_docs:
+        content = _text(name)
+        for target in ("/data/config", "/data/userdata", "/downloads"):
+            assert target in content, f"{name} 缺少 {target}"
+        for legacy in ("/data/media", "/data/cache", "/data/tmp"):
+            assert legacy not in content, f"{name} 仍引用旧目录 {legacy}"
+
+    readme = _text("README.md")
+    for directory in ("config/", "userdata/", "downloads/"):
+        assert directory in readme
+    assert "docs/README.md" in readme
+    assert "userdata/README.md" in readme
+    assert "!userdata/README.md" in _text(".gitignore")
