@@ -1,0 +1,23 @@
+/* Word-search, group editing and chip-filter refinements. */
+.enh-mode-help{margin-top:7px;color:var(--muted);font-size:12px;line-height:1.55;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.enh-query-term{display:inline-flex;align-items:center;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:2px 8px;font-weight:750}
+.enh-library-chip-filters{display:grid;gap:10px;margin:0 0 15px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--surface-2)}
+.enh-chip-filter-row{display:grid;grid-template-columns:76px minmax(0,1fr);align-items:center;gap:10px}
+.enh-chip-filter-label{color:#344158;font-size:12px;font-weight:850;white-space:nowrap}
+.enh-chip-strip{display:flex;gap:7px;overflow-x:auto;padding:2px 2px 5px;scrollbar-width:thin}
+.enh-filter-chip{flex:0 0 auto;border:1px solid #cfd8e6;background:#fff;color:#526076;border-radius:999px;padding:6px 11px;font-size:12px;font-weight:750;cursor:pointer;white-space:nowrap}
+.enh-filter-chip:hover{border-color:#93b4f5;color:#1d4ed8}
+.enh-filter-chip.active{border-color:#2563eb;background:#2563eb;color:#fff;box-shadow:0 4px 12px rgba(37,99,235,.18)}
+.enh-colored-filter-chip{border-color:color-mix(in srgb,var(--tag-color) 48%,#dbe3ef);color:var(--tag-color)}
+.enh-colored-filter-chip.active{border-color:var(--tag-color);background:var(--tag-color);color:#fff;box-shadow:0 4px 12px color-mix(in srgb,var(--tag-color) 25%,transparent)}
+.enh-untagged-chip{border-style:dashed}
+.enh-native-chip-filter{display:none!important}
+.enh-search-pagination-v2{justify-content:flex-start;max-width:100%;overflow-x:auto;padding-bottom:7px;flex-wrap:nowrap}
+.enh-search-pagination-v2 .btn,.enh-search-pagination-v2 .input{flex:0 0 auto}
+@media(max-width:760px){
+  .enh-chip-filter-row{grid-template-columns:1fr;gap:6px}
+  .enh-chip-filter-label{padding-left:2px}
+  .enh-library-chip-filters{padding:10px}
+  .enh-filter-chip{padding:6px 10px}
+  .enh-search-pagination-v2{margin-left:-2px;margin-right:-2px}
+}
