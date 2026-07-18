@@ -51,16 +51,16 @@ def test_untrusted_cover_metadata_is_removed(client):
     assert created["cover"] == ""
 
 
-def test_force_retry_endpoint_creates_a_new_task(client):
+def test_force_retry_endpoint_reuses_the_original_task(client):
     first = client.post("/api/download", json={"bvids": ["BV0000000011"]}).json()["data"][0]
     completed = wait_terminal(client.state_ref.queue, first["id"])
     assert completed["status"] == "success"
     response = client.post(f"/api/tasks/{first['id']}/retry", json={"force": True})
     assert response.status_code == 200
-    retried = response.json()["data"][0]
-    assert retried["retry_of"] == first["id"]
+    retried = response.json()["data"]
+    assert retried["id"] == first["id"]
     assert retried["force"] is True
-    assert wait_terminal(client.state_ref.queue, retried["id"])["status"] == "success"
+    assert wait_terminal(client.state_ref.queue, first["id"])["status"] == "success"
 
 
 def test_tasks_response_contains_summary(client):
