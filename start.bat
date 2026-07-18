@@ -2,17 +2,22 @@
 chcp 65001 >nul
 setlocal EnableExtensions
 cd /d "%~dp0"
-title bili_workspace v0.5.4
+title bili_workspace v0.5.6
 
-if not exist ".venv\Scripts\python.exe" (
-  call setup.bat
-  if errorlevel 1 exit /b 1
+if exist "vendor\windows\runtime-manifest.json" (
+  call bootstrap.bat -Quiet
+  if errorlevel 1 goto :failed
+  set "PY=.runtime\python\python.exe"
+) else (
+  if not exist ".venv\Scripts\python.exe" (
+    call setup.bat
+    if errorlevel 1 exit /b 1
+  )
+  set "PY=.venv\Scripts\python.exe"
 )
-set "PY=.venv\Scripts\python.exe"
 
 "%PY%" -m tools.config_sync
 if errorlevel 1 goto :failed
-
 for /f "tokens=1,* delims==" %%A in ('"%PY%" -m tools.start_info --machine') do set "%%A=%%B"
 if not defined OPEN_URL set "OPEN_URL=http://127.0.0.1:3398/"
 
@@ -30,6 +35,6 @@ if not "%RC%"=="0" pause
 exit /b %RC%
 
 :failed
-echo [错误] 启动前配置同步失败。
+echo [错误] 启动前运行时或配置准备失败。
 pause
 exit /b 1
