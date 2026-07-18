@@ -20,32 +20,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build repository audit snapshot
+      - name: Build full repository snapshot
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import subprocess
-          import zipfile
+          git archive --format=zip --output=repository-full.zip HEAD
+          git ls-files | sort > repository-files.txt
 
-          raw_paths = subprocess.check_output(["git", "ls-files", "-z"])
-          paths = [Path(item.decode("utf-8")) for item in raw_paths.split(b"\0") if item]
-          with zipfile.ZipFile("repository-audit.zip", "w", zipfile.ZIP_DEFLATED) as archive:
-              for path in paths:
-                  if path.match("vendor/windows/*.pack"):
-                      continue
-                  archive.write(path, path.as_posix())
-          Path("repository-audit-files.txt").write_text(
-              "\n".join(path.as_posix() for path in paths) + "\n",
-              encoding="utf-8",
-          )
-          PY
-
-      - name: Upload repository audit snapshot
+      - name: Upload full repository snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: repository-audit
+          name: repository-full
           path: |
-            repository-audit.zip
-            repository-audit-files.txt
+            repository-full.zip
+            repository-files.txt
           retention-days: 1
