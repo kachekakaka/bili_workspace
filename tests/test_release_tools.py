@@ -33,16 +33,16 @@ def test_source_verifier_bootstraps_without_runtime_download():
 
 def test_source_verifier_uses_integrated_runtime_and_checks_tools():
     text = (ROOT / "verify-source.bat").read_text(encoding="utf-8")
-    assert 'call bootstrap.bat -Quiet' in text
-    assert 'set "PY=.runtime\python\python.exe"' in text
+    assert "call bootstrap.bat -Quiet" in text
+    assert r'set "PY=.runtime\python\python.exe"' in text
     assert '"%PY%" -m ruff check --no-cache app tests tools docker' in text
     assert '"%PY%" -m pytest -q -p no:cacheprovider' in text
 
 
 def test_windows_setup_prefers_integrated_runtime_with_source_fallback():
     text = (ROOT / "setup.bat").read_text(encoding="utf-8")
-    assert 'if exist "vendor\windows\runtime-manifest.json"' in text
+    assert r'if exist "vendor\windows\runtime-manifest.json"' in text
     assert "call bootstrap.bat" in text
-    assert 'set "PY=.runtime\python\python.exe"' in text
+    assert r'set "PY=.runtime\python\python.exe"' in text
     assert "--timeout 120 --retries 10" in text
-    assert 'set "PY=.venv\Scripts\python.exe"' in text
+    assert r'set "PY=.venv\Scripts\python.exe"' in text
