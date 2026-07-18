@@ -10,6 +10,10 @@ from app.paths import ROOT
 from app.runtime import RuntimeSettings
 
 
+def _absolute_no_follow(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
 def _move_regular_file(source: Path, target: Path) -> bool:
     """Move one regular file without replacing an existing destination."""
     source = Path(source)
@@ -40,16 +44,16 @@ def migrate_legacy_database(runtime: RuntimeSettings) -> dict[str, Any]:
     The operation runs before SQLite is opened. Existing userdata always wins,
     and WAL/SHM sidecars are moved together when a migration occurs.
     """
-    target = Path(runtime.database_path).resolve()
+    target = _absolute_no_follow(Path(runtime.database_path))
     target.parent.mkdir(parents=True, exist_ok=True)
     candidates = [
-        Path(runtime.config_dir).resolve() / "bili_workspace.db",
-        ROOT.resolve() / "config" / "bili_workspace.db",
-        ROOT.resolve() / "bili_workspace.db",
+        Path(runtime.config_dir) / "bili_workspace.db",
+        ROOT / "config" / "bili_workspace.db",
+        ROOT / "bili_workspace.db",
     ]
     moved_from = ""
-    for legacy in candidates:
-        legacy = legacy.resolve()
+    for candidate in candidates:
+        legacy = _absolute_no_follow(candidate)
         if legacy == target or not legacy.exists() or target.exists():
             continue
         if _move_regular_file(legacy, target):
