@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -34,9 +35,35 @@ def redact_sensitive(text: str) -> str:
     return value
 
 
+def _configured_log_root(download_dir: Path) -> Path:
+    raw_userdata = os.getenv("BILI_USERDATA_DIR", "").strip()
+    if raw_userdata:
+        return (Path(raw_userdata).expanduser().resolve() / "task_logs").resolve()
+    raw_database = os.getenv("BILI_DATABASE_PATH", "").strip()
+    if raw_database:
+        return (Path(raw_database).expanduser().resolve().parent / "task_logs").resolve()
+    return (Path(download_dir).resolve() / ".bili_logs").resolve()
+
+
 def task_log_path(download_dir: Path, task_id: str) -> Path:
     safe_id = validate_task_id(task_id)
-    return resolve_under(Path(download_dir).resolve(), f".bili_logs/{safe_id}.log")
+    download_root = Path(download_dir).resolve()
+    legacy = resolve_under(download_root, f".bili_logs/{safe_id}.log")
+    target = resolve_under(_configured_log_root(download_root), f"{safe_id}.log")
+    if target != legacy and not target.exists() and legacy.exists():
+        if legacy.is_symlink() or not legacy.is_file():
+            raise ValueError("旧版任务日志类型异常")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(legacy, target)
+        except OSError:
+            shutil.copy2(legacy, target)
+            legacy.unlink()
+        try:
+            legacy.parent.rmdir()
+        except OSError:
+            pass
+    return target
 
 
 def _truncate_if_needed(path: Path) -> None:
