@@ -4,6 +4,7 @@
 
 ## 0.5.4 - 2026-07-18
 
+- 修复 `verify-source.bat` 在仅做源码自检时仍强制下载 Windows 运行包、Release 资产尚未上传时被 HTTP 404 阻断的问题；
 - Windows 源码克隆新增经过固定 SHA-256 验证的运行包安装器，可从 GitHub Release 或本地运行包补齐 BBDown、FFmpeg 和离线 wheelhouse；
 - `verify.bat` 将源码校验和第三方工具冒烟测试解耦，源码克隆安装工具后同样执行真实 EXE 启动检查；
 - 修复从 `config/config.json` 设置局域网主机名时，HTTP 可信 Host 未同步导致手机或域名访问被拒绝的问题；
