@@ -1,0 +1,9 @@
+{
+  "tags": [
+    {"name": "夯", "color": "#dc2626", "enabled": true},
+    {"name": "顶级", "color": "#7c3aed", "enabled": true},
+    {"name": "人上人", "color": "#2563eb", "enabled": true},
+    {"name": "NPC", "color": "#64748b", "enabled": true},
+    {"name": "不要", "color": "#111827", "enabled": true}
+  ]
+}
