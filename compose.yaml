@@ -2,10 +2,7 @@ name: bili-workspace
 
 services:
   app:
-    image: bili-workspace:0.5.4
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: "${BILI_IMAGE:-ghcr.io/kachekakaka/bili_workspace:latest}"
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
