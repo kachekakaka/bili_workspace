@@ -1,6 +1,6 @@
 # 运行配置目录
 
-`config/` 只保存配置、标签定义和 Bilibili 登录凭据，不再承载 SQLite 或任务运行数据。
+`config/` 保存配置和标签定义，不再承载 SQLite 或任务运行数据。Docker/NAS 模式下，容器映射的 `/data/config/bbdown` 还保存 Bilibili 登录凭据；Windows 便携运行时的凭据仍位于 `BBDown_portable/BBDown.data`。
 
 Git 只跟踪模板：
 
@@ -17,7 +17,7 @@ README.md
 config.json
 runtime.env
 tags.json
-bbdown/BBDown.data
+bbdown/BBDown.data（Docker/NAS）
 ```
 
 启动、`setup.bat`、`start.bat`、`update.bat` 和 Docker 入口都会同步模板：
@@ -32,4 +32,4 @@ bbdown/BBDown.data
 
 数据库、任务快照、下载索引、任务日志、缓存和临时文件位于同级 `userdata/`；永久媒体文件只写入 `downloads/`。
 
-Docker 中本目录映射到 `/data/config`，应与 `/data/userdata` 和 `/downloads` 分别持久化。`bbdown/BBDown.data` 含登录凭据，备份时必须加密并限制访问。
+Docker 中本目录映射到 `/data/config`，应与 `/data/userdata` 和 `/downloads` 分别持久化。所有 `BBDown.data` 均含登录凭据，备份时必须加密并限制访问。
