@@ -18,6 +18,7 @@ from app.paths import ROOT
 from app.qr_login import QrLoginManager
 from app.queue import TaskQueue
 from app.runtime import RuntimeSettings
+from app.userdata import UserdataIndexStore, migrate_legacy_database
 
 
 def _label(path: Path | None) -> str:
@@ -131,10 +132,16 @@ class AppState:
         elif not runtime.server_mode:
             runtime = replace(runtime, media_dir=cfg.download_path())
 
+        migrate_legacy_database(runtime)
+        userdata_root = runtime.database_path.parent.resolve()
+        index_root = userdata_root / "indexes"
+
         integrity = verify_tool_manifest(cfg.bbdown_path())
         if integrity.checked and not integrity.ok:
             raise RuntimeError("工具完整性校验失败: " + "; ".join(integrity.errors))
-        index = IndexStore(cfg.download_path())
+        index = UserdataIndexStore(
+            cfg.download_path(), index_root / "library.json"
+        )
         fetcher = metadata_fetcher
         if fetcher is None and runner is None:
             fetcher = fetch_video_metadata
@@ -145,7 +152,7 @@ class AppState:
         export_config["download_dir"] = str(export_root)
         export_config["default_group"] = "设备导出"
         export_store = ConfigStore(
-            path=runtime.config_dir / ".export_runtime.json",
+            path=userdata_root / "export_runtime.json",
             initial=export_config,
             server_mode=runtime.server_mode,
             startup_overrides={
@@ -157,7 +164,9 @@ class AppState:
             if runtime.server_mode
             else None,
         )
-        export_index = IndexStore(export_root)
+        export_index = UserdataIndexStore(
+            export_root, index_root / "exports.json"
+        )
 
         nas = NasStore(runtime, index)
         nas.bind_export_index(export_index)
@@ -233,6 +242,8 @@ class AppState:
             "ffmpeg_ready": ffmpeg is not None,
             "ffmpeg_file": _label(ffmpeg),
             "download_dir": cfg.download_dir,
+            "userdata_dir": str(self.runtime.database_path.parent),
+            "database_path": str(self.runtime.database_path),
             "temp_dir": str(self.runtime.temp_dir),
             "cache_dir": str(self.runtime.cache_dir),
             "library": self.nas.library_summary(),

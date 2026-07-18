@@ -11,17 +11,19 @@ services:
       TZ: "${TZ:-Asia/Shanghai}"
       BILI_APP_MODE: docker
       BILI_CONFIG_DIR: /data/config
-      BILI_MEDIA_DIR: /data/media
-      BILI_CACHE_DIR: /data/cache
-      BILI_TEMP_DIR: /data/tmp
+      BILI_USERDATA_DIR: /data/userdata
+      BILI_DATABASE_PATH: /data/userdata/bili_workspace.db
+      BILI_MEDIA_DIR: /downloads
+      BILI_CACHE_DIR: /data/userdata/cache
+      BILI_TEMP_DIR: /data/userdata/tmp
       BILI_BBDOWN_DIR: /data/config/bbdown
       BILI_HOST: 0.0.0.0
       BILI_PORT: 3398
       BILI_AUTH_REQUIRED: "true"
-      HOME: /data/config/home
-      XDG_CACHE_HOME: /data/cache
-      DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/cache/dotnet
-      TMPDIR: /data/tmp
+      HOME: /data/userdata/home
+      XDG_CACHE_HOME: /data/userdata/cache
+      DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/userdata/cache/dotnet
+      TMPDIR: /data/userdata/tmp
       BILI_PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
       BILI_TRUSTED_HOSTS: "${TRUSTED_HOSTS:-127.0.0.1,localhost}"
       BILI_TRUSTED_PROXY_IPS: "${TRUSTED_PROXY_IPS:-127.0.0.1}"
@@ -34,17 +36,14 @@ services:
       BILI_TRANSCODE_THREADS: "${TRANSCODE_THREADS:-0}"
     volumes:
       - type: bind
-        source: "${CONFIG_DIR}"
+        source: "${CONFIG_DIR:-./config}"
         target: /data/config
       - type: bind
-        source: "${MEDIA_DIR}"
-        target: /data/media
+        source: "${USERDATA_DIR:-./userdata}"
+        target: /data/userdata
       - type: bind
-        source: "${CACHE_DIR}"
-        target: /data/cache
-      - type: bind
-        source: "${TEMP_DIR}"
-        target: /data/tmp
+        source: "${MEDIA_DIR:-./downloads}"
+        target: /downloads
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m

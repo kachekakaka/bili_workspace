@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 
 from app.constants import MAX_LOG_FILE_BYTES
 from app.path_safety import resolve_under
+from app.paths import ROOT
 from app.progress import clean_terminal_text
 
 _TASK_ID_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -34,9 +36,56 @@ def redact_sensitive(text: str) -> str:
     return value
 
 
+def _under_project(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(ROOT.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _configured_log_root(download_dir: Path) -> Path:
+    download_root = Path(download_dir).resolve()
+    raw_userdata = os.getenv("BILI_USERDATA_DIR", "").strip()
+    if raw_userdata:
+        candidate = Path(raw_userdata).expanduser()
+        if candidate.is_absolute():
+            return (candidate.resolve() / "task_logs").resolve()
+        # Relative defaults belong to the repository runtime. Standalone queues
+        # created against isolated temporary directories keep their logs beside
+        # that temporary download root instead of leaking into project userdata.
+        if _under_project(download_root):
+            return ((ROOT / candidate).resolve() / "task_logs").resolve()
+        return (download_root / ".bili_logs").resolve()
+    raw_database = os.getenv("BILI_DATABASE_PATH", "").strip()
+    if raw_database:
+        candidate = Path(raw_database).expanduser()
+        if candidate.is_absolute():
+            return (candidate.resolve().parent / "task_logs").resolve()
+        if _under_project(download_root):
+            return ((ROOT / candidate).resolve().parent / "task_logs").resolve()
+    return (download_root / ".bili_logs").resolve()
+
+
 def task_log_path(download_dir: Path, task_id: str) -> Path:
     safe_id = validate_task_id(task_id)
-    return resolve_under(Path(download_dir).resolve(), f".bili_logs/{safe_id}.log")
+    download_root = Path(download_dir).resolve()
+    legacy = resolve_under(download_root, f".bili_logs/{safe_id}.log")
+    target = resolve_under(_configured_log_root(download_root), f"{safe_id}.log")
+    if target != legacy and not target.exists() and legacy.exists():
+        if legacy.is_symlink() or not legacy.is_file():
+            raise ValueError("旧版任务日志类型异常")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(legacy, target)
+        except OSError:
+            shutil.copy2(legacy, target)
+            legacy.unlink()
+        try:
+            legacy.parent.rmdir()
+        except OSError:
+            pass
+    return target
 
 
 def _truncate_if_needed(path: Path) -> None:

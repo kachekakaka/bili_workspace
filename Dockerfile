@@ -10,17 +10,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     BILI_APP_MODE=docker \
     BILI_CONFIG_DIR=/data/config \
-    BILI_MEDIA_DIR=/data/media \
-    BILI_CACHE_DIR=/data/cache \
-    BILI_TEMP_DIR=/data/tmp \
+    BILI_USERDATA_DIR=/data/userdata \
+    BILI_DATABASE_PATH=/data/userdata/bili_workspace.db \
+    BILI_MEDIA_DIR=/downloads \
+    BILI_CACHE_DIR=/data/userdata/cache \
+    BILI_TEMP_DIR=/data/userdata/tmp \
     BILI_BBDOWN_DIR=/data/config/bbdown \
     BILI_HOST=0.0.0.0 \
     BILI_PORT=3398 \
     BILI_AUTH_REQUIRED=true \
-    HOME=/data/config/home \
-    XDG_CACHE_HOME=/data/cache \
-    DOTNET_BUNDLE_EXTRACT_BASE_DIR=/data/cache/dotnet \
-    TMPDIR=/data/tmp \
+    HOME=/data/userdata/home \
+    XDG_CACHE_HOME=/data/userdata/cache \
+    DOTNET_BUNDLE_EXTRACT_BASE_DIR=/data/userdata/cache/dotnet \
+    TMPDIR=/data/userdata/tmp \
     TZ=Asia/Shanghai
 
 RUN apt-get update \
@@ -71,12 +73,12 @@ COPY docker/healthcheck.py /app/docker/healthcheck.py
 RUN chmod 0755 /usr/local/bin/bili-workspace-entrypoint \
     && groupadd --gid 1000 bili \
     && useradd --uid 1000 --gid 1000 --home-dir /nonexistent --shell /usr/sbin/nologin bili \
-    && mkdir -p /data/config /data/media /data/cache /data/tmp \
-    && chown -R 1000:1000 /data
+    && mkdir -p /data/config /data/userdata /downloads \
+    && chown -R 1000:1000 /data /downloads
 
 USER 1000:1000
 EXPOSE 3398
-VOLUME ["/data/config", "/data/media", "/data/cache", "/data/tmp"]
+VOLUME ["/data/config", "/data/userdata", "/downloads"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["python", "/app/docker/healthcheck.py"]

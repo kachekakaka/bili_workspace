@@ -20,10 +20,12 @@ def test_dockerfile_bundles_runtime_and_fixed_bbdown_release():
     assert "BBDown.data" in dockerfile
 
 
-def test_compose_has_four_persistent_mappings_and_server_security():
+def test_compose_separates_config_userdata_and_downloads():
     compose = _text("compose.yaml")
-    for target in ("/data/config", "/data/media", "/data/cache", "/data/tmp"):
+    for target in ("/data/config", "/data/userdata", "/downloads"):
         assert f"target: {target}" in compose
+    assert "target: /data/media" not in compose
+    assert "BILI_DATABASE_PATH: /data/userdata/bili_workspace.db" in compose
     assert "BILI_AUTH_REQUIRED: \"true\"" in compose
     assert "read_only: true" in compose
     assert "no-new-privileges:true" in compose
@@ -37,6 +39,8 @@ def test_entrypoint_preserves_credentials_and_rejects_unwritable_volumes():
     assert "BBDown.data" not in entrypoint
     assert "Directory is not writable" in entrypoint
     assert "copy_if_changed /opt/bbdown/BBDown" in entrypoint
+    assert "${BILI_USERDATA_DIR:-/data/userdata}" in entrypoint
+    assert "${BILI_MEDIA_DIR:-/downloads}" in entrypoint
     assert "exec \"$@\"" in entrypoint
 
 
@@ -45,6 +49,7 @@ def test_default_environment_files_do_not_contain_real_secrets():
     docker_env = _text("docker/.env.default")
     combined = local_env + "\n" + docker_env
     assert "BOOTSTRAP_TOKEN=" in docker_env
+    assert "USERDATA_DIR=" in docker_env
     assert "SESSDATA=" not in combined
     assert "bili_jct=" not in combined
     assert "PUBLIC_BASE_URL=" in docker_env
@@ -69,10 +74,13 @@ def test_docker_runtime_directories_are_explicit():
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
     for value in (
-        "HOME=/data/config/home",
-        "XDG_CACHE_HOME=/data/cache",
-        "DOTNET_BUNDLE_EXTRACT_BASE_DIR=/data/cache/dotnet",
-        "TMPDIR=/data/tmp",
+        "BILI_USERDATA_DIR=/data/userdata",
+        "BILI_DATABASE_PATH=/data/userdata/bili_workspace.db",
+        "BILI_MEDIA_DIR=/downloads",
+        "HOME=/data/userdata/home",
+        "XDG_CACHE_HOME=/data/userdata/cache",
+        "DOTNET_BUNDLE_EXTRACT_BASE_DIR=/data/userdata/cache/dotnet",
+        "TMPDIR=/data/userdata/tmp",
     ):
         assert value in dockerfile
-    assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/cache/dotnet" in compose
+    assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR: /data/userdata/cache/dotnet" in compose

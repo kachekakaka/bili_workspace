@@ -48,7 +48,19 @@ jobs:
         run: python -m ruff check --no-cache app tests tools docker
 
       - name: Test
-        run: python -m pytest -q -p no:cacheprovider
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider --tb=short 2>&1 | tee "pytest-${{ matrix.python-version }}.log"
+
+      - name: Upload failed pytest log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-${{ matrix.python-version }}-${{ github.run_attempt }}
+          path: pytest-${{ matrix.python-version }}.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   frontend:
     runs-on: ubuntu-latest

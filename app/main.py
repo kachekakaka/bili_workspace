@@ -10,8 +10,10 @@ from fastapi.staticfiles import StaticFiles
 from app import __version__
 from app.api import SESSION_COOKIE, router as api_router
 from app.constants import MAX_REQUEST_BODY_BYTES
+from app.enhancement_api import compat_router, router as enhancement_router
 from app.paths import ROOT
 from app.state import AppState
+from app.tag_store import TagStore
 
 WEB_DIR = ROOT / "web"
 _PUBLIC_API = {
@@ -23,10 +25,12 @@ _PUBLIC_API = {
 
 def create_app(state: AppState | None = None) -> FastAPI:
     app_state = state or AppState.create()
+    tag_store = TagStore(app_state.runtime)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
+        tag_store.close()
         app_state.stop()
 
     app = FastAPI(
@@ -38,6 +42,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.app_state = app_state
+    app.state.tag_store = tag_store
 
     def host_allowed(value: str) -> bool:
         raw = value.strip()
@@ -119,9 +124,6 @@ def create_app(state: AppState | None = None) -> FastAPI:
         if response is None:
             response = await call_next(request)
 
-        # Apply the same browser/security policy to successful responses and
-        # middleware-generated 4xx responses. This keeps HSTS and no-store
-        # effective even when a request is rejected before reaching a route.
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
@@ -140,7 +142,10 @@ def create_app(state: AppState | None = None) -> FastAPI:
     def healthz():
         return {"ok": True, "version": __version__, "mode": app_state.runtime.mode}
 
+    # Compatibility overrides must be registered before the historical API router.
+    app.include_router(compat_router)
     app.include_router(api_router)
+    app.include_router(enhancement_router)
 
     if WEB_DIR.exists():
         @app.get("/")

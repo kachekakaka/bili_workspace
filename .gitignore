@@ -27,6 +27,8 @@ BBDown_portable/BBDown.data
 # Runtime state
 downloads/*
 !downloads/.gitkeep
+userdata/*
+!userdata/.gitkeep
 *.db
 *.db-shm
 *.db-wal
@@ -65,5 +67,7 @@ config/config.json
 config/config.json.bak
 config/runtime.env
 config/runtime.env.bak
+config/tags.json
+config/tags.json.bak
 docker/.env
 docker/.env.bak

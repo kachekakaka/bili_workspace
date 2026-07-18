@@ -48,6 +48,15 @@ def _path(name: str, default: Path) -> Path:
     return Path(raw).expanduser().resolve() if raw else default.resolve()
 
 
+def _rooted_path(name: str, default: Path, root: Path) -> Path:
+    """Resolve relative runtime paths beside the selected config directory."""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default.resolve()
+    value = Path(raw).expanduser()
+    return value.resolve() if value.is_absolute() else (root / value).resolve()
+
+
 def _csv(name: str, default: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in os.getenv(name, default).split(",") if part.strip())
 
@@ -132,6 +141,11 @@ class RuntimeSettings:
     def server_mode(self) -> bool:
         return self.mode in {"server", "nas", "docker"}
 
+    @property
+    def userdata_dir(self) -> Path:
+        """Root for persistent library, task and account data."""
+        return self.database_path.parent
+
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
         _prepare_env_files()
@@ -156,12 +170,17 @@ class RuntimeSettings:
         containerized = mode in {"nas", "docker"}
         data_root = Path("/data") if containerized else ROOT
         config_dir = _path("BILI_CONFIG_DIR", data_root / "config")
-        media_dir = _path("BILI_MEDIA_DIR", data_root / "media" if containerized else ROOT / "downloads")
-        cache_dir = _path("BILI_CACHE_DIR", data_root / "cache" if containerized else ROOT / ".cache")
-        temp_dir = _path("BILI_TEMP_DIR", data_root / "tmp" if containerized else ROOT / ".tmp")
-        database_path = _path("BILI_DATABASE_PATH", config_dir / "bili_workspace.db")
+        runtime_root = config_dir.parent
+        userdata_dir = _rooted_path("BILI_USERDATA_DIR", data_root / "userdata", runtime_root)
+        media_default = Path("/downloads") if containerized else ROOT / "downloads"
+        media_dir = _rooted_path("BILI_MEDIA_DIR", media_default, runtime_root)
+        cache_dir = _rooted_path("BILI_CACHE_DIR", userdata_dir / "cache", runtime_root)
+        temp_dir = _rooted_path("BILI_TEMP_DIR", userdata_dir / "tmp", runtime_root)
+        database_path = _rooted_path(
+            "BILI_DATABASE_PATH", userdata_dir / "bili_workspace.db", runtime_root
+        )
         default_bbdown = config_dir / "bbdown" if containerized else ROOT / "BBDown_portable"
-        bbdown_dir = _path("BILI_BBDOWN_DIR", default_bbdown)
+        bbdown_dir = _rooted_path("BILI_BBDOWN_DIR", default_bbdown, runtime_root)
         port = _int("BILI_PORT", 3398, 1, 65535)
 
         public = os.getenv("BILI_PUBLIC_BASE_URL", "").strip().rstrip("/")
@@ -209,7 +228,14 @@ class RuntimeSettings:
         min_free_gib = _float("BILI_MIN_FREE_GIB", 2.0 if server else 1.0, 0.0, 1024.0)
         download_concurrency = _int("BILI_DOWNLOAD_CONCURRENCY", 1, 1, 3)
         transcode_threads = _int("BILI_TRANSCODE_THREADS", 0, 0, 128)
-        for directory in (config_dir, media_dir, cache_dir, temp_dir, database_path.parent):
+        for directory in (
+            config_dir,
+            userdata_dir,
+            media_dir,
+            cache_dir,
+            temp_dir,
+            database_path.parent,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
         return cls(
