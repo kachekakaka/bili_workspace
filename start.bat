@@ -4,20 +4,10 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title bili_workspace v0.5.6
 
-if exist "vendor\windows\runtime-manifest.json" (
-  call bootstrap.bat -Quiet
-  if errorlevel 1 goto :failed
-  set "PY=.runtime\python\python.exe"
-) else (
-  if not exist ".venv\Scripts\python.exe" (
-    call setup.bat
-    if errorlevel 1 exit /b 1
-  )
-  set "PY=.venv\Scripts\python.exe"
-)
-
-"%PY%" -m tools.config_sync
+call "%~dp0scripts\windows\prepare-runtime.bat" -Quiet
 if errorlevel 1 goto :failed
+set "PY=%~dp0.runtime\python\python.exe"
+
 for /f "tokens=1,* delims==" %%A in ('"%PY%" -m tools.start_info --machine') do set "%%A=%%B"
 if not defined OPEN_URL set "OPEN_URL=http://127.0.0.1:3398/"
 

@@ -29,4 +29,4 @@ Windows 随包二进制不做修改，其哈希记录在 `BBDown_portable/checks
 
 ## Python 依赖
 
-固定运行依赖见 `requirements-runtime.lock`；Windows 自检与开发依赖见 `requirements.lock`。各组件继续受其各自许可证约束。
+固定运行依赖见 `requirements/runtime.lock`；Windows 自检与开发依赖见 `requirements/dev.lock`。各组件继续受其各自许可证约束。

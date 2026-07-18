@@ -1,2 +1,9 @@
 [tool.ruff]
 target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = '-m "not integration"'
+markers = [
+  "integration: hits real network or BBDown (skipped by default)",
+]

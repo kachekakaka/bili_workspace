@@ -4,13 +4,9 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title bili_workspace v0.5.6 - 完整自检
 
-call setup.bat
-if errorlevel 1 exit /b 1
-if exist ".runtime\python\python.exe" (
-  set "PY=.runtime\python\python.exe"
-) else (
-  set "PY=.venv\Scripts\python.exe"
-)
+call "%~dp0scripts\windows\prepare-runtime.bat" -Quiet
+if errorlevel 1 goto :failed
+set "PY=%~dp0.runtime\python\python.exe"
 set "SMOKE_DIR=%TEMP%\bili_workspace_verify_%RANDOM%_%RANDOM%"
 mkdir "%SMOKE_DIR%" >nul 2>nul
 
@@ -50,7 +46,7 @@ pause
 exit /b 0
 
 :failed
-if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
+if defined SMOKE_DIR if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
 echo.
 echo ===== 自检失败，请查看上方信息 =====
 pause

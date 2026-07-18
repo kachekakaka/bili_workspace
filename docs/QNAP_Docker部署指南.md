@@ -56,7 +56,7 @@ id 用户名
 cd /share/Container/bili-workspace
 git clone https://github.com/kachekakaka/bili_workspace.git app
 cd app
-chmod +x docker/*.sh verify-source.sh
+chmod +x docker/*.sh
 cp docker/.env.default docker/.env
 vi docker/.env
 ```

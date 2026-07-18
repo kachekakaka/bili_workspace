@@ -31,7 +31,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY requirements-runtime.lock /app/requirements-runtime.lock
+COPY requirements/runtime.lock /app/requirements-runtime.lock
 RUN python -m pip install --no-cache-dir -r /app/requirements-runtime.lock
 
 # Pull the official, fixed BBDown v1.6.3 Linux release matching the build

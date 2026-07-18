@@ -50,7 +50,7 @@ def _offline_status(bbdown_dir: Path) -> tuple[Path, str, CookieStatus | None]:
             file_present=False,
             has_sessdata=False,
             online_verified=False,
-            message="未找到登录文件；需要会员画质或登录搜索时，请在本机运行 login.bat",
+            message="未找到登录文件；请在网站账号页扫码登录，命令行备用入口见 scripts/windows/bilibili-login.bat",
         )
     raw = read_cookie_string(bbdown_dir)
     marker = "SESS" + "DATA="
@@ -106,7 +106,7 @@ def check_cookie_status(
             file_present=True,
             has_sessdata=True,
             online_verified=True,
-            message="登录文件已失效或未登录，请重新运行 login.bat",
+            message="登录文件已失效或未登录，请在网站账号页重新扫码登录",
         )
     except Exception as exc:  # noqa: BLE001
         reason = str(exc).strip().replace("\n", " ")[:180]

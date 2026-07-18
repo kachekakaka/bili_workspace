@@ -1,18 +1,47 @@
+# Version-control and editor metadata
 .git
+.github
+.gitattributes
 .gitignore
+.vscode
+.idea
+
+# Local Python and runtime state
+.venv
+.runtime
 .pytest_cache
+.ruff_cache
+.mypy_cache
 __pycache__
 *.py[cod]
-.venv
 .server
 .cache
 .tmp
+userdata
+userdata/**
 downloads
-wheelhouse
+downloads/**
+
+# Windows-only runtime and helper assets are not used by the Linux image
 BBDown_portable
+vendor
+vendor/**
+scripts
+scripts/**
+*.bat
+
+# Development, tests and documentation are not copied by Dockerfile
 tests
 tools
 docs
+pyproject.toml
+requirements/dev.lock
+README.md
+SECURITY.md
+CHANGELOG.md
+
+# Local archives, credentials and generated configuration
+wheelhouse
 *.zip
 *.rar
 *.tar
@@ -20,15 +49,12 @@ docs
 RELEASE_MANIFEST.sha256
 BBDown.data
 **/BBDown.data
-.github
-.gitattributes
-CHANGELOG.md
-verify-source.sh
-verify-source.bat
 .env
 config/config.json
 config/config.json.bak
 config/runtime.env
 config/runtime.env.bak
+config/tags.json
+config/tags.json.bak
 docker/.env
 docker/.env.bak

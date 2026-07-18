@@ -20,7 +20,7 @@ tags.json
 bbdown/BBDown.data（Docker/NAS）
 ```
 
-启动、`setup.bat`、`start.bat`、`update.bat` 和 Docker 入口都会同步模板：
+`start.bat`、`update.bat`、`verify.bat`、内部运行时准备脚本和 Docker 入口都会同步模板：
 
 - 文件不存在时复制模板；
 - 文件存在时保留原值；

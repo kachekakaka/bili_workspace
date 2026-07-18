@@ -5,14 +5,13 @@ on:
   push:
     branches: [main]
     paths:
-      - requirements.lock
+      - requirements/dev.lock
       - tools/build_integrated_runtime.py
-      - tools/bootstrap_portable.ps1
-      - bootstrap.bat
-      - setup.bat
+      - scripts/windows/bootstrap-portable.ps1
+      - scripts/windows/bootstrap-runtime.bat
+      - scripts/windows/prepare-runtime.bat
       - start.bat
       - verify.bat
-      - verify-source.bat
       - LICENSES/**
       - .github/workflows/build-integrated-runtime.yml
 
@@ -39,7 +38,7 @@ jobs:
         with:
           python-version: "3.13.14"
           cache: pip
-          cache-dependency-path: requirements.lock
+          cache-dependency-path: requirements/dev.lock
 
       - name: Build repository runtime packs
         shell: pwsh
@@ -52,7 +51,7 @@ jobs:
       - name: Test the exact git-pull and start runtime path
         shell: pwsh
         run: |
-          cmd /c bootstrap.bat -Force
+          cmd /c scripts\windows\prepare-runtime.bat -Force
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $python = Join-Path $PWD '.runtime/python/python.exe'
           & $python tools/verify_source.py

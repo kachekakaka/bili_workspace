@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$Root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $ManifestPath = Join-Path $Root 'vendor\windows\runtime-manifest.json'
 $RuntimeRoot = Join-Path $Root '.runtime'
 $PythonRoot = Join-Path $RuntimeRoot 'python'

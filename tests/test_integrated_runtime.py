@@ -47,18 +47,22 @@ def test_builder_writes_deterministic_pack_and_internal_manifest(tmp_path: Path)
         assert archive.read("runtime_manifest.sha256").decode() == f"{expected}  hello.txt\n"
 
 
-def test_windows_entrypoints_prefer_repository_integrated_runtime() -> None:
-    setup = _text("setup.bat")
+def test_windows_entrypoints_use_repository_integrated_runtime() -> None:
+    prepare = _text("scripts/windows/prepare-runtime.bat")
     start = _text("start.bat")
     verify = _text("verify.bat")
-    bootstrap = _text("tools/bootstrap_portable.ps1")
-    assert 'vendor\\windows\\runtime-manifest.json' in setup
-    assert 'set "PY=.runtime\\python\\python.exe"' in setup
-    assert "call bootstrap.bat -Quiet" in start
-    assert 'set "PY=.runtime\\python\\python.exe"' in verify
-    assert "runtime_manifest.sha256" in bootstrap
-    assert "Get-FileHash" in bootstrap
-    assert "BBDown.exe 冒烟测试失败" in bootstrap
+    bootstrap_cmd = _text("scripts/windows/bootstrap-runtime.bat")
+    bootstrap_ps = _text("scripts/windows/bootstrap-portable.ps1")
+
+    assert r"vendor\windows\runtime-manifest.json" in prepare
+    assert 'set "PY=%ROOT%\\.runtime\\python\\python.exe"' in prepare
+    assert r"scripts\windows\prepare-runtime.bat" in start
+    assert r"scripts\windows\prepare-runtime.bat" in verify
+    assert "bootstrap-portable.ps1" in bootstrap_cmd
+    assert ".venv" not in prepare
+    assert "runtime_manifest.sha256" in bootstrap_ps
+    assert "Get-FileHash" in bootstrap_ps
+    assert "BBDown.exe 冒烟测试失败" in bootstrap_ps
 
 
 def test_runtime_builder_workflow_has_write_permission_and_no_lfs_dependency() -> None:
@@ -66,8 +70,10 @@ def test_runtime_builder_workflow_has_write_permission_and_no_lfs_dependency() -
     attributes = _text(".gitattributes")
     assert "contents: write" in workflow
     assert "tools/build_integrated_runtime.py" in workflow
+    assert "requirements/dev.lock" in workflow
     assert "python-runtime.pack" in workflow
     assert "media-runtime.pack" in workflow
+    assert "scripts/windows/prepare-runtime.bat" in workflow
     assert "git push origin HEAD:main" in workflow
     assert "git lfs" not in workflow.lower()
     assert "*.pack filter=lfs" not in attributes
@@ -78,12 +84,14 @@ def test_docker_defaults_to_prebuilt_multi_architecture_ghcr_image() -> None:
     build_override = _text("compose.build.yaml")
     workflow = _text(".github/workflows/docker-image.yml")
     env_default = _text("docker/.env.default")
+    dockerfile = _text("Dockerfile")
     assert "ghcr.io/kachekakaka/bili_workspace:latest" in compose
     assert "build:" not in compose
     assert "build:" in build_override
     assert "linux/amd64,linux/arm64" in workflow
     assert "packages: write" in workflow
     assert "BUILD_LOCAL=false" in env_default
+    assert "requirements/runtime.lock" in dockerfile
 
 
 def test_runtime_manifest_shape_when_generated(tmp_path: Path) -> None:
