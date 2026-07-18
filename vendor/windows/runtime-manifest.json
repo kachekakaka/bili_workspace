@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "bili_workspace_version": "0.5.6",
+  "platform": "windows-x64",
+  "python_version": "3.13.14",
+  "packs": {
+    "python": {
+      "path": "vendor/windows/python-runtime.pack",
+      "sha256": "0b20c48727a144520f8fd1676a2252079fe14c4483df669c5490ba54d36f1313",
+      "size": 29284760
+    },
+    "media": {
+      "path": "vendor/windows/media-runtime.pack",
+      "sha256": "1b8ac6956c7e08110b477c8a132709a10c0d0c75360c14954397c11b3c836632",
+      "size": 39154660
+    }
+  },
+  "sources": {
+    "python_embed": {
+      "url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-embed-amd64.zip",
+      "sha256": "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907"
+    },
+    "bbdown": {
+      "url": "https://github.com/nilaoda/BBDown/releases/download/1.6.3/BBDown_1.6.3_20240814_win-x64.zip",
+      "sha256": "40f1e2af0d4e74df765c6f93d2e931f9bea201d5168d0bc62dc35a54b7e0ec02"
+    },
+    "ffmpeg_wheel": {
+      "url": "https://files.pythonhosted.org/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+      "sha256": "02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a"
+    }
+  }
+}
