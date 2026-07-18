@@ -36,6 +36,45 @@ function Assert-SafeRelativePath([string]$Name) {
     return $parts
 }
 
+function Set-PortablePythonModulePath([string]$PythonDirectory) {
+    $pthFiles = @(Get-ChildItem -LiteralPath $PythonDirectory -Filter 'python*._pth' -File)
+    if ($pthFiles.Count -ne 1) {
+        throw "内置 Python 运行时的 _pth 文件数量异常: $($pthFiles.Count)"
+    }
+
+    $pthPath = $pthFiles[0].FullName
+    $rootPath = [System.IO.Path]::GetFullPath($Root)
+    $lines = @(Get-Content -LiteralPath $pthPath -Encoding UTF8)
+    $updated = @()
+    $inserted = $false
+
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq '../..' -or $trimmed -eq '..\..' -or $trimmed -eq $rootPath) {
+            if (-not $inserted) {
+                $updated += $rootPath
+                $inserted = $true
+            }
+            continue
+        }
+        if ($trimmed -eq 'import site' -and -not $inserted) {
+            $updated += $rootPath
+            $inserted = $true
+        }
+        $updated += $line
+    }
+    if (-not $inserted) {
+        $updated += $rootPath
+    }
+
+    $currentText = ($lines -join "`r`n") + "`r`n"
+    $updatedText = ($updated -join "`r`n") + "`r`n"
+    if ($currentText -ne $updatedText) {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding
+        [System.IO.File]::WriteAllText($pthPath, $updatedText, $utf8NoBom)
+    }
+}
+
 function Expand-VerifiedPack([string]$PackPath, [string]$ExpectedSha256, [string]$Destination) {
     if (-not (Test-Path -LiteralPath $PackPath -PathType Leaf)) {
         throw "缺少集成运行包: $PackPath"
@@ -190,13 +229,15 @@ else {
     Write-Status '[1/3] 内置运行时已是最新版本。'
 }
 
+Set-PortablePythonModulePath $PythonRoot
+
 if (-not $Quiet -or -not $stateMatches) {
     Write-Status '[3/3] 执行运行时冒烟测试...'
     $pythonExe = Join-Path $PythonRoot 'python.exe'
     $bbdownExe = Join-Path $Root 'BBDown_portable\BBDown.exe'
     $ffmpegExe = Join-Path $Root 'BBDown_portable\ffmpeg\bin\ffmpeg.exe'
-    & $pythonExe -c "import fastapi,httpx,pydantic,pytest,ruff,starlette,uvicorn; print('Portable Python OK')"
-    if ($LASTEXITCODE -ne 0) { throw '内置 Python 运行时无法加载依赖' }
+    & $pythonExe -c "import app,fastapi,httpx,pydantic,pytest,ruff,starlette,tools.config_sync,uvicorn; print('Portable Python OK')"
+    if ($LASTEXITCODE -ne 0) { throw '内置 Python 运行时无法加载仓库模块或依赖' }
     & $bbdownExe --help *> $null
     if ($LASTEXITCODE -ne 0) { throw 'BBDown.exe 冒烟测试失败' }
     $ffmpegOutput = & $ffmpegExe -hide_banner -version 2>&1 | Out-String
