@@ -26,3 +26,18 @@ def test_source_verifier_bootstraps_without_runtime_download():
     skip_position = text.index('set "BILI_SKIP_RUNTIME_DOWNLOAD=1"')
     setup_position = text.index("call setup.bat")
     assert skip_position < setup_position
+
+
+def test_source_verifier_repairs_partial_virtual_environment():
+    text = (ROOT / "verify-source.bat").read_text(encoding="utf-8")
+    assert 'set "NEED_SETUP=0"' in text
+    assert "import fastapi,httpx,pydantic,pytest,uvicorn" in text
+    assert '".venv\\Scripts\\python.exe" -m ruff --version' in text
+
+
+def test_windows_setup_retries_slow_package_downloads():
+    text = (ROOT / "setup.bat").read_text(encoding="utf-8")
+    assert "--timeout 120 --retries 10" in text
+    assert 'set "PIP_ATTEMPT=1"' in text
+    assert 'if "%PIP_ATTEMPT%"=="3" exit /b 1' in text
+    assert "PIP_INDEX_URL" in text
