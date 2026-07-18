@@ -22,6 +22,7 @@ REQUIRED = (
     ".env.default",
     "config/config.json.default",
     "config/runtime.env.default",
+    "config/tags.json.default",
     "config/README.md",
     "docker/.env.default",
     ".dockerignore",
@@ -37,6 +38,10 @@ REQUIRED = (
     "app/__main__.py",
     "app/main.py",
     "app/api.py",
+    "app/enhancement_api.py",
+    "app/tag_store.py",
+    "app/task_extensions.py",
+    "app/userdata.py",
     "app/nas.py",
     "app/media_stream.py",
     "app/cover_cache.py",
@@ -55,6 +60,7 @@ REQUIRED = (
     "web/index.html",
     "web/assets/app.js",
     "web/assets/app.css",
+    "web/assets/enhancements.css",
     "web/assets/qrcode.min.js",
     "docker/entrypoint.sh",
     "docker/healthcheck.py",
@@ -104,6 +110,7 @@ MUTABLE_PREFIXES = (
     ".cache/",
     ".tmp/",
     "downloads/",
+    "userdata/",
 )
 MUTABLE_EXACT = {
     "BBDown_portable/BBDown.data",
@@ -113,6 +120,8 @@ MUTABLE_EXACT = {
     "config/config.json.bak",
     "config/runtime.env",
     "config/runtime.env.bak",
+    "config/tags.json",
+    "config/tags.json.bak",
     "docker/.env",
     "docker/.env.bak",
 }
@@ -131,7 +140,6 @@ def _safe_manifest_path(raw: str) -> PurePosixPath:
     if rel.is_absolute() or not rel.parts or any(p in ("", ".", "..") for p in rel.parts):
         raise ValueError(f"清单路径不安全: {raw}")
     return rel
-
 
 
 def _is_mutable(rel: str) -> bool:
@@ -164,6 +172,7 @@ def _immutable_files(root: Path) -> set[str]:
             continue
         files.add(rel)
     return files
+
 
 def verify_release_manifest(root: Path) -> list[str]:
     path = root / "RELEASE_MANIFEST.sha256"
