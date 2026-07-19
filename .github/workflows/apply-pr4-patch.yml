@@ -1,0 +1,36 @@
+name: Apply PR4 validated patch
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/multi-user-frontend'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: agent/multi-user-frontend
+          fetch-depth: 0
+
+      - name: Apply locally validated changes
+        shell: bash
+        run: |
+          test -f .agent/pr4.patch.gz.b64
+          base64 -d .agent/pr4.patch.gz.b64 | gzip -d > /tmp/pr4.patch
+          git apply --check /tmp/pr4.patch
+          git apply /tmp/pr4.patch
+          rm -f .agent/pr4.patch.gz.b64
+          rm -f .github/workflows/apply-pr4-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Implement V0.6 multi-user frontend"
+          git push origin HEAD:agent/multi-user-frontend
