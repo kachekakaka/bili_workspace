@@ -140,6 +140,16 @@ jobs:
       - name: Test fixed desktop, tablet, and phone viewports
         env:
           BILI_RUN_PLAYWRIGHT: "1"
-        run: >-
-          python -m pytest -q -p no:cacheprovider --tb=short
-          tests/test_playwright_layout.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider --tb=long tests/test_playwright_layout.py 2>&1 | tee playwright.log
+
+      - name: Upload failed Playwright log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-${{ github.run_attempt }}
+          path: playwright.log
+          if-no-files-found: error
+          retention-days: 2
