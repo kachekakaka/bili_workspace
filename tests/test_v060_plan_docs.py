@@ -17,11 +17,14 @@ def test_v060_plan_is_indexed_and_not_claimed_as_current() -> None:
     docs_index = _text(ROOT / "docs" / "README.md")
     current = _text(ROOT / "docs" / "需求落实清单.md")
 
-    assert "状态：**已批准，等待开发**" in plan
+    assert "状态：**开发中（PR 1 搜索和布局已完成，PR 2–5 待开发）**" in plan
+    assert "### PR 1：搜索和布局" in plan
+    assert "状态：已完成（PR #17）" in plan
     assert "plans/V0.6.0_多用户搜索与会话方案.md" in docs_index
-    assert "尚未实现" in docs_index
-    assert "尚未实现" in current
-    assert "不得提前把计划功能写成当前能力" in current
+    assert "多用户、独立会话 Token" in docs_index
+    assert "仍待后续 PR" in docs_index
+    assert "搜索和布局" in current
+    assert "仍未实现" in current
 
 
 def test_v060_frozen_limits_and_test_scope_are_documented() -> None:

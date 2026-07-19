@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.catalog_overrides import parse_title_search_terms, search_videos_title_mode
 from tests.conftest import wait_terminal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,80 +19,6 @@ def _search_item(bvid: str, title: str, *, author: str = "UP主") -> dict:
         "pubdate": 1_700_000_000,
         "play": 100,
     }
-
-
-def test_search_term_parser_supports_parentheses_and_spaces():
-    assert parse_title_search_terms("(测试 原因) 测试") == ["测试", "原因"]
-    assert parse_title_search_terms("甲，乙；丙") == ["甲", "乙", "丙"]
-
-
-def test_title_search_calls_original_query_once_and_filters_titles(monkeypatch, tmp_env):
-    calls: list[str] = []
-    original_results = [
-        _search_item("BVWORD000001", "测试失败原因分析"),
-        _search_item("BVWORD000002", "测试工具", author="原因UP"),
-        _search_item("BVWORD000003", "故障原因"),
-        _search_item("BVWORD000004", "完全无关", author="测试 原因"),
-    ]
-
-    def fake_search(keyword, *, order, page, bbdown_dir):
-        del order, page, bbdown_dir
-        calls.append(keyword)
-        return {
-            "items": list(original_results),
-            "page": 1,
-            "pages": 25,
-            "total": 500,
-            "cached": False,
-        }
-
-    monkeypatch.setattr("app.catalog_overrides.search_videos", fake_search)
-
-    precise = search_videos_title_mode(
-        "(测试 原因)",
-        mode="all",
-        order="totalrank",
-        page=1,
-        bbdown_dir=tmp_env.bbdown_dir,
-    )
-    assert calls == ["(测试 原因)"]
-    assert [item["bvid"] for item in precise["items"]] == ["BVWORD000001"]
-    assert precise["query_terms"] == ["测试", "原因"]
-    assert precise["source_queries"] == ["(测试 原因)"]
-    assert precise["source_count"] == 1
-
-    calls.clear()
-    fuzzy = search_videos_title_mode(
-        "(测试 原因)",
-        mode="any",
-        order="totalrank",
-        page=1,
-        bbdown_dir=tmp_env.bbdown_dir,
-    )
-    assert calls == ["(测试 原因)"]
-    assert {item["bvid"] for item in fuzzy["items"]} == {
-        "BVWORD000001",
-        "BVWORD000002",
-        "BVWORD000003",
-    }
-    # Author/BV matches never make a title-only result pass.
-    assert "BVWORD000004" not in {item["bvid"] for item in fuzzy["items"]}
-
-    calls.clear()
-    raw = search_videos_title_mode(
-        "(测试 原因)",
-        mode="raw",
-        order="totalrank",
-        page=1,
-        bbdown_dir=tmp_env.bbdown_dir,
-    )
-    assert calls == ["(测试 原因)"]
-    assert [item["bvid"] for item in raw["items"]] == [
-        "BVWORD000001",
-        "BVWORD000002",
-        "BVWORD000003",
-        "BVWORD000004",
-    ]
 
 
 def test_untagged_filter_and_media_group_move(client):
@@ -161,8 +86,8 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
     assert client.app.state.deletion_store.for_keys([bvid])[bvid]["title"] == "以后不要忘记已删除"
     assert client.app.state.tag_store.tags_for_keys([bvid])[bvid] == []
 
-    def fake_search(keyword, *, order, page, bbdown_dir):
-        del order, page, bbdown_dir
+    def fake_search(keyword, *, order, page, bbdown_dir, fresh=False):
+        del order, page, bbdown_dir, fresh
         return {
             "keyword": keyword,
             "items": [_search_item(bvid, "以后不要忘记已删除")],
@@ -172,10 +97,10 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
             "cached": False,
         }
 
-    monkeypatch.setattr("app.catalog_overrides.search_videos", fake_search)
+    monkeypatch.setattr("app.api.search_videos", fake_search)
     searched = client.get(
         "/api/search",
-        params={"q": "删除", "mode": "raw", "fresh": "true"},
+        params={"q": "删除", "fresh": "true"},
     ).json()["data"]["items"][0]
     assert searched["local_status"] == "deleted"
     assert searched["local_status_label"] == "已删除"
@@ -191,18 +116,15 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
     client.state_ref.nas.sync_index(force=True)
     searched_again = client.get(
         "/api/search",
-        params={"q": "删除", "mode": "raw", "fresh": "true"},
+        params={"q": "删除", "fresh": "true"},
     ).json()["data"]["items"][0]
     assert searched_again["local_status"] == "downloaded"
     assert client.app.state.deletion_store.for_keys([bvid]) == {}
 
 
-def test_frontend_exposes_search_modes_chips_group_move_and_ten_pages():
+def test_frontend_search_is_integrated_without_overlay_competition():
     index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    search = (ROOT / "web" / "assets" / "enhancements-search-overlay.js").read_text(
-        encoding="utf-8"
-    )
-    deletion = (ROOT / "web" / "assets" / "enhancements-deletion-status.js").read_text(
+    search = (ROOT / "web" / "assets" / "enhancements-search.js").read_text(
         encoding="utf-8"
     )
     library = (ROOT / "web" / "assets" / "enhancements-library-overlay.js").read_text(
@@ -211,26 +133,27 @@ def test_frontend_exposes_search_modes_chips_group_move_and_ten_pages():
     css = (ROOT / "web" / "assets" / "enhancements-catalog-v2.css").read_text(
         encoding="utf-8"
     )
-    assert index.index("enhancements-search.js") < index.index("enhancements-search-overlay.js")
-    assert index.index("enhancements-polish.js") < index.index("enhancements-deletion-status.js")
-    assert index.index("enhancements-library.js") < index.index("enhancements-library-overlay.js")
+    app = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+
+    assert "enhancements-search-overlay.js" not in index
+    assert "enhancements-deletion-status.js" not in index
+    assert not (ROOT / "web" / "assets" / "enhancements-search-overlay.js").exists()
+    assert not (ROOT / "web" / "assets" / "enhancements-deletion-status.js").exists()
+    assert "function renderSearch(" not in app
+    assert "AUTO_RENDER_PAGES = new Set(['library', 'tasks'])" in (ROOT / "web" / "assets" / "enhancements-core.js").read_text(encoding="utf-8")
     for token in (
-        "精准：匹配全部词",
-        "模糊：匹配任一词",
-        "原始：B站直接结果",
-        "再显示10页",
-        "search.cache.clear()",
-        "fresh: fresh ? 'true' : 'false'",
+        "精准：标题包含全部词",
+        "模糊：标题包含任意词",
+        "屏蔽已下载和已删除",
+        "AbortController",
+        "requestIdleCallback",
+        "navigator.connection",
+        "刷新B站结果",
+        "本页没有标题匹配项，可查看下一页；系统不会自动抓取全部页面。",
     ):
         assert token in search
-    for token in (
-        "精准：标题匹配全部词",
-        "模糊：标题匹配任一词",
-        "屏蔽已下载和已删除",
-        "local_status === 'deleted'",
-        "以前被你删除过",
-    ):
-        assert token in deletion
+    for forbidden in ("tags/bulk", "MutationObserver", "insertBefore", "enh-spacer"):
+        assert forbidden not in search
     for token in ("无标签", "data-library-group-chip", "data-catalog-move", "修改作品分组"):
         assert token in library
     assert ".enh-chip-strip" in css

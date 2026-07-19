@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from app.constants import SEARCH_PAGE_CACHE_SECONDS, WBI_KEY_CACHE_SECONDS
 from app.cookie import read_cookie_string
 from app.wbi import sign_params
 
@@ -27,10 +28,10 @@ ORDER_MAP = {
 }
 
 _TAG_RE = re.compile(r"<[^>]+>")
-_CACHE_TTL = 180.0
 _CACHE_LIMIT = 160
 _CACHE_LOCK = threading.RLock()
 _SEARCH_CACHE: dict[tuple[str, str, int, str], tuple[float, dict[str, Any]]] = {}
+_WBI_KEY_CACHE: dict[str, tuple[float, tuple[str, str]]] = {}
 
 
 class SearchError(Exception):
@@ -38,21 +39,21 @@ class SearchError(Exception):
 
 
 def _headers(cookie: str) -> dict[str, str]:
-    h = {
+    headers = {
         "User-Agent": UA,
         "Referer": "https://www.bilibili.com/",
         "Origin": "https://www.bilibili.com",
     }
     if cookie:
-        h["Cookie"] = cookie
-    return h
+        headers["Cookie"] = cookie
+    return headers
 
 
 def fetch_wbi_keys(client: httpx.Client, cookie: str) -> tuple[str, str]:
-    resp = client.get(NAV_URL, headers=_headers(cookie))
-    resp.raise_for_status()
-    data = resp.json()
-    wbi = (data.get("data") or {}).get("wbi_img") or {}
+    response = client.get(NAV_URL, headers=_headers(cookie))
+    response.raise_for_status()
+    payload = response.json()
+    wbi = (payload.get("data") or {}).get("wbi_img") or {}
     img_url = wbi.get("img_url") or ""
     sub_url = wbi.get("sub_url") or ""
     if not img_url or not sub_url:
@@ -119,7 +120,7 @@ def _cached(key: tuple[str, str, int, str]) -> dict[str, Any] | None:
         if not row:
             return None
         created, value = row
-        if now - created > _CACHE_TTL:
+        if now - created > SEARCH_PAGE_CACHE_SECONDS:
             _SEARCH_CACHE.pop(key, None)
             return None
         return copy.deepcopy(value)
@@ -130,10 +131,105 @@ def _store_cache(key: tuple[str, str, int, str], value: dict[str, Any]) -> None:
     with _CACHE_LOCK:
         _SEARCH_CACHE[key] = (now, copy.deepcopy(value))
         if len(_SEARCH_CACHE) > _CACHE_LIMIT:
-            for old_key, _ in sorted(_SEARCH_CACHE.items(), key=lambda item: item[1][0])[
-                : len(_SEARCH_CACHE) - _CACHE_LIMIT
-            ]:
+            count = len(_SEARCH_CACHE) - _CACHE_LIMIT
+            oldest = sorted(_SEARCH_CACHE.items(), key=lambda item: item[1][0])[:count]
+            for old_key, _ in oldest:
                 _SEARCH_CACHE.pop(old_key, None)
+
+
+def _invalidate_search_page(key: tuple[str, str, int, str]) -> None:
+    with _CACHE_LOCK:
+        _SEARCH_CACHE.pop(key, None)
+
+
+def _cached_wbi_keys(token: str) -> tuple[str, str] | None:
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        row = _WBI_KEY_CACHE.get(token)
+        if not row:
+            return None
+        created, keys = row
+        if now - created > WBI_KEY_CACHE_SECONDS:
+            _WBI_KEY_CACHE.pop(token, None)
+            return None
+        return keys
+
+
+def _store_wbi_keys(token: str, keys: tuple[str, str]) -> None:
+    with _CACHE_LOCK:
+        _WBI_KEY_CACHE[token] = (time.monotonic(), keys)
+
+
+def _invalidate_wbi_keys(token: str) -> None:
+    with _CACHE_LOCK:
+        _WBI_KEY_CACHE.pop(token, None)
+
+
+def _get_wbi_keys(
+    client: httpx.Client,
+    cookie: str,
+    token: str,
+    *,
+    force: bool = False,
+) -> tuple[str, str]:
+    if not force:
+        cached = _cached_wbi_keys(token)
+        if cached is not None:
+            return cached
+    keys = fetch_wbi_keys(client, cookie)
+    _store_wbi_keys(token, keys)
+    return keys
+
+
+def _is_wbi_signature_error(payload: dict[str, Any]) -> bool:
+    code = payload.get("code")
+    message = str(payload.get("message") or payload.get("msg") or "").casefold()
+    return code == -403 or any(
+        marker in message for marker in ("w_rid", "wbi", "signature", "签名")
+    )
+
+
+def _result_from_payload(
+    payload: dict[str, Any],
+    *,
+    keyword: str,
+    order: str,
+    page: int,
+) -> dict[str, Any]:
+    data = payload.get("data") or {}
+    results = []
+    for item in (data.get("result") or [])[:20]:
+        normalized = _normalize_item(item)
+        if normalized:
+            results.append(normalized)
+    pages = int(data.get("numPages") or data.get("num_pages") or 0)
+    total = int(data.get("numResults") or data.get("num_results") or len(results))
+    return {
+        "keyword": keyword,
+        "order": order,
+        "page": page,
+        "pages": pages,
+        "total": total,
+        "numPages": pages,
+        "numResults": total,
+        "num_pages": pages,
+        "num_results": total,
+        "page_size": 20,
+        "items": results,
+        "cached": False,
+    }
+
+
+def clear_search_caches() -> None:
+    """Clear process-local Bilibili search caches.
+
+    This is intentionally public for deterministic tests and explicit maintenance;
+    normal refreshes should use ``fresh=True`` so only one raw page is evicted.
+    """
+
+    with _CACHE_LOCK:
+        _SEARCH_CACHE.clear()
+        _WBI_KEY_CACHE.clear()
 
 
 def search_videos(
@@ -144,6 +240,7 @@ def search_videos(
     bbdown_dir,
     client: httpx.Client | None = None,
     wbi_keys: tuple[str, str] | None = None,
+    fresh: bool = False,
 ) -> dict[str, Any]:
     keyword = (keyword or "").strip()
     if not keyword:
@@ -152,21 +249,20 @@ def search_videos(
     page = max(1, int(page))
 
     cookie = read_cookie_string(bbdown_dir)
-    cache_key = (keyword.casefold(), order_key, page, _cookie_token(cookie))
-    cached = _cached(cache_key)
-    if cached is not None:
-        cached["cached"] = True
-        return cached
+    cookie_token = _cookie_token(cookie)
+    cache_key = (keyword.casefold(), order_key, page, cookie_token)
+    if fresh:
+        _invalidate_search_page(cache_key)
+    else:
+        cached = _cached(cache_key)
+        if cached is not None:
+            cached["cached"] = True
+            return cached
 
     owns_client = client is None
-    # Ignore broken system HTTP(S)_PROXY values when talking to Bilibili APIs.
-    client = client or httpx.Client(timeout=20.0, trust_env=False)
+    http_client = client or httpx.Client(timeout=20.0, trust_env=False)
     try:
-        if wbi_keys:
-            img_key, sub_key = wbi_keys
-        else:
-            img_key, sub_key = fetch_wbi_keys(client, cookie)
-
+        keys = wbi_keys or _get_wbi_keys(http_client, cookie, cookie_token)
         params = {
             "search_type": "video",
             "keyword": keyword,
@@ -174,36 +270,41 @@ def search_videos(
             "page": page,
             "page_size": 20,
         }
-        signed = sign_params(params, img_key, sub_key)
-        resp = client.get(SEARCH_URL, params=signed, headers=_headers(cookie))
-        resp.raise_for_status()
-        payload = resp.json()
+        payload: dict[str, Any] | None = None
+        for attempt in range(2):
+            signed = sign_params(params, keys[0], keys[1])
+            response = http_client.get(
+                SEARCH_URL,
+                params=signed,
+                headers=_headers(cookie),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("code") == 0:
+                break
+            if attempt == 0 and _is_wbi_signature_error(payload):
+                _invalidate_wbi_keys(cookie_token)
+                keys = _get_wbi_keys(http_client, cookie, cookie_token, force=True)
+                continue
+            raise SearchError(
+                payload.get("message") or f"搜索失败 code={payload.get('code')}"
+            )
+        else:  # pragma: no cover - loop always returns or raises
+            raise SearchError("搜索签名重试失败")
+
+        assert payload is not None
         if payload.get("code") != 0:
-            raise SearchError(payload.get("message") or f"搜索失败 code={payload.get('code')}")
-        data = payload.get("data") or {}
-        results = []
-        for item in data.get("result") or []:
-            norm = _normalize_item(item)
-            if norm:
-                results.append(norm)
-        pages = int(data.get("numPages") or data.get("num_pages") or 0)
-        total = int(data.get("numResults") or data.get("num_results") or len(results))
-        result = {
-            "keyword": keyword,
-            "order": order_key,
-            "page": page,
-            "pages": pages,
-            "total": total,
-            # Keep both historical spellings for old and new frontends.
-            "numPages": pages,
-            "numResults": total,
-            "num_pages": pages,
-            "num_results": total,
-            "items": results,
-            "cached": False,
-        }
+            raise SearchError(
+                payload.get("message") or f"搜索失败 code={payload.get('code')}"
+            )
+        result = _result_from_payload(
+            payload,
+            keyword=keyword,
+            order=order_key,
+            page=page,
+        )
         _store_cache(cache_key, result)
         return result
     finally:
         if owns_client:
-            client.close()
+            http_client.close()

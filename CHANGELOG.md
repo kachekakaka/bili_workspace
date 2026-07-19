@@ -2,6 +2,16 @@
 
 本项目遵循语义化版本号。
 
+## 未发布（V0.6.0 PR 1）
+
+- 将后端搜索收敛为唯一 `/api/search` 路由，固定读取 Bilibili 当前页 20 条原始结果；
+- 将精准/模糊改为浏览器当前页标题二级筛选，切换模式或筛选词不再访问网络；
+- 首次只加载当前页，空闲时最多预加载下一页 1 页，并用 `AbortController` 阻止旧请求覆盖新结果；
+- 增加 10 分钟 WBI 密钥缓存、3 分钟原始搜索页缓存和签名失效单次重试；
+- 搜索响应直接合并标签、下载状态和删除状态，停用搜索页 overlay 与额外标签批量请求；
+- 修正搜索控件、批量栏和 768px 竖屏平板断点，并用 Playwright Chromium 验证五个固定视口；
+- CI 增加 Playwright、SQLite/userdata 迁移、Windows/Docker 静态检查和 Markdown 内部链接门槛。
+
 ## 0.5.6 - 2026-07-18
 
 - Windows x64 集成可移植 Python 3.13.14、锁定依赖、BBDown 和 FFmpeg，`git pull` 后直接运行 `start.bat`；

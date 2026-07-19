@@ -6,4 +6,5 @@ testpaths = ["tests"]
 addopts = '-m "not integration"'
 markers = [
   "integration: hits real network or BBDown (skipped by default)",
+  "playwright: Chromium layout and browser behavior checks",
 ]

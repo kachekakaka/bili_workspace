@@ -47,7 +47,7 @@ def test_enhanced_frontend_exposes_requested_controls():
         encoding="utf-8"
     )
 
-    for token in ("隐藏已经下载过的作品", "B站原页面", "data-search-page", "tags/bulk"):
+    for token in ("屏蔽已下载和已删除", "B站原页面", "data-search-page", "标题二级筛选", "刷新B站结果"):
         assert token in search
     for token in (
         "enhLibraryTag",
@@ -76,9 +76,6 @@ def test_enhanced_frontend_exposes_requested_controls():
     for token in (
         "enh-dashboard-stack",
         "downloadForm",
-        "enhSearchDownloadSelected",
-        "仍停留在搜索页",
-        "stopImmediatePropagation",
     ):
         assert token in polish
 
