@@ -1,0 +1,86 @@
++- schema v4 将既有任务与导出归属原管理员，v3 升级不会再次撤销 PR 2 已建立的有效会话。
++
+ ## 作品库、分组和标签
+ 
+ - SQLite 作品库提供服务端分页、筛选和排序；
+@@ -79,7 +90,7 @@
+ - 设置页可展示多网卡可访问地址和代理绕过提示；
+ - 支持 QNAP HTTPS 反向代理、可信 Host、可信代理、安全 Cookie、CSRF、HSTS 和登录限速；
+ - 网页可显示 Bilibili 二维码并完成扫码登录，完整 Cookie 不返回浏览器；
+-- 普通用户的任务/日志/SSE/导出所有权隔离和双页面前端仍由 PR 3–4 完成。
++- 普通用户任务、日志、SSE 和导出已按拥有者隔离；双页面导航、精简下载页和用户菜单仍由 PR 4 完成。
+ 
+ ## 配置、数据库和 Docker 持久化
+ 
+diff --git a/tests/test_v060_auth_sessions.py b/tests/test_v060_auth_sessions.py
+index 7186eb4..303328a 100644
+--- a/tests/test_v060_auth_sessions.py
++++ b/tests/test_v060_auth_sessions.py
+@@ -415,9 +415,10 @@ def test_admin_user_api_forced_password_and_session_csrf_isolation(
+             )
+             assert changed.status_code == 200, changed.text
+             user_csrf = str(changed.json()["data"]["csrf_token"])
+-            forbidden = user_client.get("/api/status")
+-            assert forbidden.status_code == 403
+-            assert forbidden.json()["code"] == "forbidden"
++            limited_status = user_client.get("/api/status")
++            assert limited_status.status_code == 200
++            assert "database_path" not in limited_status.text
++            assert "download_dir" not in limited_status.text
+             sessions = user_client.get("/api/auth/sessions")
+             assert sessions.status_code == 200
+             assert sessions.json()["data"]["items"][0]["current"] is True
+diff --git a/tests/test_v060_plan_docs.py b/tests/test_v060_plan_docs.py
+index 27c2172..a4ac502 100644
+--- a/tests/test_v060_plan_docs.py
++++ b/tests/test_v060_plan_docs.py
+@@ -11,21 +11,23 @@ def _text(path: Path) -> str:
+     return path.read_text(encoding="utf-8")
+ 
+ 
+-def test_v060_plan_tracks_completed_pr1_and_pr2_without_claiming_later_work() -> None:
++def test_v060_plan_tracks_completed_pr1_to_pr3_without_claiming_later_work() -> None:
+     assert PLAN.is_file()
+     plan = _text(PLAN)
+     docs_index = _text(ROOT / "docs" / "README.md")
+     current = _text(ROOT / "docs" / "需求落实清单.md")
+ 
+-    assert "状态：**开发中（PR 1–2 已完成，PR 3–5 待开发）**" in plan
++    assert "状态：**开发中（PR 1–3 已完成，PR 4–5 待开发）**" in plan
+     assert "### PR 1：搜索和布局" in plan
+     assert "状态：已完成（PR #17）" in plan
+     assert "状态：已完成（PR #18）" in plan
++    assert "状态：已完成（PR #19）" in plan
++    assert "任务所有权与保留策略" in docs_index
+     assert "plans/V0.6.0_多用户搜索与会话方案.md" in docs_index
+     assert "账号权限与会话管理" in docs_index
+-    assert "PR 3" in docs_index
++    assert "PR 4" in docs_index
+     assert "每用户最多 10 个有效 Token" in current
+-    assert "任务所有权" in current and "仍未实现" in current
++    assert "任务所有权" in current and "多用户前端" in current and "仍未实现" in current
+ 
+ 
+ def test_v060_frozen_limits_and_test_scope_are_documented() -> None:
+diff --git a/tests/test_v060_task_ownership.py b/tests/test_v060_task_ownership.py
+index 2a47da0..3835d35 100644
+--- a/tests/test_v060_task_ownership.py
++++ b/tests/test_v060_task_ownership.py
+@@ -268,7 +268,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
+             "a-old",
+             {
+                 "id": "a-old",
+-                "owner_user_id": owner_a,
++                "owner_user_id": owner_b,
+                 "key": "OLD",
+                 "status": "failed",
+                 "created_at": now - 9 * 86400,
+@@ -280,7 +280,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
+             "a-recent",
+             {
+                 "id": "a-recent",
+-                "owner_user_id": owner_a,
++                "owner_user_id": owner_b,
+                 "key": "RECENT",
+                 "status": "failed",
+                 "created_at": now - 7 * 86400,
