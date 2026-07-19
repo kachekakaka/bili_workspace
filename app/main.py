@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import ipaddress
-import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -163,12 +162,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @app.get("/healthz")
     def healthz():
-        return {
-            "ok": True,
-            **build,
-            "mode": app_state.runtime.mode,
-            "pid": os.getpid(),
-        }
+        return {"ok": True, **build, "mode": app_state.runtime.mode}
 
     # Catalog/compatibility overrides must be registered before historical routes.
     app.include_router(catalog_router)
