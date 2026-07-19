@@ -159,13 +159,16 @@ jobs:
       - name: Apply validated agent patch
         shell: bash
         run: |
-          if [[ ! -f .agent/pr3-final.patch ]]; then
+          shopt -s nullglob
+          parts=(.agent/pr3-final.patch.*)
+          if (( ${#parts[@]} == 0 )); then
             echo "No agent patch to apply"
             exit 0
           fi
-          git apply --check .agent/pr3-final.patch
-          git apply .agent/pr3-final.patch
-          rm -f .agent/pr3-final.patch
+          cat "${parts[@]}" > /tmp/pr3-final.patch
+          git apply --check /tmp/pr3-final.patch
+          git apply /tmp/pr3-final.patch
+          rm -f "${parts[@]}"
           rm -f .github/workflows/agent-source-export.yml
           git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
           git config user.name "github-actions[bot]"
