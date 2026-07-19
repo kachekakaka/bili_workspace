@@ -13,11 +13,11 @@ from app.cookie import CookieChecker
 from app.index_store import IndexStore
 from app.integrity import IntegrityStatus, verify_tool_manifest
 from app.metadata import fetch_video_metadata
-from app.nas import NasStore
 from app.paths import ROOT
 from app.qr_login import QrLoginManager
 from app.queue import TaskQueue
 from app.runtime import RuntimeSettings
+from app.serialized_auth_store import SerializedAuthNasStore
 from app.userdata import UserdataIndexStore, migrate_legacy_database
 
 
@@ -39,7 +39,7 @@ class AppState:
     export_config_store: ConfigStore
     export_index: IndexStore
     export_queue: TaskQueue
-    nas: NasStore
+    nas: SerializedAuthNasStore
     cover_cache: CoverCache
     qr_login: QrLoginManager
     cookie_checker: CookieChecker
@@ -168,7 +168,7 @@ class AppState:
             export_root, index_root / "exports.json"
         )
 
-        nas = NasStore(runtime, index)
+        nas = SerializedAuthNasStore(runtime, index)
         nas.bind_export_index(export_index)
         download_slots = threading.Semaphore(runtime.download_concurrency)
         queue = TaskQueue(
