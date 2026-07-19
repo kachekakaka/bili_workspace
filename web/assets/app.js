@@ -6,7 +6,7 @@
   const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const state = {
     auth: null, csrf: '', status: null, groups: [], tasks: [], taskSummary: {},
-    events: null, page: '', search: { q: '', order: 'totalrank', page: 1, data: null, selected: new Map(), destination: 'library' },
+    events: null, page: '',
     library: { q: '', groupId: '', sort: 'newest', codec: '', minHeight: 0, watched: '', page: 1, data: null },
   };
   const NAV = [
@@ -201,13 +201,19 @@
     await route(true);
   }
 
+  async function renderEnhancedPage(page, root) {
+    const enhancements = window.BiliEnhancements;
+    if (!enhancements?.renderPage) throw new Error(`增强页面未加载：${page}`);
+    await enhancements.renderPage(page, root);
+  }
+
   async function route(force = false) {
     const page = (location.hash.replace(/^#\//,'').split('?')[0] || 'dashboard');
     if (!force && page === state.page) return;
     state.page = page; setActiveNav(page);
     const root = $('#pageRoot'); root.innerHTML = '<div class="loading-card">正在载入…</div>';
     try {
-      const renderer = ({dashboard:renderDashboard,download:renderDownload,search:renderSearch,library:renderLibrary,groups:renderGroups,tasks:renderTasks,account:renderAccount,settings:renderSettings,more:renderMore})[page] || renderDashboard;
+      const renderer = ({dashboard:renderDashboard,download:renderDownload,search:root=>renderEnhancedPage('search',root),library:renderLibrary,groups:renderGroups,tasks:renderTasks,account:renderAccount,settings:renderSettings,more:renderMore})[page] || renderDashboard;
       await renderer(root);
     } catch (error) {
       root.innerHTML = `<div class="notice bad">${esc(error.message)}</div>`;
@@ -291,86 +297,6 @@
         toast(`已创建 ${result.total} 个任务`,'good');location.hash='#/tasks';
       }catch(error){toast(error.message,'bad');}finally{button.disabled=false;}
     };
-  }
-
-  async function renderSearch(root) {
-    const defaultGroup=state.groups.find(item=>item.id===state.search.groupId) || state.groups.find(item=>item.display_name===state.status.default_group) || state.groups[0];
-    state.search.groupId=defaultGroup?.id||'';
-    if(!Number.isFinite(Number(state.search.minHeight)))state.search.minHeight=Number(state.status.default_min_height||1080);
-    root.innerHTML=`<section class="card"><div class="form-grid">
-      <div class="field full"><label>搜索关键词</label><div class="toolbar"><input id="searchQuery" class="input" style="flex:1" value="${esc(state.search.q)}" placeholder="作品标题、UP主或关键词"><select id="searchOrder" class="select" style="width:auto"><option value="totalrank">综合排序</option><option value="click">播放最多</option><option value="pubdate">最新发布</option></select><button id="searchButton" class="btn primary">搜索</button></div></div>
-      <div class="field full"><label>下载目标</label><div class="segmented" id="searchDestination"><button type="button" data-value="library" class="${state.search.destination==='library'?'active':''}">保存到 NAS 媒体库</button><button type="button" data-value="device" class="${state.search.destination==='device'?'active':''}">导出到当前设备</button></div></div>
-      <div class="field ${state.search.destination==='device'?'hidden':''}" id="searchGroupField"><label>批量保存分组</label><div class="toolbar"><select id="searchGroup" class="select" style="flex:1">${groupOptions(state.search.groupId)}</select><button id="searchNewGroup" class="btn">＋ 新建</button></div></div>
-      <div class="field"><label>最低清晰度</label><select id="searchQuality" class="select">${qualityOptions(state.search.minHeight||state.status.default_min_height)}</select></div>
-      <div class="field full"><div id="searchDestinationNotice" class="notice ${state.search.destination==='device'?'warn':''}">${state.search.destination==='device'?'选中作品会先在 NAS 临时目录完成下载和混流，再由浏览器接收；服务器完整发送后立即清理，中断可重试。':'选中作品会长期保存到所选分组，并进入作品库供浏览器或手机播放。'}</div></div>
-      <div class="field full"><div class="toolbar spread"><span id="searchSummary" class="metric-foot">输入关键词后搜索</span><div><button id="selectVisible" class="btn small">全选本页</button> <button id="clearSelection" class="btn small">清空选择</button> <button id="batchDownload" class="btn primary small">处理选中（0）</button></div></div></div>
-    </div></section><section id="searchResults" style="margin-top:18px"></section>`;
-    $('#searchOrder').value=state.search.order;
-    $('#searchButton').onclick=()=>runSearch(1);
-    $('#searchQuery').onkeydown=e=>{if(e.key==='Enter')runSearch(1)};
-    $('#searchNewGroup').onclick=()=>createGroupDialog(group=>{state.search.groupId=group.id;$('#searchGroup').innerHTML=groupOptions(group.id)});
-    $('#searchGroup').onchange=()=>{state.search.groupId=$('#searchGroup').value};
-    $('#searchQuality').onchange=()=>{state.search.minHeight=Number($('#searchQuality').value)};
-    $$('#searchDestination button',root).forEach(button=>button.onclick=()=>{
-      state.search.destination=button.dataset.value;
-      $$('#searchDestination button',root).forEach(item=>item.classList.toggle('active',item===button));
-      const device=state.search.destination==='device';
-      $('#searchGroupField').classList.toggle('hidden',device);
-      $('#searchDestinationNotice').className=`notice ${device?'warn':''}`;
-      $('#searchDestinationNotice').textContent=device?'选中作品会先在 NAS 临时目录完成下载和混流，再由浏览器接收；服务器完整发送后立即清理，中断可重试。':'选中作品会长期保存到所选分组，并进入作品库供浏览器或手机播放。';
-    });
-    $('#clearSelection').onclick=()=>{state.search.selected.clear();updateBatchCount();renderSearchResults()};
-    $('#selectVisible').onclick=()=>{(state.search.data?.items||[]).forEach(item=>state.search.selected.set(item.bvid,item));updateBatchCount();renderSearchResults()};
-    $('#batchDownload').onclick=()=>downloadSearchItems([...state.search.selected.values()]);
-    if(state.search.data)renderSearchResults(); else if(state.search.q)runSearch(state.search.page);
-  }
-
-  async function runSearch(page){
-    state.search.q=$('#searchQuery').value.trim();state.search.order=$('#searchOrder').value;state.search.page=page;
-    if(!state.search.q){toast('请输入关键词','warn');return}
-    $('#searchResults').innerHTML='<div class="loading-card">正在搜索…</div>';
-    try{const result=await api(`/api/search?q=${encodeURIComponent(state.search.q)}&order=${encodeURIComponent(state.search.order)}&page=${page}`);state.search.data=result.data;renderSearchResults();}
-    catch(error){$('#searchResults').innerHTML=`<div class="notice bad">${esc(error.message)}</div>`;toast(error.message,'bad')}
-  }
-  function searchCard(item){
-    const selected=state.search.selected.has(item.bvid);
-    return `<article class="media-card"><div class="cover-wrap"><img data-cover-img src="${esc(cover(item.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer"><div class="cover-badges"><label class="badge neutral"><input type="checkbox" data-select="${esc(item.bvid)}" ${selected?'checked':''}> 选择</label><span class="badge ${item.local_status==='downloaded'?'good':'neutral'}">${esc(item.local_status_label||'未下载')}</span></div><span class="duration-chip">${esc(item.duration||'')}</span></div><div class="media-body"><a class="media-title" href="${esc(item.url||'#')}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a><div class="media-meta"><span>${esc(item.author||'-')}</span><span>${formatPlay(item.play)} 播放</span><span>${formatDate(item.pubdate,true)}</span></div><div class="media-meta"><span>${esc(item.bvid)}</span>${item.local_group?`<span>分组：${esc(item.local_group)}</span>`:''}${item.local_quality?`<span>${esc(item.local_quality)}</span>`:''}</div><div class="media-actions"><button class="btn small" data-preview="${esc(item.bvid)}">预览清晰度</button><button class="btn primary small" data-download="${esc(item.bvid)}">下载</button></div></div></article>`;
-  }
-  function renderSearchResults(){
-    const box=$('#searchResults');if(!box)return;const data=state.search.data;
-    if(!data){box.innerHTML='<div class="empty">输入关键词开始搜索</div>';return}
-    const items=data.items||[];
-    $('#searchSummary').textContent=`第 ${data.page||state.search.page} / ${data.pages||data.num_pages||'?'} 页 · 共 ${data.total||data.num_results||0} 条`;
-    box.innerHTML=items.length?`<div class="media-grid">${items.map(searchCard).join('')}</div><div class="pagination"><button class="btn" id="searchPrev" ${state.search.page<=1?'disabled':''}>上一页</button><span>${state.search.page}</span><button class="btn" id="searchNext" ${(data.pages||data.num_pages)&&state.search.page>=(data.pages||data.num_pages)?'disabled':''}>下一页</button></div>`:'<div class="empty">没有搜索结果</div>';
-    $$('[data-select]',box).forEach(input=>input.onchange=()=>{const item=items.find(v=>v.bvid===input.dataset.select);if(input.checked)state.search.selected.set(item.bvid,item);else state.search.selected.delete(input.dataset.select);updateBatchCount()});
-    $$('[data-preview]',box).forEach(button=>button.onclick=()=>previewSearchItem(items.find(v=>v.bvid===button.dataset.preview)));
-    $$('[data-download]',box).forEach(button=>button.onclick=()=>downloadSearchItems([items.find(v=>v.bvid===button.dataset.download)]));
-    bindCoverFallback(box);const prev=$('#searchPrev'),next=$('#searchNext');if(prev)prev.onclick=()=>runSearch(state.search.page-1);if(next)next.onclick=()=>runSearch(state.search.page+1);updateBatchCount();
-  }
-  function updateBatchCount(){const button=$('#batchDownload');if(button)button.textContent=`下载选中（${state.search.selected.size}）`}
-  async function previewSearchItem(item){
-    if(!item)return;
-    const modal=showModal('清晰度预览','<div class="loading-card">正在读取可用视频流…</div>');
-    try{
-      const result=await api('/api/preview',{method:'POST',body:{item:{bvid:item.bvid,url:item.url,title:item.title,cover:item.cover,author:item.author,pubdate:item.pubdate,duration:item.duration,play:item.play,preferred_quality:item.preferred_quality||''},min_height:Number($('#searchQuality')?.value||state.search.minHeight||state.status.default_min_height),preferred_quality:item.preferred_quality||''}});
-      const q=result.data.quality;const parts=q.parts||[];
-      const common=parts.length?parts.map(part=>new Set((part.available||[]).map(track=>track.dfn).filter(Boolean))).reduce((left,right)=>new Set([...left].filter(value=>right.has(value)))):new Set();
-      const choices=[...common];
-      const rows=parts.map((part,i)=>`<section class="notice" style="margin-top:10px"><strong>分段 ${i+1} · 当前选择 ${esc(part.selected?.dfn||part.selected?.resolution||'未知')}</strong><div class="file-list" style="margin-top:8px">${(part.available||[]).map(track=>`<div class="file-row"><span>${esc(track.dfn||'-')} · ${esc(track.resolution||'-')} · ${esc(track.codec||'-')} · ${esc(track.fps||'-')}</span><strong>${esc(track.size_text||'')}</strong></div>`).join('')}</div></section>`).join('');
-      $('.modal-body',modal.root).innerHTML=`<div class="notice"><strong>${esc(result.data.metadata.title||item.title)}</strong><br>${esc(item.bvid)} · 最高可用：${esc(q.highest_label||'-')} · ${esc(q.summary||'')}</div><div class="field" style="margin-top:14px"><label>这个作品的目标档位</label><select id="previewPreferred" class="select"><option value="">自动最高</option>${choices.map(label=>`<option value="${esc(label)}" ${item.preferred_quality===label?'selected':''}>${esc(label)}</option>`).join('')}</select><small>指定档位时会严格核对所有分 P 和 BBDown 实际选择；留空则自动最高，但仍受最低清晰度门槛限制。</small></div>${rows}`;
-      $('#previewPreferred',modal.root).onchange=()=>{item.preferred_quality=$('#previewPreferred',modal.root).value;state.search.selected.has(item.bvid)&&state.search.selected.set(item.bvid,item);toast(item.preferred_quality?`已为 ${item.bvid} 选择 ${item.preferred_quality}`:`${item.bvid} 已恢复自动最高`,'good')};
-    }catch(error){$('.modal-body',modal.root).innerHTML=`<div class="notice bad">${esc(error.message)}</div>`}
-  }
-
-  async function downloadSearchItems(items){
-    items=items.filter(Boolean);if(!items.length){toast('请先选择作品','warn');return}
-    state.search.groupId=$('#searchGroup')?.value||state.search.groupId;
-    state.search.minHeight=Number($('#searchQuality')?.value||state.search.minHeight||state.status.default_min_height);
-    const destination=state.search.destination||'library';
-    try{
-      const result=await api('/api/download',{method:'POST',body:{urls:[],bvids:[],items:items.map(item=>({bvid:item.bvid,url:item.url,title:item.title,cover:item.cover,author:item.author,pubdate:item.pubdate,duration:item.duration,play:item.play,preferred_quality:item.preferred_quality||''})),force:false,group_id:destination==='library'?state.search.groupId:'',group:'',destination,min_height:state.search.minHeight}});
-      toast(`已创建 ${result.total} 个${destination==='device'?'设备导出':'媒体库'}任务`,'good');state.search.selected.clear();location.hash='#/tasks';
-    }catch(error){toast(error.message,'bad')}
   }
 
   function libraryCard(item){

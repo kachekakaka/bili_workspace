@@ -42,6 +42,7 @@ REQUIRED = (
     "tests/test_integrated_runtime.py",
     "tests/test_repository_layout.py",
     "tools/build_integrated_runtime.py",
+    "tools/check_markdown_links.py",
     "scripts/README.md",
     "scripts/windows/bootstrap-portable.ps1",
     "scripts/windows/bootstrap-runtime.bat",

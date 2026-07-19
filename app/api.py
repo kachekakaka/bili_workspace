@@ -182,6 +182,39 @@ def _decorate_search_items(state: AppState, data: dict) -> dict:
     return data
 
 
+def _decorate_search_catalog(request: Request, data: dict) -> dict:
+    state = _state(request)
+    data = _decorate_search_items(state, data)
+    items = data.get("items") or []
+    keys = [str(item.get("bvid") or "").strip() for item in items]
+    keys = [key for key in keys if key]
+    tags_by_key = request.app.state.tag_store.tags_for_keys(keys)
+    tombstones = request.app.state.deletion_store.for_keys(keys)
+    restored: list[str] = []
+    for item in items:
+        key = str(item.get("bvid") or "").strip()
+        item["tags"] = list(tags_by_key.get(key, []))
+        item["deleted_record"] = False
+        status = str(item.get("local_status") or "")
+        if status == "downloaded":
+            if key in tombstones:
+                restored.append(key)
+            continue
+        if status in {"queued", "running"}:
+            continue
+        deleted = tombstones.get(key)
+        if deleted:
+            item.update(
+                local_status="deleted",
+                local_status_label="已删除",
+                deleted_at=deleted.get("deleted_at"),
+                deleted_record=True,
+            )
+    if restored:
+        request.app.state.deletion_store.clear(restored)
+    return data
+
+
 def _remote(request: Request) -> str:
     return request.client.host if request.client else ""
 
@@ -423,12 +456,19 @@ def api_search(
     q: str = Query(default="", max_length=100),
     order: str = Query(default="totalrank", max_length=32),
     page: int = Query(default=1, ge=1, le=1000),
+    fresh: bool = Query(default=False),
 ):
     state = _state(request)
     cfg = state.config_store.get()
     try:
-        data = search_videos(q, order=order, page=page, bbdown_dir=cfg.bbdown_path())
-        data = _decorate_search_items(state, data)
+        data = search_videos(
+            q,
+            order=order,
+            page=page,
+            bbdown_dir=cfg.bbdown_path(),
+            fresh=fresh,
+        )
+        data = _decorate_search_catalog(request, data)
     except SearchError as exc:
         return err(str(exc))
     except Exception as exc:  # noqa: BLE001

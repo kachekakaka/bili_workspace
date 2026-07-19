@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FRONTEND_VERSION = "20260719-3"
+FRONTEND_VERSION = "20260719-4"
 
 
 def _text(path: str) -> str:
@@ -43,9 +43,9 @@ def test_frontend_assets_use_one_visible_cache_batch() -> None:
     assert versioned_assets
     assert {version for _, version in versioned_assets} == {FRONTEND_VERSION}
     assert f"/assets/browser-version.js?v={FRONTEND_VERSION}" in index
-    assert index.index("enhancements-deletion-status.js") < index.index(
-        "browser-version.js"
-    )
+    assert "enhancements-search-overlay.js" not in index
+    assert "enhancements-deletion-status.js" not in index
+    assert index.index("enhancements-search.js") < index.index("browser-version.js")
 
 
 def test_healthz_exposes_the_running_source_build(client) -> None:

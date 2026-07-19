@@ -6,9 +6,10 @@
 
 ## 主要能力
 
-- 原始、精准和模糊三种搜索；精准/模糊只调用一次 Bilibili 原始搜索，再仅按返回标题匹配全部词或任意词；
-- 数字分页默认显示 10 页，并可每次继续增加 10 页；
-- 搜索默认屏蔽已下载和已删除作品，关闭屏蔽后可辨识并确认重新下载；
+- 搜索区只请求 Bilibili 原始当前页结果；精准/模糊是浏览器内的当前页标题二级筛选，切换模式或修改筛选词不会联网；
+- 首次只加载当前页，渲染完成后空闲时最多预加载下一页 1 页，不会后台抓取十页或全部页面；
+- WBI 密钥按 Bilibili Cookie 指纹缓存 10 分钟，原始搜索页缓存 3 分钟；“刷新B站结果”只刷新当前页；
+- 搜索响应直接包含标签、下载状态和删除状态；默认屏蔽已下载和已删除作品，关闭后可辨识并确认重新下载；
 - 下载前预览可用清晰度，支持最低清晰度与目标档位，下载后核对实际分辨率、编码、帧率和文件大小；
 - 任务中心显示真实进度、大小、速度、ETA、分 P 和日志，支持原 ID 重试、画质编辑及批量暂停、继续、取消、重试和删除；
 - 作品库支持标签、无标签、分组/标签 chip、修改分组，以及按时间、观看、标题、时长、大小、分组和标签正逆序排序；
@@ -218,7 +219,13 @@ python -m pip install -r requirements/dev.lock
 sh scripts/dev/verify-source.sh
 ```
 
-验证内容包括配置模板边界、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及 Windows 上的 Portable Python、BBDown 和 FFmpeg 冒烟测试。
+验证内容包括配置模板边界、Markdown 内部链接、敏感信息扫描、Python 编译、Ruff、完整 pytest、前端 JavaScript 语法，以及 Windows 上的 Portable Python、BBDown 和 FFmpeg 冒烟测试。CI 还会使用 Playwright Chromium 检查 1920×1080、1440×900、1024×768、768×1024 和 390×844 五个固定视口。
+
+本地已有 Playwright 浏览器时可执行布局专项：
+
+```bash
+BILI_RUN_PLAYWRIGHT=1 python -m pytest -q tests/test_playwright_layout.py
+```
 
 ## 仓库边界
 

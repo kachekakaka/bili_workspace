@@ -77,3 +77,69 @@ jobs:
         shell: bash
         run: |
           find web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+
+  focused-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/dev.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.lock
+          python -m pip check
+
+      - name: Check Markdown internal links
+        run: python tools/check_markdown_links.py
+
+      - name: Test SQLite and userdata migrations
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_userdata.py
+          tests/test_v05_persistence.py
+          tests/test_index_store.py
+
+      - name: Check Windows call chain and Docker configuration
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_integrated_runtime.py
+          tests/test_configure_network.py
+          tests/test_v05_docker.py
+          tests/test_repository_layout.py
+
+  playwright:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/dev.lock
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.lock
+          python -m pip check
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Test fixed desktop, tablet, and phone viewports
+        env:
+          BILI_RUN_PLAYWRIGHT: "1"
+        run: >-
+          python -m pytest -q -p no:cacheprovider --tb=short
+          tests/test_playwright_layout.py

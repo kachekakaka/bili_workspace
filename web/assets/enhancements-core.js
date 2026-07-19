@@ -1,8 +1,9 @@
 (() => {
   'use strict';
 
-  const VERSION = '2026.07.18.2';
+  const VERSION = '2026.07.19.1';
   const ENHANCED_PAGES = new Set(['search', 'library', 'tasks']);
+  const AUTO_RENDER_PAGES = new Set(['library', 'tasks']);
   const QUALITY_OPTIONS = [
     [0, '不限制'], [360, '至少 360P'], [480, '至少 480P'], [720, '至少 720P'],
     [1080, '至少 1080P'], [1440, '至少 2K / 1440P'], [2160, '至少 4K'], [4320, '至少 8K'],
@@ -30,7 +31,10 @@
     search: {
       q: '', order: 'totalrank', page: 1, pages: 0, total: 0,
       data: null, cache: new Map(), selected: new Map(), hideDownloaded: true,
+      filterMode: 'raw', filterText: '', filterTouched: false,
       destination: 'library', groupId: '', minHeight: 1080,
+      requestGeneration: 0, currentController: null, preloadController: null,
+      preloadHandle: 0, preloadHandleType: '',
     },
     library: {
       page: 1, data: null, selected: new Set(),
@@ -125,7 +129,7 @@
     return { root, close };
   }
 
-  async function api(path, { method = 'GET', body, raw = false } = {}) {
+  async function api(path, { method = 'GET', body, raw = false, signal } = {}) {
     const headers = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (!['GET', 'HEAD'].includes(method) && state.csrf) headers['X-CSRF-Token'] = state.csrf;
@@ -137,8 +141,10 @@
         body: body === undefined ? undefined : JSON.stringify(body),
         cache: 'no-store',
         credentials: 'same-origin',
+        signal,
       });
     } catch (error) {
+      if (error?.name === 'AbortError') throw error;
       throw new Error(`无法连接服务：${error.message || '网络错误'}`);
     }
     if (raw) return response;
@@ -265,17 +271,27 @@
   }
 
   const renderers = Object.create(null);
+
+  async function renderPage(page, root = $('#pageRoot')) {
+    if (!ENHANCED_PAGES.has(page) || !root) throw new Error(`增强页面不可用：${page}`);
+    await ensureContext();
+    const renderer = renderers[page];
+    if (!renderer) throw new Error(`增强页面尚未注册：${page}`);
+    await renderer(root);
+    root.dataset.enhancedVersion = VERSION;
+  }
+
   function register(page, renderer) {
     if (!ENHANCED_PAGES.has(page) || typeof renderer !== 'function') return;
     renderers[page] = renderer;
-    scheduleRender(20);
+    if (AUTO_RENDER_PAGES.has(page)) scheduleRender(20);
   }
 
   window.BiliEnhancements = {
     VERSION, COMMON_QUALITY_LABELS, state, $, $$, esc, sleep, currentPage,
     formatBytes, formatDate, formatPlay, safeColor, qualityOptions, groupOptions,
     tagOptions, toast, showModal, api, ensureContext, paginationHtml, tagChips,
-    mapLimit, updateTagsEverywhere, assignTags, bindTagButtons, register, scheduleRender,
+    mapLimit, updateTagsEverywhere, assignTags, bindTagButtons, register, renderPage, scheduleRender,
   };
 
   let renderTimer = 0;
@@ -286,7 +302,7 @@
 
   async function renderCurrentPage() {
     const page = currentPage();
-    if (!ENHANCED_PAGES.has(page)) return;
+    if (!AUTO_RENDER_PAGES.has(page)) return;
     const appRoot = $('#appRoot');
     const root = $('#pageRoot');
     if (!root || !appRoot || appRoot.classList.contains('hidden')) {
@@ -300,15 +316,12 @@
     if ($(`[data-enhanced-view="${page}"]`, root)) return;
     state.rendering = true;
     try {
-      await ensureContext();
       if (currentPage() !== page) return;
-      const renderer = renderers[page];
-      if (!renderer) {
+      if (!renderers[page]) {
         scheduleRender(120);
         return;
       }
-      await renderer(root);
-      root.dataset.enhancedVersion = VERSION;
+      await renderPage(page, root);
     } catch (error) {
       if (currentPage() === page) {
         root.innerHTML = `<div data-enhanced-view="${page}" class="notice bad">增强页面载入失败：${esc(error.message)}<br><button type="button" class="btn small" id="enhRetryPage" style="margin-top:10px">重试</button></div>`;
@@ -330,7 +343,7 @@
     if (pageRoot) {
       new MutationObserver(() => {
         const page = currentPage();
-        if (ENHANCED_PAGES.has(page) && !$(`[data-enhanced-view="${page}"]`, pageRoot)) scheduleRender(60);
+        if (AUTO_RENDER_PAGES.has(page) && !$(`[data-enhanced-view="${page}"]`, pageRoot)) scheduleRender(60);
       }).observe(pageRoot, { childList: true, subtree: false });
     }
     if (appRoot) {

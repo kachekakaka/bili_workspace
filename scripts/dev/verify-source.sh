@@ -7,6 +7,7 @@ cd "$ROOT"
 PYTHON_BIN="${PYTHON:-python3}"
 
 "$PYTHON_BIN" tools/verify_source.py
+"$PYTHON_BIN" tools/check_markdown_links.py
 "$PYTHON_BIN" -m compileall -q app tests tools docker
 "$PYTHON_BIN" -m ruff check --no-cache app tests tools docker
 "$PYTHON_BIN" -m pytest -q -p no:cacheprovider
