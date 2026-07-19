@@ -13,12 +13,14 @@ from app.cookie import CookieChecker
 from app.index_store import IndexStore
 from app.integrity import IntegrityStatus, verify_tool_manifest
 from app.metadata import fetch_video_metadata
+from app.owned_queue import OwnedTaskQueue
 from app.paths import ROOT
 from app.qr_login import QrLoginManager
-from app.queue import TaskQueue
 from app.runtime import RuntimeSettings
-from app.serialized_auth_store import SerializedAuthNasStore
+from app.task_ownership_store import TaskOwnershipNasStore
 from app.userdata import UserdataIndexStore, migrate_legacy_database
+
+_IN_MEMORY_TASK_HISTORY = 5000
 
 
 def _label(path: Path | None) -> str:
@@ -35,11 +37,11 @@ class AppState:
     runtime: RuntimeSettings
     config_store: ConfigStore
     index: IndexStore
-    queue: TaskQueue
+    queue: OwnedTaskQueue
     export_config_store: ConfigStore
     export_index: IndexStore
-    export_queue: TaskQueue
-    nas: SerializedAuthNasStore
+    export_queue: OwnedTaskQueue
+    nas: TaskOwnershipNasStore
     cover_cache: CoverCache
     qr_login: QrLoginManager
     cookie_checker: CookieChecker
@@ -92,10 +94,6 @@ class AppState:
                 and bind_host not in {"0.0.0.0", "::"}
                 and bind_host not in trusted_hosts
             ):
-                # When the bind address comes from config.json rather than
-                # .env, keep the HTTP Host guard in sync. IP hosts remain
-                # permitted by allow_ip_hosts, while configured interface
-                # hostnames need an explicit trusted-host entry.
                 trusted_hosts = (*trusted_hosts, bind_host)
             runtime = replace(
                 runtime,
@@ -168,14 +166,16 @@ class AppState:
             export_root, index_root / "exports.json"
         )
 
-        nas = SerializedAuthNasStore(runtime, index)
+        nas = TaskOwnershipNasStore(runtime, index)
         nas.bind_export_index(export_index)
+        default_owner = nas.default_owner_user_id()
         download_slots = threading.Semaphore(runtime.download_concurrency)
-        queue = TaskQueue(
+        queue = OwnedTaskQueue(
             store,
             index,
             runner=runner,
             metadata_fetcher=fetcher,
+            max_history=_IN_MEMORY_TASK_HISTORY,
             initial_tasks=nas.load_task_snapshots("library"),
             on_state_change=lambda task_id, payload: nas.save_task_snapshot(
                 "library", task_id, payload
@@ -184,23 +184,27 @@ class AppState:
             min_free_bytes=runtime.min_free_bytes,
             worker_count=runtime.download_concurrency,
             worker_name="library-worker",
+            default_owner_user_id=default_owner,
         )
 
         def persist_device_task(task_id: str, payload: dict | None) -> None:
             nas.save_task_snapshot("device", task_id, payload)
             nas.update_export_from_task(task_id, payload)
 
-        export_queue = TaskQueue(
+        export_queue = OwnedTaskQueue(
             export_store,
             export_index,
             runner=runner,
             metadata_fetcher=fetcher,
+            max_history=_IN_MEMORY_TASK_HISTORY,
             initial_tasks=nas.load_task_snapshots("device"),
             on_state_change=persist_device_task,
             execution_semaphore=download_slots,
             min_free_bytes=runtime.min_free_bytes,
             worker_count=runtime.download_concurrency,
             worker_name="export-worker",
+            default_owner_user_id=default_owner,
+            namespace_by_owner=True,
         )
 
         checker = cookie_checker or CookieChecker(lambda: store.get().bbdown_path())
