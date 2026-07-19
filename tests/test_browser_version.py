@@ -56,6 +56,6 @@ def test_healthz_exposes_the_running_source_build(client) -> None:
     assert payload["service"] == "bili_workspace"
     assert payload["frontend_version"] == FRONTEND_VERSION
     assert re.fullmatch(r"[0-9a-f]{12}", payload["build_id"])
-    assert isinstance(payload["pid"], int) and payload["pid"] > 0
+    assert "pid" not in payload
     assert response.headers["x-bili-build"] == payload["build_id"]
     assert response.headers["x-bili-frontend"] == FRONTEND_VERSION
