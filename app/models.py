@@ -113,9 +113,10 @@ class ConfigUpdate(BaseModel):
 
 class AuthSetupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    username: Annotated[str, StringConstraints(min_length=3, max_length=64)]
-    password: Annotated[str, StringConstraints(min_length=10, max_length=256)]
+    username: Annotated[str, StringConstraints(min_length=3, max_length=32)]
+    password: Annotated[str, StringConstraints(min_length=10, max_length=64)]
     bootstrap_token: Annotated[str, StringConstraints(min_length=8, max_length=256)]
+    display_name: Annotated[str, StringConstraints(min_length=2, max_length=12)] = "管理员"
 
 
 class AuthLoginRequest(BaseModel):
@@ -127,7 +128,36 @@ class AuthLoginRequest(BaseModel):
 class AuthPasswordChangeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     current_password: Annotated[str, StringConstraints(min_length=1, max_length=256)]
-    new_password: Annotated[str, StringConstraints(min_length=10, max_length=256)]
+    new_password: Annotated[str, StringConstraints(min_length=10, max_length=64)]
+
+
+class AuthProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: Annotated[str, StringConstraints(min_length=2, max_length=12)]
+
+
+class AdminUserCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: Annotated[str, StringConstraints(min_length=3, max_length=32)]
+    display_name: Annotated[str, StringConstraints(min_length=2, max_length=12)]
+    temporary_password: Annotated[str, StringConstraints(min_length=10, max_length=64)]
+
+
+class AdminUserUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    display_name: Annotated[str, StringConstraints(min_length=2, max_length=12)] | None = None
+    disabled: bool | None = None
+
+    @model_validator(mode="after")
+    def require_update(self) -> "AdminUserUpdateRequest":
+        if self.display_name is None and self.disabled is None:
+            raise ValueError("至少需要提交一个修改字段")
+        return self
+
+
+class AdminPasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    temporary_password: Annotated[str, StringConstraints(min_length=10, max_length=64)]
 
 
 class GroupCreateRequest(BaseModel):

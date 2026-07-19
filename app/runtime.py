@@ -213,8 +213,8 @@ class RuntimeSettings:
             raise ValueError("BILI_TRUSTED_PROXY_IPS 必须列出可信代理地址，禁止使用通配符")
 
         allow_ip_hosts = _bool("BILI_ALLOW_IP_HOSTS", server)
-        requested_auth = _bool("BILI_AUTH_REQUIRED", server)
-        auth_required = True if server else requested_auth
+        # V0.6 requires an authenticated website account in every run mode.
+        auth_required = True
         cookie_secure = _bool("BILI_COOKIE_SECURE", bool(public.startswith("https://")))
         hsts_enabled = _bool("BILI_HSTS", cookie_secure and bool(public.startswith("https://")))
         if public_host and public_host not in trusted_hosts:

@@ -102,6 +102,7 @@
       throw new Error('登录已失效，请重新登录');
     }
     if (!response.ok || !payload.ok) {
+      if (payload.code === 'password_change_required' && !path.startsWith('/api/auth/')) await bootAuth();
       const detail = Array.isArray(payload.detail) ? payload.detail.map(item => item.msg).join('；') : '';
       throw new Error(payload.error || detail || `请求失败（HTTP ${response.status}）`);
     }
@@ -113,6 +114,34 @@
     const result = await api('/api/auth/status');
     state.auth = result.data;
     state.csrf = result.data.csrf_token || '';
+    if (result.data.authenticated && result.data.must_change_password) {
+      $('#appRoot').classList.add('hidden');
+      const root = $('#authRoot'); root.classList.remove('hidden');
+      root.innerHTML = `<section class="auth-card">
+        <div class="auth-brand"><span class="brand-mark">b</span><div><h1>首次修改密码</h1><p>${esc(result.data.display_name || result.data.username)}（${esc(result.data.username)}）</p></div></div>
+        <div class="notice warn">临时密码只能用于首次登录。修改完成前不能访问下载、搜索、任务或设置。</div>
+        <form id="passwordChangeForm" class="form-grid" style="margin-top:18px">
+          <div class="field full"><label>当前临时密码</label><input class="input" id="currentPassword" type="password" autocomplete="current-password" required></div>
+          <div class="field full"><label>新密码</label><input class="input" id="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="64" required><small>10–64 位可见 ASCII，至少包含一个英文字母和一个数字。</small></div>
+          <div class="field full"><label>再次输入新密码</label><input class="input" id="confirmPassword" type="password" autocomplete="new-password" minlength="10" maxlength="64" required></div>
+          <div class="field full"><button class="btn primary" type="submit">修改密码并继续</button></div>
+          <div class="field full"><button class="btn" id="forcedLogout" type="button">退出登录</button></div>
+        </form></section>`;
+      $('#passwordChangeForm').onsubmit = async event => {
+        event.preventDefault();
+        const button = $('button[type="submit"]', event.currentTarget); button.disabled = true;
+        try {
+          if ($('#newPassword').value !== $('#confirmPassword').value) throw new Error('两次输入的新密码不一致');
+          const payload = await api('/api/auth/password', { method:'POST', body:{ current_password:$('#currentPassword').value, new_password:$('#newPassword').value } });
+          state.csrf = payload.data.csrf_token || '';
+          toast('密码已修改', 'good');
+          await bootAuth();
+        } catch (error) { toast(error.message, 'bad'); }
+        finally { button.disabled = false; }
+      };
+      $('#forcedLogout').onclick = async () => { await api('/api/auth/logout', { method:'POST' }); state.csrf=''; await bootAuth(); };
+      return;
+    }
     if (result.data.authenticated) {
       $('#authRoot').classList.add('hidden');
       $('#appRoot').classList.remove('hidden');
@@ -126,9 +155,9 @@
       <div class="auth-brand"><span class="brand-mark">b</span><div><h1>bili workspace</h1><p>${setup?'首次初始化 NAS 管理员':'登录私人媒体库'}</p></div></div>
       ${setup?`<div class="notice">${esc(result.data.bootstrap_hint || '请读取 bootstrap-token.txt')}。初始化成功后令牌立即作废。</div>`:''}
       <form id="authForm" class="form-grid" style="margin-top:18px">
-        <div class="field full"><label>管理员用户名</label><input class="input" id="authUser" autocomplete="username" required minlength="3"></div>
+        <div class="field full"><label>登录账号</label><input class="input" id="authUser" autocomplete="username" required minlength="3"></div>
         <div class="field full"><label>密码</label><input class="input" id="authPassword" type="password" autocomplete="${setup?'new-password':'current-password'}" required minlength="${setup?10:1}"></div>
-        ${setup?'<div class="field full"><label>一次性初始化令牌</label><input class="input" id="authToken" type="password" required></div>':''}
+        ${setup?'<div class="field full"><label>中文显示名</label><input class="input" id="authDisplayName" value="管理员" minlength="2" maxlength="12" required></div><div class="field full"><label>一次性初始化令牌</label><input class="input" id="authToken" type="password" required></div>':''}
         <div class="field full"><button class="btn primary" type="submit">${setup?'创建管理员并登录':'登录'}</button></div>
       </form></section>`;
     $('#authForm').onsubmit = async event => {
@@ -136,7 +165,7 @@
       const button = $('button', event.currentTarget); button.disabled = true;
       try {
         const payload = setup
-          ? await api('/api/auth/setup', { method:'POST', body:{ username:$('#authUser').value, password:$('#authPassword').value, bootstrap_token:$('#authToken').value } })
+          ? await api('/api/auth/setup', { method:'POST', body:{ username:$('#authUser').value, display_name:$('#authDisplayName').value, password:$('#authPassword').value, bootstrap_token:$('#authToken').value } })
           : await api('/api/auth/login', { method:'POST', body:{ username:$('#authUser').value, password:$('#authPassword').value } });
         state.csrf = payload.data.csrf_token || '';
         toast('登录成功', 'good');

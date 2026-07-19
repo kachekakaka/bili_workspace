@@ -92,6 +92,27 @@ def failing_runner(argv, **kwargs):
     return SimpleNamespace(returncode=1, stdout="", stderr="boom")
 
 
+
+def authenticate_local_admin(client: TestClient) -> str:
+    login = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "123456"},
+    )
+    assert login.status_code == 200, login.text
+    csrf = str(login.json()["data"]["csrf_token"])
+    changed = client.post(
+        "/api/auth/password",
+        json={
+            "current_password": "123456",
+            "new_password": "Test-password-123",
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert changed.status_code == 200, changed.text
+    csrf = str(changed.json()["data"]["csrf_token"])
+    client.headers.update({"X-CSRF-Token": csrf})
+    return csrf
+
 def wait_terminal(queue, task_id: str, timeout: float = 5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -114,6 +135,7 @@ def client(tmp_env):
     with TestClient(app, base_url="http://127.0.0.1") as test_client:
         test_client.state_ref = state
         test_client.tmp_env = tmp_env
+        authenticate_local_admin(test_client)
         yield test_client
     state.queue.stop()
 
@@ -129,5 +151,6 @@ def fail_client(tmp_env):
     app = create_app(state)
     with TestClient(app, base_url="http://127.0.0.1") as test_client:
         test_client.state_ref = state
+        authenticate_local_admin(test_client)
         yield test_client
     state.queue.stop()

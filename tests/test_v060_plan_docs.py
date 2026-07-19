@@ -11,20 +11,21 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_v060_plan_is_indexed_and_not_claimed_as_current() -> None:
+def test_v060_plan_tracks_completed_pr1_and_pr2_without_claiming_later_work() -> None:
     assert PLAN.is_file()
     plan = _text(PLAN)
     docs_index = _text(ROOT / "docs" / "README.md")
     current = _text(ROOT / "docs" / "需求落实清单.md")
 
-    assert "状态：**开发中（PR 1 搜索和布局已完成，PR 2–5 待开发）**" in plan
+    assert "状态：**开发中（PR 1–2 已完成，PR 3–5 待开发）**" in plan
     assert "### PR 1：搜索和布局" in plan
     assert "状态：已完成（PR #17）" in plan
+    assert "状态：已完成（PR #18）" in plan
     assert "plans/V0.6.0_多用户搜索与会话方案.md" in docs_index
-    assert "多用户、独立会话 Token" in docs_index
-    assert "仍待后续 PR" in docs_index
-    assert "搜索和布局" in current
-    assert "仍未实现" in current
+    assert "账号权限与会话管理" in docs_index
+    assert "PR 3" in docs_index
+    assert "每用户最多 10 个有效 Token" in current
+    assert "任务所有权" in current and "仍未实现" in current
 
 
 def test_v060_frozen_limits_and_test_scope_are_documented() -> None:

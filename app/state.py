@@ -119,7 +119,7 @@ class AppState:
                 cache_dir=base / "cache",
                 temp_dir=base / "tmp",
                 database_path=base / "bili_workspace.db",
-                auth_required=False,
+                auth_required=True,
                 cookie_secure=False,
             )
             for directory in (

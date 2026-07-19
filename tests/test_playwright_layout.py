@@ -121,10 +121,14 @@ def mock_api(route: Route) -> None:
         payload = envelope(
             {
                 "authenticated": True,
-                "required": False,
+                "required": True,
                 "setup_required": False,
-                "csrf_token": "",
-                "username": "local",
+                "csrf_token": "playwright-csrf",
+                "username": "administrator",
+                "display_name": "管理员",
+                "role": "admin",
+                "permissions": ["admin:*"],
+                "must_change_password": False,
             }
         )
     elif path == "/api/status":
@@ -487,4 +491,49 @@ def test_login_page_fits_fixed_viewports(browser: Browser, width: int, height: i
                 "node => node.getBoundingClientRect().height"
             )
             assert button_height >= 44
+        page.close()
+
+
+@pytest.mark.parametrize(("width", "height"), VIEWPORTS)
+def test_forced_password_page_fits_fixed_viewports(
+    browser: Browser, width: int, height: int
+) -> None:
+    def forced_password_api(route: Route) -> None:
+        if urlparse(route.request.url).path == "/api/auth/status":
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(
+                    envelope(
+                        {
+                            "authenticated": True,
+                            "required": True,
+                            "setup_required": False,
+                            "csrf_token": "forced-csrf",
+                            "username": "guest-a",
+                            "display_name": "访客甲",
+                            "role": "user",
+                            "permissions": ["download:create-device"],
+                            "must_change_password": True,
+                        }
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
+            return
+        mock_api(route)
+
+    with static_site() as base_url:
+        page = browser.new_page(viewport={"width": width, "height": height})
+        page.route("**/api/**", forced_password_api)
+        page.goto(base_url, wait_until="domcontentloaded")
+        page.wait_for_selector("#passwordChangeForm")
+        assert page.locator("#appRoot").evaluate("node => node.classList.contains('hidden')")
+        assert_no_horizontal_overflow(page)
+        assert_visible_controls_do_not_overlap(page, "#authRoot button, #authRoot input")
+        if width == 390:
+            heights = page.locator("#passwordChangeForm button").evaluate_all(
+                "nodes => nodes.map(node => node.getBoundingClientRect().height)"
+            )
+            assert min(heights) >= 44
         page.close()
