@@ -34,7 +34,7 @@ def test_download_dir_change_blocked_while_active(tmp_env):
 
     from app.main import create_app
     from app.state import AppState
-    from tests.conftest import StaticCookieChecker
+    from tests.conftest import StaticCookieChecker, authenticate_local_admin
 
     started = threading.Event()
     release = threading.Event()
@@ -54,6 +54,7 @@ def test_download_dir_change_blocked_while_active(tmp_env):
         cookie_checker=StaticCookieChecker(),
     )
     with TestClient(create_app(state), base_url="http://127.0.0.1") as test_client:
+        authenticate_local_admin(test_client)
         task = test_client.post("/api/download", json={"bvids": ["BV0000000001"]}).json()["data"][0]
         assert started.wait(timeout=2)
         response = test_client.put(

@@ -18,6 +18,21 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from app.artifacts import remove_relative_target
+from app.auth import (
+    ROLE_ADMIN,
+    ROLE_USER,
+    is_loopback_address,
+    permissions_for_role,
+    validate_display_name,
+    validate_password,
+    validate_username,
+)
+from app.constants import (
+    DATABASE_SCHEMA_VERSION,
+    MAX_ACTIVE_SESSIONS_PER_USER,
+    SESSION_ABSOLUTE_DAYS,
+    SESSION_TOUCH_INTERVAL_SECONDS,
+)
 from app.grouping import DEFAULT_GROUP, normalize_group
 from app.index_store import IndexStore, UnsafeIndexPathError
 from app.path_safety import UnsafePathError, relative_posix, resolve_under
@@ -26,23 +41,31 @@ from app.runtime import RuntimeSettings
 _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".flv", ".webm", ".mov", ".ts", ".m4v"}
 _MEDIA_EXTENSIONS = _VIDEO_EXTENSIONS | {".m4a", ".mp3", ".aac", ".wav", ".flac", ".ogg"}
 _PASSWORD_N = 2**14
-_SCHEMA_VERSION = 2
 _MAX_PERSISTED_TASKS = 500
+_DEFAULT_ADMIN_USERNAME = "admin"
+_DEFAULT_ADMIN_PASSWORD = "123456"
+_DEFAULT_ADMIN_DISPLAY_NAME = "管理员"
+_SYSTEM_DEFAULT_ADMIN = "system-default-admin"
 
 _SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS users(
  id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
  password_hash TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL,
- disabled INTEGER NOT NULL DEFAULT 0
+ disabled INTEGER NOT NULL DEFAULT 0,
+ role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user')),
+ display_name TEXT NOT NULL DEFAULT '',
+ must_change_password INTEGER NOT NULL DEFAULT 0,
+ created_by TEXT,
+ last_login_at REAL
 );
 CREATE TABLE IF NOT EXISTS sessions(
  id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  token_hash TEXT NOT NULL UNIQUE, csrf_token TEXT NOT NULL, created_at REAL NOT NULL,
  expires_at REAL NOT NULL, last_seen_at REAL NOT NULL,
- user_agent TEXT NOT NULL DEFAULT '', remote_addr TEXT NOT NULL DEFAULT ''
+ user_agent TEXT NOT NULL DEFAULT '', remote_addr TEXT NOT NULL DEFAULT '',
+ revoked_at REAL, revoke_reason TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE TABLE IF NOT EXISTS groups(
  id TEXT PRIMARY KEY, display_name TEXT NOT NULL UNIQUE COLLATE NOCASE,
  folder_key TEXT NOT NULL UNIQUE COLLATE NOCASE, sort_order INTEGER NOT NULL DEFAULT 0,
@@ -100,7 +123,8 @@ CREATE TABLE IF NOT EXISTS task_snapshots(
 CREATE INDEX IF NOT EXISTS idx_task_snapshots_updated ON task_snapshots(updated_at DESC);
 CREATE TABLE IF NOT EXISTS audit_log(
  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, action TEXT NOT NULL,
- detail TEXT NOT NULL DEFAULT '', remote_addr TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
+ detail TEXT NOT NULL DEFAULT '', remote_addr TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL,
+ session_id TEXT, target_user_id TEXT
 );
 """
 
@@ -109,9 +133,10 @@ def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _hash_password(password: str, salt: bytes | None = None) -> str:
-    if len(password) < 10:
-        raise ValueError("管理员密码至少需要 10 个字符")
+def _hash_password(
+    password: str, salt: bytes | None = None, *, allow_default_temp: bool = False
+) -> str:
+    validate_password(password, allow_default_temp=allow_default_temp)
     salt = salt or secrets.token_bytes(16)
     digest = hashlib.scrypt(
         password.encode(), salt=salt, n=_PASSWORD_N, r=8, p=1, dklen=32
@@ -170,17 +195,26 @@ class NasStore:
         self.index = index
         self.export_index = export_index
         self.path = runtime.database_path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        old_version, had_existing, backup_path = self._prepare_migration_backup()
+        self.migration_backup_path = backup_path
         self._conn = sqlite3.connect(
             self.path, timeout=30, check_same_thread=False, isolation_level=None
         )
         self._conn.row_factory = sqlite3.Row
-        with self._lock:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.execute("PRAGMA busy_timeout=30000")
-            self._conn.executescript(_SCHEMA)
-            self._migrate_locked()
+        try:
+            with self._lock:
+                self._conn.execute("PRAGMA foreign_keys=ON")
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute("PRAGMA busy_timeout=30000")
+                self._migrate_locked(old_version, had_existing)
+                if backup_path is not None:
+                    self._prune_migration_backups()
+        except Exception:
+            self._conn.close()
+            raise
         self.bootstrap_path = runtime.config_dir / "bootstrap-token.txt"
         self._bootstrap_token = ""
         self._login_failures: dict[str, list[float]] = {}
@@ -190,35 +224,199 @@ class NasStore:
         self._stop = threading.Event()
         self._last_index_token: tuple[str, int, int, int] | None = None
         self._cleaner = threading.Thread(
-            target=self._cleanup_loop, name="v05-cleaner", daemon=True
+            target=self._cleanup_loop, name="v060-cleaner", daemon=True
         )
-        self._ensure_default_group()
-        self._ensure_bootstrap()
-        self._recover_interrupted_records()
-        self.sync_index(force=True)
+        try:
+            self._ensure_default_admin()
+            self._reject_remote_default_password()
+            self._ensure_default_group()
+            self._ensure_bootstrap()
+            self._recover_interrupted_records()
+            self.sync_index(force=True)
+        except Exception:
+            self._conn.close()
+            raise
         self._cleaner.start()
 
-    def _migrate_locked(self) -> None:
-        columns = {
-            str(row[1])
-            for row in self._conn.execute("PRAGMA table_info(media)").fetchall()
-        }
-        if "index_fingerprint" not in columns:
-            self._conn.execute(
-                "ALTER TABLE media ADD COLUMN index_fingerprint TEXT NOT NULL DEFAULT ''"
-            )
-        export_columns = {
-            str(row[1])
-            for row in self._conn.execute("PRAGMA table_info(exports)").fetchall()
-        }
-        if "task_payload_json" not in export_columns:
-            self._conn.execute(
-                "ALTER TABLE exports ADD COLUMN task_payload_json TEXT NOT NULL DEFAULT '{}'"
-            )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_media_quality ON media(selected_height,selected_codec)"
+    def _prepare_migration_backup(self) -> tuple[int, bool, Path | None]:
+        had_existing = self.path.exists() and self.path.stat().st_size > 0
+        if not had_existing:
+            return 0, False, None
+        source = sqlite3.connect(self.path, timeout=30)
+        try:
+            check = source.execute("PRAGMA quick_check").fetchone()
+            if not check or str(check[0]).lower() != "ok":
+                raise sqlite3.DatabaseError("SQLite 数据库完整性检查失败")
+            old_version = int(source.execute("PRAGMA user_version").fetchone()[0])
+            if old_version > DATABASE_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"数据库 schema v{old_version} 高于当前程序支持的 "
+                    f"v{DATABASE_SCHEMA_VERSION}，请使用匹配或更新版本的程序"
+                )
+            if old_version == DATABASE_SCHEMA_VERSION:
+                return old_version, True, None
+            backup_dir = self.path.parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            backup_path = backup_dir / f"bili_workspace-v{old_version}-{stamp}.db"
+            target = sqlite3.connect(backup_path)
+            try:
+                source.backup(target)
+                target.execute("PRAGMA wal_checkpoint(FULL)")
+            finally:
+                target.close()
+            try:
+                backup_path.chmod(0o600)
+            except OSError:
+                pass
+            return old_version, True, backup_path
+        finally:
+            source.close()
+
+    def _prune_migration_backups(self) -> None:
+        backup_dir = self.path.parent / "backups"
+        backups = sorted(
+            backup_dir.glob("bili_workspace-v*.db"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
         )
-        self._conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        for stale in backups[3:]:
+            stale.unlink(missing_ok=True)
+
+    def _apply_schema_locked(self) -> None:
+        for statement in _SCHEMA.split(";"):
+            sql = statement.strip()
+            if sql:
+                self._conn.execute(sql)
+
+    def _columns_locked(self, table: str) -> set[str]:
+        return {
+            str(row[1])
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+
+    def _add_column_locked(self, table: str, column: str, definition: str) -> None:
+        if column not in self._columns_locked(table):
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _migrate_locked(self, old_version: int, had_existing: bool) -> None:
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._apply_schema_locked()
+            self._add_column_locked(
+                "media", "index_fingerprint", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._add_column_locked(
+                "exports", "task_payload_json", "TEXT NOT NULL DEFAULT '{}'"
+            )
+            self._add_column_locked("users", "role", "TEXT NOT NULL DEFAULT 'user'")
+            self._add_column_locked(
+                "users", "display_name", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._add_column_locked(
+                "users", "must_change_password", "INTEGER NOT NULL DEFAULT 0"
+            )
+            self._add_column_locked("users", "created_by", "TEXT")
+            self._add_column_locked("users", "last_login_at", "REAL")
+            self._add_column_locked("sessions", "revoked_at", "REAL")
+            self._add_column_locked(
+                "sessions", "revoke_reason", "TEXT NOT NULL DEFAULT ''"
+            )
+            self._add_column_locked("audit_log", "session_id", "TEXT")
+            self._add_column_locked("audit_log", "target_user_id", "TEXT")
+
+            if had_existing and old_version < DATABASE_SCHEMA_VERSION:
+                users = self._conn.execute(
+                    "SELECT id,username,created_at,disabled FROM users "
+                    "ORDER BY disabled ASC,created_at,id"
+                ).fetchall()
+                if users:
+                    admin_id = str(users[0]["id"])
+                    self._conn.execute(
+                        "UPDATE users SET role=?,display_name=CASE WHEN TRIM(display_name)='' "
+                        "THEN ? ELSE display_name END WHERE id=?",
+                        (ROLE_ADMIN, _DEFAULT_ADMIN_DISPLAY_NAME, admin_id),
+                    )
+                    self._conn.execute(
+                        "UPDATE users SET role=?,display_name=CASE "
+                        "WHEN TRIM(display_name)='' THEN '普通用户' ELSE display_name END "
+                        "WHERE id<>?",
+                        (ROLE_USER, admin_id),
+                    )
+                    self._conn.execute(
+                        "UPDATE watch_progress SET user_id=? WHERE user_id IN ('local','')",
+                        (admin_id,),
+                    )
+                now = time.time()
+                self._conn.execute(
+                    "UPDATE sessions SET revoked_at=COALESCE(revoked_at,?),"
+                    "revoke_reason=CASE WHEN revoke_reason='' THEN 'schema_upgrade' ELSE revoke_reason END "
+                    "WHERE revoked_at IS NULL",
+                    (now,),
+                )
+
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_media_quality "
+                "ON media(selected_height,selected_codec)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sessions_active "
+                "ON sessions(user_id,revoked_at,expires_at,last_seen_at)"
+            )
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_enabled_admin "
+                "ON users(role) WHERE role='admin' AND disabled=0"
+            )
+            self._conn.execute(f"PRAGMA user_version={DATABASE_SCHEMA_VERSION}")
+            errors = self._conn.execute("PRAGMA foreign_key_check").fetchall()
+            if errors:
+                raise sqlite3.IntegrityError(
+                    "迁移后外键检查失败: " + "; ".join(str(tuple(row)) for row in errors[:5])
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    def _ensure_default_admin(self) -> None:
+        if (
+            self.has_users()
+            or self.runtime.mode != "local"
+            or not self.runtime.auth_required
+        ):
+            return
+        now = time.time()
+        user_id = "usr_" + uuid.uuid4().hex[:24]
+        self._execute(
+            "INSERT INTO users(id,username,password_hash,created_at,updated_at,disabled,"
+            "role,display_name,must_change_password,created_by) VALUES(?,?,?,?,?,0,?,?,?,?)",
+            (
+                user_id,
+                _DEFAULT_ADMIN_USERNAME,
+                _hash_password(_DEFAULT_ADMIN_PASSWORD, allow_default_temp=True),
+                now,
+                now,
+                ROLE_ADMIN,
+                _DEFAULT_ADMIN_DISPLAY_NAME,
+                1,
+                _SYSTEM_DEFAULT_ADMIN,
+            ),
+        )
+        self.audit(user_id, "auth.default_admin.create", "创建本机临时管理员")
+
+    def _reject_remote_default_password(self) -> None:
+        if not self.runtime.server_mode:
+            return
+        row = self._one(
+            "SELECT id FROM users WHERE role=? AND disabled=0 AND must_change_password=1 "
+            "AND created_by=? LIMIT 1",
+            (ROLE_ADMIN, _SYSTEM_DEFAULT_ADMIN),
+        )
+        if row:
+            raise RuntimeError("默认管理员密码尚未修改，应用拒绝切换到非回环监听")
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -255,11 +453,28 @@ class NasStore:
             return [dict(row) for row in self._conn.execute(sql, params).fetchall()]
 
     # Authentication -------------------------------------------------
+    @staticmethod
+    def _public_user(row: dict[str, Any]) -> dict[str, Any]:
+        user_id = row.get("user_id") or row.get("id") or ""
+        created_at = row.get("user_created_at")
+        if created_at is None:
+            created_at = row.get("created_at")
+        return {
+            "id": str(user_id),
+            "username": str(row["username"]),
+            "display_name": str(row.get("display_name") or ""),
+            "role": str(row.get("role") or ROLE_USER),
+            "disabled": bool(row.get("disabled")),
+            "must_change_password": bool(row.get("must_change_password")),
+            "created_at": float(created_at or 0),
+            "last_login_at": row.get("last_login_at"),
+        }
+
     def has_users(self) -> bool:
-        return self._one("SELECT 1 AS ok FROM users WHERE disabled=0 LIMIT 1") is not None
+        return self._one("SELECT 1 AS ok FROM users LIMIT 1") is not None
 
     def setup_required(self) -> bool:
-        return self.runtime.auth_required and not self.has_users()
+        return not self.has_users()
 
     def _ensure_bootstrap(self) -> None:
         if not self.setup_required():
@@ -274,61 +489,107 @@ class NasStore:
             except OSError:
                 pass
 
+    def _active_session_count_locked(self, user_id: str, now: float) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE user_id=? AND revoked_at IS NULL "
+            "AND expires_at>?",
+            (user_id, now),
+        ).fetchone()
+        return int(row[0] if row else 0)
+
+    def active_session_count(self, user_id: str) -> int:
+        with self._lock:
+            return self._active_session_count_locked(user_id, time.time())
+
     def auth_status(self, session_token: str = "") -> dict[str, Any]:
         session = self.get_session(session_token) if session_token else None
-        return {
+        setup_required = self.setup_required()
+        data: dict[str, Any] = {
             "required": self.runtime.auth_required,
-            "setup_required": self.setup_required(),
+            "setup_required": setup_required,
             "authenticated": session is not None or not self.runtime.auth_required,
-            "username": (
-                session.get("username", "本地用户")
-                if session
-                else ("本地用户" if not self.runtime.auth_required else "")
-            ),
-            "csrf_token": session.get("csrf_token", "") if session else "",
+            "user": None,
+            "username": "",
+            "display_name": "",
+            "role": "",
+            "permissions": [],
+            "must_change_password": False,
+            "csrf_token": "",
+            "session_expires_at": None,
+            "active_session_count": 0,
             "bootstrap_hint": (
                 (
                     "使用部署时设置的 BILI_BOOTSTRAP_TOKEN"
                     if os.getenv("BILI_BOOTSTRAP_TOKEN", "").strip()
                     else "读取配置卷中的 bootstrap-token.txt"
                 )
-                if self.setup_required()
+                if setup_required
                 else ""
             ),
         }
+        if session:
+            user = self._public_user(session)
+            data.update(
+                {
+                    "user": user,
+                    "username": user["username"],
+                    "display_name": user["display_name"],
+                    "role": user["role"],
+                    "permissions": permissions_for_role(user["role"]),
+                    "must_change_password": user["must_change_password"],
+                    "csrf_token": str(session["csrf_token"]),
+                    "session_expires_at": float(session["expires_at"]),
+                    "active_session_count": self.active_session_count(user["id"]),
+                }
+            )
+        return data
 
     def setup_admin(
-        self, username: str, password: str, bootstrap_token: str
+        self,
+        username: str,
+        password: str,
+        bootstrap_token: str,
+        display_name: str = _DEFAULT_ADMIN_DISPLAY_NAME,
     ) -> dict[str, Any]:
+        if self.has_users():
+            raise ValueError("管理员已经初始化")
         expected = os.getenv("BILI_BOOTSTRAP_TOKEN", "").strip() or self._bootstrap_token
         if not expected or not hmac.compare_digest(
             str(bootstrap_token or "").strip(), expected
         ):
             raise ValueError("初始化令牌无效")
-        username = str(username or "").strip()
-        if not 3 <= len(username) <= 64:
-            raise ValueError("用户名长度必须为 3–64 个字符")
-        now = time.time()
-        user_id = uuid.uuid4().hex
+        username = validate_username(username)
+        display_name = validate_display_name(display_name)
         password_hash = _hash_password(password)
+        now = time.time()
+        user_id = "usr_" + uuid.uuid4().hex[:24]
         try:
             with self._transaction():
-                existing = self._one(
-                    "SELECT 1 AS ok FROM users WHERE disabled=0 LIMIT 1"
-                )
+                existing = self._conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
                 if existing:
                     raise ValueError("管理员已经初始化")
-                self._execute(
-                    "INSERT INTO users(id,username,password_hash,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?)",
-                    (user_id, username, password_hash, now, now),
+                self._conn.execute(
+                    "INSERT INTO users(id,username,password_hash,created_at,updated_at,disabled,"
+                    "role,display_name,must_change_password,created_by) "
+                    "VALUES(?,?,?,?,?,0,?,?,0,NULL)",
+                    (
+                        user_id,
+                        username,
+                        password_hash,
+                        now,
+                        now,
+                        ROLE_ADMIN,
+                        display_name,
+                    ),
                 )
         except sqlite3.IntegrityError as exc:
             raise ValueError("用户名已经存在") from exc
         self.bootstrap_path.unlink(missing_ok=True)
         self._bootstrap_token = ""
         self.audit(user_id, "auth.setup", "初始化管理员")
-        return {"id": user_id, "username": username}
+        return self._public_user(
+            self._one("SELECT * FROM users WHERE id=?", (user_id,)) or {}
+        )
 
     def login_allowed(self, remote_addr: str) -> tuple[bool, int]:
         now = time.time()
@@ -355,9 +616,10 @@ class NasStore:
         allowed, retry = self.login_allowed(remote_addr)
         if not allowed:
             raise RuntimeError(f"登录尝试过多，请 {retry} 秒后再试")
+        candidate = str(username or "").strip()
         user = self._one(
-            "SELECT id,username,password_hash,disabled FROM users WHERE username=? COLLATE NOCASE",
-            (str(username or "").strip(),),
+            "SELECT * FROM users WHERE username=? COLLATE NOCASE",
+            (candidate,),
         )
         if (
             not user
@@ -365,32 +627,91 @@ class NasStore:
             or not _verify_password(password, str(user["password_hash"]))
         ):
             self.record_login_failure(remote_addr)
+            self.audit(None, "auth.login.failed", f"账号={candidate[:32]}", remote_addr)
             raise ValueError("用户名或密码错误")
-        token = secrets.token_urlsafe(36)
+        if (
+            str(user.get("created_by") or "") == _SYSTEM_DEFAULT_ADMIN
+            and bool(user.get("must_change_password"))
+            and not is_loopback_address(remote_addr)
+        ):
+            self.record_login_failure(remote_addr)
+            self.audit(
+                str(user["id"]),
+                "auth.login.failed",
+                "默认临时密码禁止远程登录",
+                remote_addr,
+            )
+            raise ValueError("默认临时密码只能从本机回环地址登录")
+
+        token = secrets.token_urlsafe(48)
         now = time.time()
+        session_id = "ses_" + uuid.uuid4().hex[:24]
         session = {
-            "id": uuid.uuid4().hex,
+            **user,
+            "session_id": session_id,
             "user_id": str(user["id"]),
-            "username": str(user["username"]),
-            "csrf_token": secrets.token_urlsafe(24),
-            "expires_at": now + 30 * 24 * 3600,
+            "csrf_token": secrets.token_urlsafe(32),
+            "session_created_at": now,
+            "expires_at": now + SESSION_ABSOLUTE_DAYS * 24 * 3600,
+            "last_seen_at": now,
+            "user_agent": user_agent[:300],
+            "remote_addr": remote_addr[:100],
         }
-        self._execute(
-            "INSERT INTO sessions(id,user_id,token_hash,csrf_token,created_at,expires_at,last_seen_at,user_agent,remote_addr) VALUES(?,?,?,?,?,?,?,?,?)",
-            (
-                session["id"],
-                session["user_id"],
-                _token_hash(token),
-                session["csrf_token"],
-                now,
-                session["expires_at"],
-                now,
-                user_agent[:300],
-                remote_addr[:100],
-            ),
-        )
+        session["must_change_password"] = bool(session.get("must_change_password"))
+        evicted: list[str] = []
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE users SET last_login_at=?,updated_at=? WHERE id=?",
+                (now, now, session["user_id"]),
+            )
+            self._conn.execute(
+                "INSERT INTO sessions(id,user_id,token_hash,csrf_token,created_at,expires_at,"
+                "last_seen_at,user_agent,remote_addr,revoked_at,revoke_reason) "
+                "VALUES(?,?,?,?,?,?,?,?,?,NULL,'')",
+                (
+                    session_id,
+                    session["user_id"],
+                    _token_hash(token),
+                    session["csrf_token"],
+                    now,
+                    session["expires_at"],
+                    now,
+                    session["user_agent"],
+                    session["remote_addr"],
+                ),
+            )
+            rows = self._conn.execute(
+                "SELECT id FROM sessions WHERE user_id=? AND revoked_at IS NULL "
+                "AND expires_at>? ORDER BY last_seen_at ASC,created_at ASC,id ASC",
+                (session["user_id"], now),
+            ).fetchall()
+            overflow = max(0, len(rows) - MAX_ACTIVE_SESSIONS_PER_USER)
+            candidates = [str(row["id"]) for row in rows if str(row["id"]) != session_id]
+            evicted = candidates[:overflow]
+            if evicted:
+                placeholders = ",".join("?" for _ in evicted)
+                self._conn.execute(
+                    f"UPDATE sessions SET revoked_at=?,revoke_reason='session_limit' "
+                    f"WHERE id IN ({placeholders})",
+                    (now, *evicted),
+                )
         self._login_failures.pop(remote_addr or "unknown", None)
-        self.audit(session["user_id"], "auth.login", "管理员登录", remote_addr)
+        session["last_login_at"] = now
+        self.audit(
+            session["user_id"],
+            "auth.login",
+            f"创建会话；淘汰 {len(evicted)} 个旧会话",
+            remote_addr,
+            session_id=session_id,
+        )
+        for evicted_id in evicted:
+            self.audit(
+                session["user_id"],
+                "auth.session.evicted",
+                "超过每用户 10 个有效会话",
+                remote_addr,
+                session_id=evicted_id,
+            )
         return token, session
 
     def get_session(self, token: str) -> dict[str, Any] | None:
@@ -398,22 +719,119 @@ class NasStore:
             return None
         now = time.time()
         row = self._one(
-            "SELECT s.id,s.user_id,s.csrf_token,s.expires_at,s.last_seen_at,u.username,u.disabled "
+            "SELECT s.id AS session_id,s.user_id,s.csrf_token,s.created_at AS session_created_at,"
+            "s.expires_at,s.last_seen_at,s.user_agent,s.remote_addr,s.revoked_at,s.revoke_reason,"
+            "u.id,u.username,u.display_name,u.role,u.disabled,u.must_change_password,"
+            "u.created_at AS user_created_at,u.last_login_at,u.created_by "
             "FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?",
             (_token_hash(token),),
         )
-        if not row or int(row["disabled"]) or float(row["expires_at"]) <= now:
-            if row:
-                self._execute("DELETE FROM sessions WHERE id=?", (row["id"],))
+        if not row or int(row["disabled"]) or row.get("revoked_at") is not None:
             return None
-        if now - float(row["last_seen_at"]) > 60:
+        if float(row["expires_at"]) <= now:
             self._execute(
-                "UPDATE sessions SET last_seen_at=? WHERE id=?", (now, row["id"])
+                "UPDATE sessions SET revoked_at=?,revoke_reason='expired' "
+                "WHERE id=? AND revoked_at IS NULL",
+                (now, row["session_id"]),
             )
+            return None
+        if now - float(row["last_seen_at"]) >= SESSION_TOUCH_INTERVAL_SECONDS:
+            self._execute(
+                "UPDATE sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL",
+                (now, row["session_id"]),
+            )
+            row["last_seen_at"] = now
+        row["must_change_password"] = bool(row["must_change_password"])
         return row
 
+    def get_session_by_id(self, session_id: str) -> dict[str, Any] | None:
+        now = time.time()
+        row = self._one(
+            "SELECT s.*,u.username,u.display_name,u.role,u.disabled,u.must_change_password "
+            "FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=?",
+            (session_id,),
+        )
+        if (
+            not row
+            or bool(row["disabled"])
+            or row.get("revoked_at") is not None
+            or float(row["expires_at"]) <= now
+        ):
+            return None
+        if now - float(row["last_seen_at"]) >= SESSION_TOUCH_INTERVAL_SECONDS:
+            self._execute(
+                "UPDATE sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL",
+                (now, session_id),
+            )
+            row["last_seen_at"] = now
+        return row
+
+    def session_is_active(self, session_id: str) -> bool:
+        session = self.get_session_by_id(session_id)
+        if session is None:
+            return False
+        now = time.time()
+        if now - float(session["last_seen_at"]) >= SESSION_TOUCH_INTERVAL_SECONDS:
+            self._execute(
+                "UPDATE sessions SET last_seen_at=? WHERE id=? AND revoked_at IS NULL",
+                (now, session_id),
+            )
+        return True
+
+    def list_sessions(self, user_id: str, current_session_id: str) -> list[dict[str, Any]]:
+        now = time.time()
+        rows = self._all(
+            "SELECT id,user_agent,remote_addr,created_at,last_seen_at,expires_at "
+            "FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>? "
+            "ORDER BY last_seen_at DESC,created_at DESC",
+            (user_id, now),
+        )
+        for row in rows:
+            row["current"] = str(row["id"]) == current_session_id
+        return rows
+
+    def revoke_session(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        current_session_id: str,
+        reason: str = "user_revoke",
+    ) -> bool:
+        if session_id == current_session_id:
+            raise ValueError("不能通过此接口撤销当前设备，请使用退出登录")
+        now = time.time()
+        cursor = self._execute(
+            "UPDATE sessions SET revoked_at=?,revoke_reason=? WHERE id=? AND user_id=? "
+            "AND revoked_at IS NULL AND expires_at>?",
+            (now, reason[:80], session_id, user_id, now),
+        )
+        return cursor.rowcount > 0
+
+    def revoke_other_sessions(self, user_id: str, current_session_id: str) -> int:
+        now = time.time()
+        cursor = self._execute(
+            "UPDATE sessions SET revoked_at=?,revoke_reason='user_revoke_others' "
+            "WHERE user_id=? AND id<>? AND revoked_at IS NULL AND expires_at>?",
+            (now, user_id, current_session_id, now),
+        )
+        return int(cursor.rowcount)
+
+    def revoke_all_sessions(self, user_id: str, reason: str) -> int:
+        now = time.time()
+        cursor = self._execute(
+            "UPDATE sessions SET revoked_at=?,revoke_reason=? WHERE user_id=? "
+            "AND revoked_at IS NULL AND expires_at>?",
+            (now, reason[:80], user_id, now),
+        )
+        return int(cursor.rowcount)
+
     def logout(self, session_id: str) -> None:
-        self._execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        self._execute(
+            "UPDATE sessions SET revoked_at=?,revoke_reason='logout' "
+            "WHERE id=? AND revoked_at IS NULL",
+            (time.time(), session_id),
+        )
 
     def change_password(
         self,
@@ -424,7 +842,7 @@ class NasStore:
         keep_session_id: str,
     ) -> dict[str, Any]:
         user = self._one(
-            "SELECT id,password_hash,disabled FROM users WHERE id=?", (user_id,)
+            "SELECT * FROM users WHERE id=?", (user_id,)
         )
         if (
             not user
@@ -435,27 +853,166 @@ class NasStore:
         if hmac.compare_digest(current_password, new_password):
             raise ValueError("新密码不能与当前密码相同")
         encoded = _hash_password(new_password)
-        csrf_token = secrets.token_urlsafe(24)
+        token = secrets.token_urlsafe(48)
+        csrf_token = secrets.token_urlsafe(32)
+        now = time.time()
         with self._transaction():
+            self._conn.execute(
+                "UPDATE users SET password_hash=?,must_change_password=0,updated_at=? WHERE id=?",
+                (encoded, now, user_id),
+            )
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM sessions WHERE user_id=? AND id<>? "
+                "AND revoked_at IS NULL AND expires_at>?",
+                (user_id, keep_session_id, now),
+            ).fetchone()
+            self._conn.execute(
+                "UPDATE sessions SET revoked_at=?,revoke_reason='password_change' "
+                "WHERE user_id=? AND id<>? AND revoked_at IS NULL AND expires_at>?",
+                (now, user_id, keep_session_id, now),
+            )
+            cursor = self._conn.execute(
+                "UPDATE sessions SET token_hash=?,csrf_token=?,last_seen_at=? "
+                "WHERE id=? AND user_id=? AND revoked_at IS NULL AND expires_at>?",
+                (
+                    _token_hash(token),
+                    csrf_token,
+                    now,
+                    keep_session_id,
+                    user_id,
+                    now,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("当前会话已经失效，请重新登录")
+        session = self.get_session(token)
+        if not session:
+            raise RuntimeError("密码修改后会话轮换失败")
+        return {
+            "token": token,
+            "csrf_token": csrf_token,
+            "other_sessions_revoked": int(row[0] if row else 0),
+            "session": session,
+        }
+
+    def update_profile(self, user_id: str, display_name: str) -> dict[str, Any]:
+        display_name = validate_display_name(display_name)
+        self._execute(
+            "UPDATE users SET display_name=?,updated_at=? WHERE id=? AND disabled=0",
+            (display_name, time.time(), user_id),
+        )
+        user = self._one("SELECT * FROM users WHERE id=?", (user_id,))
+        if not user:
+            raise KeyError("用户不存在")
+        return self._public_user(user)
+
+    def list_users(self) -> list[dict[str, Any]]:
+        now = time.time()
+        rows = self._all(
+            "SELECT u.*,COUNT(s.id) AS active_session_count FROM users u "
+            "LEFT JOIN sessions s ON s.user_id=u.id AND s.revoked_at IS NULL AND s.expires_at>? "
+            "GROUP BY u.id ORDER BY CASE u.role WHEN 'admin' THEN 0 ELSE 1 END,"
+            "u.created_at,u.username COLLATE NOCASE",
+            (now,),
+        )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = self._public_user(row)
+            item["active_session_count"] = int(row.get("active_session_count") or 0)
+            result.append(item)
+        return result
+
+    def create_user(
+        self,
+        username: str,
+        display_name: str,
+        temporary_password: str,
+        *,
+        created_by: str,
+    ) -> dict[str, Any]:
+        username = validate_username(username)
+        display_name = validate_display_name(display_name)
+        encoded = _hash_password(temporary_password)
+        now = time.time()
+        user_id = "usr_" + uuid.uuid4().hex[:24]
+        try:
             self._execute(
-                "UPDATE users SET password_hash=?,updated_at=? WHERE id=?",
+                "INSERT INTO users(id,username,password_hash,created_at,updated_at,disabled,"
+                "role,display_name,must_change_password,created_by) "
+                "VALUES(?,?,?,?,?,0,?,?,1,?)",
+                (
+                    user_id,
+                    username,
+                    encoded,
+                    now,
+                    now,
+                    ROLE_USER,
+                    display_name,
+                    created_by,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("登录账号已经存在") from exc
+        return self._public_user(
+            self._one("SELECT * FROM users WHERE id=?", (user_id,)) or {}
+        )
+
+    def set_user_display_name(self, user_id: str, display_name: str) -> dict[str, Any]:
+        return self.update_profile(user_id, display_name)
+
+    def set_user_disabled(
+        self, user_id: str, disabled: bool, *, actor_user_id: str
+    ) -> dict[str, Any]:
+        user = self._one("SELECT * FROM users WHERE id=?", (user_id,))
+        if not user:
+            raise KeyError("用户不存在")
+        if str(user["role"]) == ROLE_ADMIN:
+            raise ValueError("不能禁用当前管理员")
+        self._execute(
+            "UPDATE users SET disabled=?,updated_at=? WHERE id=?",
+            (1 if disabled else 0, time.time(), user_id),
+        )
+        if disabled:
+            self.revoke_all_sessions(user_id, "user_disabled")
+        updated = self._one("SELECT * FROM users WHERE id=?", (user_id,)) or user
+        self.audit(
+            actor_user_id,
+            "admin.user.disable" if disabled else "admin.user.enable",
+            str(updated["username"]),
+            target_user_id=user_id,
+        )
+        return self._public_user(updated)
+
+    def reset_user_password(
+        self, user_id: str, temporary_password: str, *, actor_user_id: str
+    ) -> dict[str, Any]:
+        user = self._one("SELECT * FROM users WHERE id=?", (user_id,))
+        if not user:
+            raise KeyError("用户不存在")
+        if str(user["role"]) == ROLE_ADMIN and user_id == actor_user_id:
+            raise ValueError("管理员请使用修改自己密码接口")
+        encoded = _hash_password(temporary_password)
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE users SET password_hash=?,must_change_password=1,updated_at=? WHERE id=?",
                 (encoded, time.time(), user_id),
             )
-            row = self._one(
-                "SELECT COUNT(*) AS count FROM sessions WHERE user_id=? AND id<>?",
-                (user_id, keep_session_id),
-            ) or {"count": 0}
-            self._execute(
-                "DELETE FROM sessions WHERE user_id=? AND id<>?",
-                (user_id, keep_session_id),
+            now = time.time()
+            cursor = self._conn.execute(
+                "UPDATE sessions SET revoked_at=?,revoke_reason='admin_password_reset' "
+                "WHERE user_id=? AND revoked_at IS NULL AND expires_at>?",
+                (now, user_id, now),
             )
-            self._execute(
-                "UPDATE sessions SET csrf_token=?,last_seen_at=? WHERE id=? AND user_id=?",
-                (csrf_token, time.time(), keep_session_id, user_id),
-            )
+        self.audit(
+            actor_user_id,
+            "admin.user.password_reset",
+            f"撤销会话 {cursor.rowcount} 个",
+            target_user_id=user_id,
+        )
+        updated = self._one("SELECT * FROM users WHERE id=?", (user_id,)) or user
         return {
-            "csrf_token": csrf_token,
-            "other_sessions_revoked": int(row["count"] or 0),
+            "user": self._public_user(updated),
+            "sessions_revoked": int(cursor.rowcount),
         }
 
     def audit(
@@ -464,10 +1021,22 @@ class NasStore:
         action: str,
         detail: str = "",
         remote_addr: str = "",
+        *,
+        session_id: str | None = None,
+        target_user_id: str | None = None,
     ) -> None:
         self._execute(
-            "INSERT INTO audit_log(user_id,action,detail,remote_addr,created_at) VALUES(?,?,?,?,?)",
-            (user_id, action[:120], detail[:1000], remote_addr[:100], time.time()),
+            "INSERT INTO audit_log(user_id,action,detail,remote_addr,created_at,session_id,"
+            "target_user_id) VALUES(?,?,?,?,?,?,?)",
+            (
+                user_id,
+                action[:120],
+                detail[:1000],
+                remote_addr[:100],
+                time.time(),
+                session_id,
+                target_user_id,
+            ),
         )
 
     # Storage health --------------------------------------------------
@@ -1554,7 +2123,12 @@ class NasStore:
         while not self._stop.wait(60):
             now = time.time()
             try:
-                self._execute("DELETE FROM sessions WHERE expires_at<=?", (now,))
+                self._execute(
+                    "UPDATE sessions SET revoked_at=COALESCE(revoked_at,?),"
+                    "revoke_reason=CASE WHEN revoke_reason='' THEN 'expired' ELSE revoke_reason END "
+                    "WHERE expires_at<=? AND revoked_at IS NULL",
+                    (now, now),
+                )
                 rows = self._all(
                     "SELECT task_id,state FROM exports WHERE "
                     "((state IN ('preparing','ready','failed','cancelled','skipped') "

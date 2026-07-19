@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import SESSION_COOKIE, router as api_router
+from app.auth import permissions_for_role
 from app.build_info import build_metadata
 from app.catalog_overrides import router as catalog_router
 from app.constants import MAX_REQUEST_BODY_BYTES
@@ -24,6 +25,10 @@ _PUBLIC_API = {
     "/api/auth/status",
     "/api/auth/setup",
     "/api/auth/login",
+}
+_PASSWORD_CHANGE_API = {
+    "/api/auth/password",
+    "/api/auth/logout",
 }
 
 
@@ -91,6 +96,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
     async def security_and_auth(request: Request, call_next):
         response = None
         request.state.auth_session = None
+        request.state.auth_context = None
 
         if not host_allowed(request.headers.get("host", "")):
             response = JSONResponse(
@@ -128,11 +134,42 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 )
             else:
                 request.state.auth_session = session
-                if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                request.state.auth_context = {
+                    "user_id": str(session["user_id"]),
+                    "username": str(session["username"]),
+                    "display_name": str(session.get("display_name") or ""),
+                    "role": str(session.get("role") or "user"),
+                    "permissions": permissions_for_role(
+                        str(session.get("role") or "user")
+                    ),
+                    "session_id": str(session["session_id"]),
+                    "must_change_password": bool(session.get("must_change_password")),
+                }
+                if (
+                    bool(session.get("must_change_password"))
+                    and request.url.path not in _PASSWORD_CHANGE_API
+                ):
+                    response = JSONResponse(
+                        {
+                            "ok": False,
+                            "code": "password_change_required",
+                            "error": "首次登录必须修改临时密码",
+                        },
+                        status_code=403,
+                    )
+                elif (
+                    str(session.get("role") or "user") != "admin"
+                    and not request.url.path.startswith("/api/auth/")
+                ):
+                    response = JSONResponse(
+                        {"ok": False, "code": "forbidden", "error": "没有权限访问此功能"},
+                        status_code=403,
+                    )
+                elif request.method in {"POST", "PUT", "PATCH", "DELETE"}:
                     supplied = request.headers.get("x-csrf-token", "")
                     if not supplied or supplied != str(session["csrf_token"]):
                         response = JSONResponse(
-                            {"ok": False, "error": "CSRF 校验失败，请刷新页面后重试"},
+                            {"ok": False, "code": "csrf_failed", "error": "CSRF 校验失败，请刷新页面后重试"},
                             status_code=403,
                         )
 

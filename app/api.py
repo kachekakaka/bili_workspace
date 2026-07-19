@@ -12,13 +12,23 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
 from app import __version__
+from app.auth import ROLE_ADMIN
 from app.bbdown import find_ffmpeg
-from app.constants import MAX_BATCH_ITEMS, MAX_LOG_API_CHARS
+from app.constants import (
+    MAX_BATCH_ITEMS,
+    MAX_LOG_API_CHARS,
+    SESSION_ABSOLUTE_DAYS,
+    SSE_AUTH_HEARTBEAT_SECONDS,
+)
 from app.index_store import UnsafeIndexPathError
 from app.media_stream import file_response
 from app.models import (
+    AdminPasswordResetRequest,
+    AdminUserCreateRequest,
+    AdminUserUpdateRequest,
     AuthLoginRequest,
     AuthPasswordChangeRequest,
+    AuthProfileUpdateRequest,
     AuthSetupRequest,
     CompatibleRequest,
     ConfigUpdate,
@@ -76,8 +86,30 @@ def ok(data=None, **extra):
     return body
 
 
-def err(message: str, status_code: int = 400):
-    return JSONResponse({"ok": False, "error": message}, status_code=status_code)
+def err(message: str, status_code: int = 400, *, code: str = ""):
+    body = {"ok": False, "error": message}
+    if code:
+        body["code"] = code
+    return JSONResponse(body, status_code=status_code)
+
+
+def _set_session_cookie(response: JSONResponse, state: AppState, token: str) -> None:
+    response.set_cookie(
+        _cookie_name(state),
+        token,
+        httponly=True,
+        secure=state.runtime.cookie_secure,
+        samesite="lax",
+        path="/",
+        max_age=SESSION_ABSOLUTE_DAYS * 24 * 3600,
+    )
+
+
+def _require_admin(request: Request) -> dict | JSONResponse:
+    session = _session(request)
+    if not session or str(session.get("role") or "") != ROLE_ADMIN:
+        return err("需要管理员权限", 403, code="forbidden")
+    return session
 
 
 def _safe_cover_url(value: str) -> str:
@@ -226,6 +258,7 @@ def _audit(request: Request, action: str, detail: str = "") -> None:
         action,
         detail,
         _remote(request),
+        session_id=str(session.get("session_id")) if session else None,
     )
 
 
@@ -316,19 +349,24 @@ def auth_status(request: Request):
 def auth_setup(request: Request, body: AuthSetupRequest):
     state = _state(request)
     try:
-        user = state.nas.setup_admin(body.username, body.password, body.bootstrap_token)
-        token, session = state.nas.login(
-            user["username"], body.password, remote_addr=_remote(request), user_agent=request.headers.get("user-agent", "")
+        user = state.nas.setup_admin(
+            body.username,
+            body.password,
+            body.bootstrap_token,
+            body.display_name,
+        )
+        token, _session_data = state.nas.login(
+            user["username"],
+            body.password,
+            remote_addr=_remote(request),
+            user_agent=request.headers.get("user-agent", ""),
         )
     except RuntimeError as exc:
         return err(str(exc), 429)
     except ValueError as exc:
         return err(str(exc), 400)
-    response = JSONResponse(ok({"username": session["username"], "csrf_token": session["csrf_token"]}))
-    response.set_cookie(
-        _cookie_name(state), token, httponly=True, secure=state.runtime.cookie_secure,
-        samesite="lax", path="/", max_age=30 * 24 * 3600,
-    )
+    response = JSONResponse(ok(state.nas.auth_status(token)))
+    _set_session_cookie(response, state, token)
     return response
 
 
@@ -336,18 +374,18 @@ def auth_setup(request: Request, body: AuthSetupRequest):
 def auth_login(request: Request, body: AuthLoginRequest):
     state = _state(request)
     try:
-        token, session = state.nas.login(
-            body.username, body.password, remote_addr=_remote(request), user_agent=request.headers.get("user-agent", "")
+        token, _session_data = state.nas.login(
+            body.username,
+            body.password,
+            remote_addr=_remote(request),
+            user_agent=request.headers.get("user-agent", ""),
         )
     except RuntimeError as exc:
         return err(str(exc), 429)
     except ValueError as exc:
-        return err(str(exc), 401)
-    response = JSONResponse(ok({"username": session["username"], "csrf_token": session["csrf_token"]}))
-    response.set_cookie(
-        _cookie_name(state), token, httponly=True, secure=state.runtime.cookie_secure,
-        samesite="lax", path="/", max_age=30 * 24 * 3600,
-    )
+        return err(str(exc), 401, code="invalid_credentials")
+    response = JSONResponse(ok(state.nas.auth_status(token)))
+    _set_session_cookie(response, state, token)
     return response
 
 
@@ -356,24 +394,112 @@ def auth_change_password(request: Request, body: AuthPasswordChangeRequest):
     state = _state(request)
     session = _session(request)
     if not session:
-        return err("本地免登录模式没有可修改的网站管理员密码", 400)
+        return err("请先登录", 401)
     try:
         result = state.nas.change_password(
             str(session["user_id"]),
             body.current_password,
             body.new_password,
-            keep_session_id=str(session["id"]),
+            keep_session_id=str(session["session_id"]),
         )
-    except ValueError as exc:
+    except (RuntimeError, ValueError) as exc:
         return err(str(exc), 400)
-    request.state.auth_session = {**session, "csrf_token": result["csrf_token"]}
+    token = str(result.pop("token"))
+    rotated = result.pop("session")
+    request.state.auth_session = rotated
     state.nas.audit(
         str(session["user_id"]),
         "auth.password.change",
         f"撤销其他会话 {result['other_sessions_revoked']} 个",
         _remote(request),
+        session_id=str(session["session_id"]),
     )
-    return ok(result)
+    payload = state.nas.auth_status(token)
+    payload["other_sessions_revoked"] = result["other_sessions_revoked"]
+    response = JSONResponse(ok(payload))
+    _set_session_cookie(response, state, token)
+    return response
+
+
+@router.patch("/auth/profile")
+def auth_update_profile(request: Request, body: AuthProfileUpdateRequest):
+    state = _state(request)
+    session = _session(request)
+    if not session:
+        return err("请先登录", 401)
+    try:
+        user = state.nas.update_profile(str(session["user_id"]), body.display_name)
+    except (KeyError, ValueError) as exc:
+        return err(str(exc), 400)
+    state.nas.audit(
+        str(session["user_id"]),
+        "auth.profile.update",
+        "修改中文显示名",
+        _remote(request),
+        session_id=str(session["session_id"]),
+    )
+    return ok(user)
+
+
+@router.get("/auth/sessions")
+def auth_sessions(request: Request):
+    state = _state(request)
+    session = _session(request)
+    if not session:
+        return err("请先登录", 401)
+    return ok(
+        {
+            "items": state.nas.list_sessions(
+                str(session["user_id"]), str(session["session_id"])
+            ),
+            "limit": 10,
+        }
+    )
+
+
+@router.delete("/auth/sessions/{session_id}")
+def auth_revoke_session(request: Request, session_id: str):
+    state = _state(request)
+    session = _session(request)
+    if not session:
+        return err("请先登录", 401)
+    try:
+        revoked = state.nas.revoke_session(
+            str(session["user_id"]),
+            session_id,
+            current_session_id=str(session["session_id"]),
+        )
+    except ValueError as exc:
+        return err(str(exc), 400)
+    if not revoked:
+        return err("会话不存在或已经失效", 404)
+    state.nas.audit(
+        str(session["user_id"]),
+        "auth.session.revoke",
+        "撤销其他设备",
+        _remote(request),
+        session_id=session_id,
+    )
+    return ok({"revoked": True})
+
+
+@router.post("/auth/sessions/revoke-others")
+def auth_revoke_other_sessions(request: Request):
+    state = _state(request)
+    session = _session(request)
+    if not session:
+        return err("请先登录", 401)
+    count = state.nas.revoke_other_sessions(
+        str(session["user_id"]), str(session["session_id"])
+    )
+    state.nas.audit(
+        str(session["user_id"]),
+        "auth.session.revoke_others",
+        f"撤销其他会话 {count} 个",
+        _remote(request),
+        session_id=str(session["session_id"]),
+    )
+    return ok({"revoked": count})
 
 
 @router.post("/auth/logout")
@@ -381,14 +507,120 @@ def auth_logout(request: Request):
     state = _state(request)
     session = _session(request)
     if session:
-        state.nas.audit(str(session["user_id"]), "auth.logout", "管理员退出", _remote(request))
-        state.nas.logout(str(session["id"]))
+        state.nas.audit(
+            str(session["user_id"]),
+            "auth.logout",
+            "退出当前设备",
+            _remote(request),
+            session_id=str(session["session_id"]),
+        )
+        state.nas.logout(str(session["session_id"]))
     response = JSONResponse(ok({"logged_out": True}))
     response.delete_cookie(
-        _cookie_name(state), path="/", secure=state.runtime.cookie_secure,
-        httponly=True, samesite="lax",
+        _cookie_name(state),
+        path="/",
+        secure=state.runtime.cookie_secure,
+        httponly=True,
+        samesite="lax",
     )
     return response
+
+
+@router.get("/admin/users")
+def admin_list_users(request: Request):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    return ok({"items": _state(request).nas.list_users()})
+
+
+@router.post("/admin/users")
+def admin_create_user(request: Request, body: AdminUserCreateRequest):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    state = _state(request)
+    try:
+        user = state.nas.create_user(
+            body.username,
+            body.display_name,
+            body.temporary_password,
+            created_by=str(admin["user_id"]),
+        )
+    except ValueError as exc:
+        return err(str(exc), 400)
+    state.nas.audit(
+        str(admin["user_id"]),
+        "admin.user.create",
+        user["username"],
+        _remote(request),
+        session_id=str(admin["session_id"]),
+        target_user_id=user["id"],
+    )
+    return ok(user)
+
+
+@router.patch("/admin/users/{user_id}")
+def admin_update_user(request: Request, user_id: str, body: AdminUserUpdateRequest):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    state = _state(request)
+    try:
+        user = None
+        if body.display_name is not None:
+            user = state.nas.set_user_display_name(user_id, body.display_name)
+        if body.disabled is not None:
+            user = state.nas.set_user_disabled(
+                user_id, body.disabled, actor_user_id=str(admin["user_id"])
+            )
+        if user is None:
+            return err("没有可更新字段", 400)
+    except KeyError as exc:
+        return err(str(exc), 404)
+    except ValueError as exc:
+        return err(str(exc), 400)
+    return ok(user)
+
+
+@router.post("/admin/users/{user_id}/reset-password")
+def admin_reset_user_password(
+    request: Request, user_id: str, body: AdminPasswordResetRequest
+):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        result = _state(request).nas.reset_user_password(
+            user_id,
+            body.temporary_password,
+            actor_user_id=str(admin["user_id"]),
+        )
+    except KeyError as exc:
+        return err(str(exc), 404)
+    except ValueError as exc:
+        return err(str(exc), 400)
+    return ok(result)
+
+
+@router.post("/admin/users/{user_id}/revoke-sessions")
+def admin_revoke_user_sessions(request: Request, user_id: str):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    state = _state(request)
+    if user_id == str(admin["user_id"]):
+        return err("不能通过管理员接口撤销当前管理员全部会话", 400)
+    count = state.nas.revoke_all_sessions(user_id, "admin_revoke")
+    state.nas.audit(
+        str(admin["user_id"]),
+        "admin.user.sessions_revoke",
+        f"撤销会话 {count} 个",
+        _remote(request),
+        session_id=str(admin["session_id"]),
+        target_user_id=user_id,
+    )
+    return ok({"revoked": count})
 
 
 # Status/config/search ----------------------------------------------------
@@ -965,13 +1197,24 @@ def api_bilibili_logout(request: Request):
 @router.get("/events")
 async def api_events(request: Request):
     state = _state(request)
+    session = _session(request)
+    session_id = str(session.get("session_id") or "") if session else ""
 
     async def stream():
         last = ""
         last_keepalive = 0.0
+        last_auth_check = time.monotonic()
         while True:
             if await request.is_disconnected():
                 break
+            now_mono = time.monotonic()
+            if (
+                session_id
+                and now_mono - last_auth_check >= SSE_AUTH_HEARTBEAT_SECONDS
+            ):
+                if not state.nas.session_is_active(session_id):
+                    break
+                last_auth_check = now_mono
             tasks = [
                 _compact_task(_decorate_task(state, item, "library"))
                 for item in state.queue.list_tasks()
@@ -989,9 +1232,9 @@ async def api_events(request: Request):
                 yield f"event: tasks\ndata: {payload}\n\n"
                 last = fingerprint
                 last_keepalive = time.monotonic()
-            elif time.monotonic() - last_keepalive >= 15:
+            elif now_mono - last_keepalive >= SSE_AUTH_HEARTBEAT_SECONDS:
                 yield ": keepalive\n\n"
-                last_keepalive = time.monotonic()
+                last_keepalive = now_mono
             await asyncio.sleep(1.0)
 
     return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})

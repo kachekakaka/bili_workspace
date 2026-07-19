@@ -25,6 +25,7 @@ def server_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "BILI_APP_MODE": "docker",
         "BILI_CONFIG_DIR": str(config_dir),
         "BILI_MEDIA_DIR": str(media_dir),
+        "BILI_USERDATA_DIR": str(tmp_path / "userdata"),
         "BILI_CACHE_DIR": str(cache_dir),
         "BILI_TEMP_DIR": str(temp_dir),
         "BILI_BBDOWN_DIR": str(bbdown_dir),
@@ -149,8 +150,11 @@ def test_change_password_rotates_csrf_and_revokes_other_sessions(server_client):
     data = changed.json()["data"]
     assert data["csrf_token"] != second_csrf
     assert data["other_sessions_revoked"] >= 1
+    rotated_token = server_client.cookies.get("__Host-bili_session")
+    assert rotated_token and rotated_token not in {first_token, second_token}
     assert server_client.state_ref.nas.get_session(first_token) is None
-    assert server_client.state_ref.nas.get_session(second_token) is not None
+    assert server_client.state_ref.nas.get_session(second_token) is None
+    assert server_client.state_ref.nas.get_session(rotated_token) is not None
 
     old_password = server_client.post(
         "/api/auth/login",

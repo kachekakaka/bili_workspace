@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const LOADED_FRONTEND_VERSION = '20260719-4';
+  const LOADED_FRONTEND_VERSION = '20260719-5';
   let serverInfo = null;
   let serverError = '';
 
