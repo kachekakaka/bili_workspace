@@ -16,13 +16,20 @@ if errorlevel 1 goto :dirty
 git diff --cached --quiet -- .
 if errorlevel 1 goto :dirty
 
-echo [1/2] 拉取 main 分支更新...
+echo [1/3] 拉取 main 分支更新...
 git pull --ff-only origin main
 if errorlevel 1 goto :failed
 
-echo [2/2] 准备运行时并执行完整自检...
+echo [2/3] 准备运行时并执行完整自检...
+set "BILI_VERIFY_NO_PAUSE=1"
 call verify.bat
-exit /b %ERRORLEVEL%
+set "VERIFY_RC=%ERRORLEVEL%"
+set "BILI_VERIFY_NO_PAUSE="
+if not "%VERIFY_RC%"=="0" goto :failed
+
+echo [3/3] 关闭旧服务并启动当前版本...
+start "" "%~dp0start.bat"
+exit /b 0
 
 :dirty
 echo [错误] 当前目录存在未提交的受 Git 管理修改。为避免覆盖，请先处理这些修改。
