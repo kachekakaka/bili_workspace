@@ -331,6 +331,15 @@ class TaskOwnershipNasStore(SerializedAuthNasStore):
                 encoded,
             ),
         )
+        # Keep the v3 compatibility snapshot in sync until the V0.6 release
+        # migration has been exercised across all supported update paths.
+        self._execute(
+            "INSERT INTO task_snapshots(task_id,destination,status,created_at,updated_at,payload_json) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET "
+            "destination=excluded.destination,status=excluded.status,"
+            "updated_at=excluded.updated_at,payload_json=excluded.payload_json",
+            (task_id, destination, status, created_at, now, encoded),
+        )
         self._snapshot_last_write[task_id] = now
         if status in TERMINAL_STATUSES or now - self._last_snapshot_prune >= 60:
             self.cleanup_task_history(now=now, owner_user_id=owner)

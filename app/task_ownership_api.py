@@ -90,7 +90,9 @@ def _queue_for_record(state, record: dict[str, Any]):
     return state.export_queue if record.get("destination") == "device" else state.queue
 
 
-def _live_record(state, record: dict[str, Any]) -> dict[str, Any]:
+def _live_record(
+    state, record: dict[str, Any], *, compact: bool = True
+) -> dict[str, Any]:
     queue = _queue_for_record(state, record)
     live = queue.get_task(str(record["id"]))
     value = dict(record)
@@ -103,7 +105,8 @@ def _live_record(state, record: dict[str, Any]) -> dict[str, Any]:
             value["owner"] = owner
         if owner_label:
             value["owner_label"] = owner_label
-    return _compact_task(_decorate_task(state, value, str(value["destination"])))
+    decorated = _decorate_task(state, value, str(value["destination"]))
+    return _compact_task(decorated) if compact else decorated
 
 
 def _summary(items: list[dict[str, Any]]) -> dict[str, int]:
@@ -315,7 +318,7 @@ def task_detail(request: Request, task_id: str):
     record = _record_for_request(request, task_id)
     if not record:
         return err("任务不存在", 404)
-    return ok(_live_record(_state(request), record))
+    return ok(_live_record(_state(request), record, compact=False))
 
 
 @router.get("/tasks/{task_id}/log")

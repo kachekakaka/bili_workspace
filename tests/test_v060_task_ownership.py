@@ -268,7 +268,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
             "a-old",
             {
                 "id": "a-old",
-                "owner_user_id": owner_a,
+                "owner_user_id": owner_b,
                 "key": "OLD",
                 "status": "failed",
                 "created_at": now - 9 * 86400,
@@ -280,7 +280,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
             "a-recent",
             {
                 "id": "a-recent",
-                "owner_user_id": owner_a,
+                "owner_user_id": owner_b,
                 "key": "RECENT",
                 "status": "failed",
                 "created_at": now - 7 * 86400,

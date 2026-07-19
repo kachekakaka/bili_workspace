@@ -415,9 +415,10 @@ def test_admin_user_api_forced_password_and_session_csrf_isolation(
             )
             assert changed.status_code == 200, changed.text
             user_csrf = str(changed.json()["data"]["csrf_token"])
-            forbidden = user_client.get("/api/status")
-            assert forbidden.status_code == 403
-            assert forbidden.json()["code"] == "forbidden"
+            limited_status = user_client.get("/api/status")
+            assert limited_status.status_code == 200
+            assert "database_path" not in limited_status.text
+            assert "download_dir" not in limited_status.text
             sessions = user_client.get("/api/auth/sessions")
             assert sessions.status_code == 200
             assert sessions.json()["data"]["items"][0]["current"] is True
