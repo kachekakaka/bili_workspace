@@ -42,6 +42,7 @@ if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
 echo.
 echo ===== v0.5.6 自检全部通过 =====
 echo 可直接运行 start.bat。
+if /I "%BILI_VERIFY_NO_PAUSE%"=="1" exit /b 0
 pause
 exit /b 0
 
@@ -49,5 +50,6 @@ exit /b 0
 if defined SMOKE_DIR if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
 echo.
 echo ===== 自检失败，请查看上方信息 =====
+if /I "%BILI_VERIFY_NO_PAUSE%"=="1" exit /b 1
 pause
 exit /b 1
