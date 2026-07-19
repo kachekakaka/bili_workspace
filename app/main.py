@@ -19,6 +19,10 @@ from app.paths import ROOT
 from app.refinement_api import router as refinement_router
 from app.state import AppState
 from app.tag_store import TagStore
+from app.task_ownership_api import (
+    enhancement_router as task_ownership_enhancement_router,
+)
+from app.task_ownership_api import router as task_ownership_router
 
 WEB_DIR = ROOT / "web"
 _PUBLIC_API = {
@@ -30,6 +34,33 @@ _PASSWORD_CHANGE_API = {
     "/api/auth/password",
     "/api/auth/logout",
 }
+
+
+def _normal_user_api_allowed(request: Request) -> bool:
+    """Backend allowlist for the two ordinary-user product surfaces."""
+    path = request.url.path
+    method = request.method.upper()
+    if path.startswith("/api/auth/"):
+        return True
+    if path == "/api/status" and method == "GET":
+        return True
+    if path == "/api/preview" and method == "POST":
+        return True
+    if path == "/api/download" and method == "POST":
+        return True
+    if path == "/api/events" and method == "GET":
+        return True
+    if path == "/api/cover" and method == "GET":
+        return True
+    if path == "/api/tasks" and method == "GET":
+        return True
+    if path.startswith("/api/tasks/"):
+        return method in {"GET", "POST", "DELETE"}
+    if path.startswith("/api/exports/"):
+        return method in {"GET", "HEAD", "POST", "DELETE"}
+    if path.startswith("/api/enhancements/tasks/"):
+        return method in {"GET", "POST", "DELETE"}
+    return False
 
 
 def create_app(state: AppState | None = None) -> FastAPI:
@@ -159,17 +190,25 @@ def create_app(state: AppState | None = None) -> FastAPI:
                     )
                 elif (
                     str(session.get("role") or "user") != "admin"
-                    and not request.url.path.startswith("/api/auth/")
+                    and not _normal_user_api_allowed(request)
                 ):
                     response = JSONResponse(
-                        {"ok": False, "code": "forbidden", "error": "没有权限访问此功能"},
+                        {
+                            "ok": False,
+                            "code": "forbidden",
+                            "error": "没有权限访问此功能",
+                        },
                         status_code=403,
                     )
                 elif request.method in {"POST", "PUT", "PATCH", "DELETE"}:
                     supplied = request.headers.get("x-csrf-token", "")
                     if not supplied or supplied != str(session["csrf_token"]):
                         response = JSONResponse(
-                            {"ok": False, "code": "csrf_failed", "error": "CSRF 校验失败，请刷新页面后重试"},
+                            {
+                                "ok": False,
+                                "code": "csrf_failed",
+                                "error": "CSRF 校验失败，请刷新页面后重试",
+                            },
                             status_code=403,
                         )
 
@@ -201,7 +240,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
     def healthz():
         return {"ok": True, **build, "mode": app_state.runtime.mode}
 
-    # Catalog/compatibility overrides must be registered before historical routes.
+    # Ownership routes must precede all historical compatibility routes.
+    app.include_router(task_ownership_router)
+    app.include_router(task_ownership_enhancement_router)
     app.include_router(catalog_router)
     app.include_router(refinement_router)
     app.include_router(compat_router)
