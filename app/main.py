@@ -140,6 +140,8 @@ def create_app(state: AppState | None = None) -> FastAPI:
         )
         if request.url.path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-store")
+        elif request.url.path.startswith("/assets/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
         if app_state.runtime.hsts_enabled:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
