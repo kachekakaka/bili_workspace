@@ -14,8 +14,10 @@ def test_dashboard_and_library_recovery_is_loaded_before_legacy_overlay():
     )
     assert index.index("enhancements-library.js") < index.index("enhancements-ui-recovery.js")
     assert index.index("enhancements-ui-recovery.js") < index.index("enhancements-library-overlay.js")
+    expected = re.search(r'data-frontend-version="([^"]+)"', index)
     versions = re.findall(r'/assets/[^"\']+\?v=([^"\']+)', index)
-    assert versions and set(versions) == {"20260719-1"}
+    assert expected is not None
+    assert versions and set(versions) == {expected.group(1)}
     for token in (
         "最近观看与下载",
         "运行状态",
