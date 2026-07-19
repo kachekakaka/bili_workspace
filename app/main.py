@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import ipaddress
+import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -9,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import SESSION_COOKIE, router as api_router
+from app.build_info import build_metadata
 from app.catalog_overrides import router as catalog_router
 from app.constants import MAX_REQUEST_BODY_BYTES
 from app.deletion_store import DeletionStore
@@ -30,6 +32,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
     app_state = state or AppState.create()
     tag_store = TagStore(app_state.runtime)
     deletion_store = DeletionStore(app_state.runtime)
+    build = build_metadata()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -60,7 +63,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 return False
             hostname = raw[1:end]
             remainder = raw[end + 1 :]
-            if remainder and (not remainder.startswith(":") or not remainder[1:].isdigit()):
+            if remainder and (
+                not remainder.startswith(":") or not remainder[1:].isdigit()
+            ):
                 return False
         else:
             hostname = raw
@@ -69,7 +74,10 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 if port.isdigit():
                     hostname = candidate
         hostname = hostname.rstrip(".").lower()
-        trusted = {item.strip("[]").rstrip(".").lower() for item in app_state.runtime.trusted_hosts}
+        trusted = {
+            item.strip("[]").rstrip(".").lower()
+            for item in app_state.runtime.trusted_hosts
+        }
         if hostname in trusted:
             return True
         if app_state.runtime.allow_ip_hosts:
@@ -86,7 +94,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
         request.state.auth_session = None
 
         if not host_allowed(request.headers.get("host", "")):
-            response = JSONResponse({"ok": False, "error": "Host 不受信任"}, status_code=400)
+            response = JSONResponse(
+                {"ok": False, "error": "Host 不受信任"}, status_code=400
+            )
 
         if response is None and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             value = request.headers.get("content-length")
@@ -133,11 +143,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; "
-            "script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
         )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data:; media-src 'self' blob:; "
+            "style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
+            "frame-ancestors 'none'; base-uri 'self'"
+        )
+        response.headers["X-Bili-Build"] = build["build_id"]
+        response.headers["X-Bili-Frontend"] = build["frontend_version"]
         if request.url.path.startswith("/api/"):
             response.headers.setdefault("Cache-Control", "no-store")
         elif request.url.path.startswith("/assets/"):
@@ -148,7 +163,12 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "version": __version__, "mode": app_state.runtime.mode}
+        return {
+            "ok": True,
+            **build,
+            "mode": app_state.runtime.mode,
+            "pid": os.getpid(),
+        }
 
     # Catalog/compatibility overrides must be registered before historical routes.
     app.include_router(catalog_router)
@@ -158,14 +178,19 @@ def create_app(state: AppState | None = None) -> FastAPI:
     app.include_router(enhancement_router)
 
     if WEB_DIR.exists():
+
         @app.get("/")
         def index():
-            return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})
+            return FileResponse(
+                WEB_DIR / "index.html", headers={"Cache-Control": "no-store"}
+            )
 
         @app.get("/m")
         @app.get("/m/")
         def mobile_index():
-            return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-store"})
+            return FileResponse(
+                WEB_DIR / "index.html", headers={"Cache-Control": "no-store"}
+            )
 
         if (WEB_DIR / "assets").exists():
             app.mount("/assets", StaticFiles(directory=WEB_DIR / "assets"), name="assets")
@@ -185,5 +210,7 @@ def run() -> None:
         port=runtime.port,
         log_level="info",
         proxy_headers=runtime.server_mode,
-        forwarded_allow_ips=",".join(runtime.trusted_proxy_ips) if runtime.server_mode else "",
+        forwarded_allow_ips=(
+            ",".join(runtime.trusted_proxy_ips) if runtime.server_mode else ""
+        ),
     )
