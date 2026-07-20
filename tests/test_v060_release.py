@@ -25,7 +25,7 @@ def text(path: str) -> str:
 
 
 def test_v060_version_and_frozen_constants() -> None:
-    assert APP_VERSION == "0.6.0"
+    assert APP_VERSION == "0.6.1"
     assert DATABASE_SCHEMA_VERSION == 4
     assert MAX_ACTIVE_SESSIONS_PER_USER == 10
     assert NORMAL_USER_TASK_RETENTION_DAYS == 7
@@ -42,11 +42,11 @@ def test_release_versions_are_synchronized() -> None:
     assert f"const LOADED_FRONTEND_VERSION = '{FRONTEND_VERSION}';" in text(
         "web/assets/browser-version.js"
     )
-    assert "# bili_workspace v0.6.0" in text("README.md")
-    assert "## 0.6.0 - 2026-07-20" in text("CHANGELOG.md")
-    assert "bili_workspace v0.6.0" in text("start.bat")
-    assert "v0.6.0 自检全部通过" in text("verify.bat")
-    assert "bili_workspace v0.6.0 源码自检完成" in text(
+    assert "# bili_workspace v0.6.1" in text("README.md")
+    assert "## 0.6.1 - 2026-07-20" in text("CHANGELOG.md")
+    assert "bili_workspace v0.6.1" in text("start.bat")
+    assert "v0.6.1 自检全部通过" in text("verify.bat")
+    assert "bili_workspace v0.6.1 源码自检完成" in text(
         "scripts/dev/verify-source.sh"
     )
 

@@ -13,11 +13,11 @@ from app.cookie import CookieChecker
 from app.index_store import IndexStore
 from app.integrity import IntegrityStatus, verify_tool_manifest
 from app.metadata import fetch_video_metadata
+from app.migration_safe_task_store import MigrationSafeTaskOwnershipNasStore
 from app.owned_queue import OwnedTaskQueue
 from app.paths import ROOT
 from app.qr_login import QrLoginManager
 from app.runtime import RuntimeSettings
-from app.task_ownership_store import TaskOwnershipNasStore
 from app.userdata import UserdataIndexStore, migrate_legacy_database
 
 _IN_MEMORY_TASK_HISTORY = 5000
@@ -41,7 +41,7 @@ class AppState:
     export_config_store: ConfigStore
     export_index: IndexStore
     export_queue: OwnedTaskQueue
-    nas: TaskOwnershipNasStore
+    nas: MigrationSafeTaskOwnershipNasStore
     cover_cache: CoverCache
     qr_login: QrLoginManager
     cookie_checker: CookieChecker
@@ -166,7 +166,7 @@ class AppState:
             export_root, index_root / "exports.json"
         )
 
-        nas = TaskOwnershipNasStore(runtime, index)
+        nas = MigrationSafeTaskOwnershipNasStore(runtime, index)
         nas.bind_export_index(export_index)
         default_owner = nas.default_owner_user_id()
         download_slots = threading.Semaphore(runtime.download_concurrency)
