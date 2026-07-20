@@ -16,7 +16,7 @@ concurrency:
 jobs:
   ui-v062:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,15 +35,30 @@ jobs:
           python -m pip check
 
       - name: Check JavaScript syntax
-        run: node --check web/assets/enhancements-ui-v062.js
+        run: |
+          node --check web/assets/enhancements-ui-v062.js
+          node --check web/assets/enhancements-ui-v062-settings.js
 
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run V0.6.2 UI tests
+      - name: Run V0.6.2 and existing layout tests
         env:
           BILI_RUN_PLAYWRIGHT: "1"
-        run: >-
-          python -m pytest -q -p no:cacheprovider --tb=short
-          tests/test_v062_ui.py
-          tests/test_v062_ui_playwright.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -q -p no:cacheprovider --tb=short \
+            tests/test_v062_ui.py \
+            tests/test_v062_settings_ui.py \
+            tests/test_v062_ui_playwright.py \
+            tests/test_playwright_layout.py 2>&1 | tee v062-playwright.log
+
+      - name: Upload V0.6.2 Playwright log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v062-playwright-${{ github.run_attempt }}
+          path: v062-playwright.log
+          if-no-files-found: warn
+          retention-days: 7
