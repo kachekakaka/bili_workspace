@@ -1,4 +1,4 @@
-# bili_workspace v0.6.0
+# bili_workspace v0.6.1
 
 `bili_workspace` 是一个可运行在 **Windows 本机** 和 **QNAP NAS / Docker** 上的私人 Bilibili 搜索、下载、任务管理与媒体库网站。
 

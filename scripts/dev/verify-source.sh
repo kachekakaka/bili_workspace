@@ -18,4 +18,4 @@ else
   echo "[跳过] 未安装 Node.js；Python 源码、静态检查和测试已完成。"
 fi
 
-echo "[通过] bili_workspace v0.6.0 源码自检完成。"
+echo "[通过] bili_workspace v0.6.1 源码自检完成。"
