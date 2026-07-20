@@ -11,7 +11,7 @@ set -a
 . "$ENV_FILE"
 set +a
 
-required="CONFIG_DIR MEDIA_DIR CACHE_DIR TEMP_DIR PUID PGID"
+required="CONFIG_DIR USERDATA_DIR MEDIA_DIR PUID PGID"
 for name in $required; do
   eval "value=\${$name:-}"
   if [ -z "$value" ]; then
@@ -42,7 +42,7 @@ if [ "${HTTP_PORT:-3398}" -lt 1 ] || [ "${HTTP_PORT:-3398}" -gt 65535 ]; then
   exit 1
 fi
 
-for path in "$CONFIG_DIR" "$MEDIA_DIR" "$CACHE_DIR" "$TEMP_DIR"; do
+for path in "$CONFIG_DIR" "$USERDATA_DIR" "$MEDIA_DIR"; do
   if [ ! -d "$path" ]; then
     echo "[ERROR] mapped directory does not exist: $path" >&2
     exit 1
@@ -55,9 +55,9 @@ done
 
 if command -v docker >/dev/null 2>&1; then
   if docker compose version >/dev/null 2>&1; then
-    docker compose --env-file "$ENV_FILE" config >/dev/null
+    docker compose --project-directory "$ROOT" --env-file "$ENV_FILE" -f "$ROOT/docker/compose.yaml" config >/dev/null
   elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose --env-file "$ENV_FILE" config >/dev/null
+    docker-compose --project-directory "$ROOT" --env-file "$ENV_FILE" -f "$ROOT/docker/compose.yaml" config >/dev/null
   else
     echo "[ERROR] Docker is installed but Compose is unavailable" >&2
     exit 1
