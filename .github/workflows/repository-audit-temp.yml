@@ -1,6 +1,7 @@
 name: Temporary Repository Layout Audit
 
 on:
+  pull_request:
   push:
     branches:
       - chore/repository-cleanup-v0.6.3
