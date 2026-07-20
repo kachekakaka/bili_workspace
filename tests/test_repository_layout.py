@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -95,3 +96,43 @@ def test_docker_context_excludes_windows_runtime_and_helper_assets() -> None:
     dockerignore = _text(".dockerignore")
     for pattern in ("vendor", "scripts", "*.bat", "requirements/dev.lock"):
         assert pattern in dockerignore
+
+
+def test_tracked_root_layout_stays_small_and_intentional() -> None:
+    allowed_files = {
+        ".dockerignore",
+        ".env.default",
+        ".gitattributes",
+        ".gitignore",
+        "CHANGELOG.md",
+        "README.md",
+        "SECURITY.md",
+        "THIRD_PARTY_NOTICES.md",
+        "pyproject.toml",
+        "start.bat",
+        "update.bat",
+        "verify.bat",
+    }
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked_root_files = {
+        line for line in result.stdout.splitlines() if line and "/" not in line
+    }
+    assert tracked_root_files == allowed_files
+
+    for obsolete in ("Dockerfile", "compose.yaml", "compose.build.yaml"):
+        assert not (ROOT / obsolete).exists()
+    assert (ROOT / "docker" / "Dockerfile").is_file()
+    assert (ROOT / "docker" / "compose.yaml").is_file()
+
+
+def test_completed_plans_are_not_presented_as_pending() -> None:
+    plan = ROOT / "docs" / "plans" / "V0.6.0_多用户搜索与会话方案.md"
+    assert plan.is_file()
+    index = _text("docs/plans/README.md")
+    assert "当前没有未完成的已批准计划" in index
+    assert "已完成计划" in index

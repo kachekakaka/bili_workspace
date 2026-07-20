@@ -9,8 +9,8 @@ on:
       - web/**
       - config/**
       - docker/**
-      - Dockerfile
-      - compose.yaml
+      - docker/Dockerfile
+      - docker/compose.yaml
       - requirements/runtime.lock
       - .github/workflows/docker-image.yml
     tags:
@@ -60,6 +60,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

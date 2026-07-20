@@ -10,7 +10,7 @@ def _text(name: str) -> str:
 
 
 def test_dockerfile_bundles_runtime_and_fixed_bbdown_release():
-    dockerfile = _text("Dockerfile")
+    dockerfile = _text("docker/Dockerfile")
     assert "python:3.13-slim-bookworm" in dockerfile
     assert "BBDOWN_VERSION=1.6.3" in dockerfile
     assert "BBDown_${BBDOWN_VERSION}_${BBDOWN_RELEASE_DATE}_linux-${asset_arch}.zip" in dockerfile
@@ -21,7 +21,7 @@ def test_dockerfile_bundles_runtime_and_fixed_bbdown_release():
 
 
 def test_compose_separates_config_userdata_and_downloads():
-    compose = _text("compose.yaml")
+    compose = _text("docker/compose.yaml")
     for target in ("/data/config", "/data/userdata", "/downloads"):
         assert f"target: {target}" in compose
     assert "target: /data/media" not in compose
@@ -64,15 +64,16 @@ def test_qnap_helper_scripts_are_present_and_hardened():
     start = (ROOT / "docker" / "build-and-start.sh").read_text(encoding="utf-8")
     entry = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
     assert "TRUSTED_HOSTS must not contain *" in verify
-    assert "docker compose --env-file" in verify
+    assert "docker compose --project-directory" in verify
     assert "build --pull" in start
+    assert "docker/compose.yaml" in start
     assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR" in entry
     assert 'exec "$@"' in entry
 
 
 def test_docker_runtime_directories_are_explicit():
-    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    compose = (ROOT / "docker" / "compose.yaml").read_text(encoding="utf-8")
     for value in (
         "BILI_USERDATA_DIR=/data/userdata",
         "BILI_DATABASE_PATH=/data/userdata/bili_workspace.db",
