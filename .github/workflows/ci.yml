@@ -106,6 +106,9 @@ jobs:
           tests/test_userdata.py
           tests/test_v05_persistence.py
           tests/test_index_store.py
+          tests/test_v060_migrations.py
+          tests/test_v060_task_ownership.py
+          tests/test_v060_release.py
 
       - name: Check Windows call chain and Docker configuration
         run: >-
@@ -143,3 +146,101 @@ jobs:
         run: >-
           python -m pytest -q -p no:cacheprovider --tb=short
           tests/test_playwright_layout.py
+
+  release-validation:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'main' || github.head_ref == 'agent/v060-release-validation'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/dev.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.lock
+          python -m pip check
+      - name: Validate V0.6 accounts, ownership, migrations and search limits
+        run: >-
+          python -m pytest -q -p no:cacheprovider --tb=short
+          tests/test_v060_accounts.py
+          tests/test_v060_auth_sessions.py
+          tests/test_v060_auth_races.py
+          tests/test_v060_task_ownership.py
+          tests/test_v060_migrations.py
+          tests/test_search_v060.py
+          tests/test_v060_release.py
+
+  windows-release:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'main' || github.head_ref == 'agent/v060-release-validation'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Clean checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare repository-integrated portable runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          cmd.exe /d /c scripts\windows\prepare-runtime.bat -Force 2>&1 |
+            Tee-Object -FilePath windows-prepare.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
+
+      - name: Test clean clone and in-place upgrade path
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $env:BILI_VERIFY_NO_PAUSE = "1"
+          cmd.exe /d /c verify.bat 2>&1 |
+            Tee-Object -FilePath windows-verify.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
+
+      - name: Upload Windows release logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-${{ github.run_attempt }}
+          path: |
+            windows-prepare.log
+            windows-verify.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  docker-release:
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == 'main' || github.head_ref == 'agent/v060-release-validation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/dev.lock
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.lock
+          python -m pip check
+      - name: Validate Docker persistence and old database upgrade
+        run: >-
+          python -m pytest -q -p no:cacheprovider --tb=short
+          tests/test_v05_docker.py
+          tests/test_v060_migrations.py
+          tests/test_v060_task_ownership.py::test_v3_to_v4_migration_assigns_admin_without_revoking_sessions
+          tests/test_v060_release.py
+      - name: Build release image
+        run: docker build --build-arg TARGETARCH=amd64 -t bili-workspace:v0.6.0 .
+      - name: Smoke application version inside image
+        run: >-
+          docker run --rm --entrypoint python bili-workspace:v0.6.0
+          -c "from app import __version__; assert __version__ == '0.6.0'; print(__version__)"

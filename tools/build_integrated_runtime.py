@@ -145,7 +145,7 @@ def write_internal_manifest(root: Path) -> None:
         rel = path.relative_to(root).as_posix()
         rows.append(f"{sha256_file(path)}  {rel}")
     (root / "runtime_manifest.sha256").write_text(
-        "\n".join(rows) + "\n", encoding="utf-8"
+        "\n".join(rows) + "\n", encoding="utf-8", newline="\n"
     )
 
 

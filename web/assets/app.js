@@ -307,7 +307,7 @@
     state.groups = admin ? (groupsRes?.data?.records || []) : [];
     state.tasks = tasksRes.data || [];
     state.taskSummary = tasksRes.summary || {};
-    $('#brandMode').textContent = `V${state.status.version || '0.5.6'} · ${state.status.server_mode ? 'NAS' : '本地'}`;
+    $('#brandMode').textContent = `V${state.status.version || '0.6.0'} · ${state.status.server_mode ? 'NAS' : '本地'}`;
     const biliBadge = $('#biliBadge');
     if (admin) {
       biliBadge.classList.remove('hidden');

@@ -11,13 +11,13 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_v060_plan_tracks_completed_pr1_to_pr4_without_claiming_release_done() -> None:
+def test_v060_plan_tracks_completed_release() -> None:
     assert PLAN.is_file()
     plan = _text(PLAN)
     docs_index = _text(ROOT / "docs" / "README.md")
     current = _text(ROOT / "docs" / "需求落实清单.md")
 
-    assert "状态：**开发中（PR 1–4 已完成，PR 5 待开发）**" in plan
+    assert "状态：**已完成（PR 1–5 已合并，V0.6.0 已发布）**" in plan
     assert "### PR 1：搜索和布局" in plan
     assert "状态：已完成（PR #17）" in plan
     assert "状态：已完成（PR #18）" in plan
@@ -26,10 +26,11 @@ def test_v060_plan_tracks_completed_pr1_to_pr4_without_claiming_release_done() -
     assert "任务所有权与保留策略" in docs_index
     assert "plans/V0.6.0_多用户搜索与会话方案.md" in docs_index
     assert "账号权限与会话管理" in docs_index
-    assert "PR 5" in docs_index
+    assert "V0.6.0 功能与验收" in docs_index
     assert "每用户最多 10 个有效 Token" in current
     assert "多用户前端" in current
-    assert "最终发布验收仍未完成" in current
+    assert "V0.6.0 发布验收" in current
+    assert "状态：已完成（PR #21）" in plan
 
 
 def test_v060_frozen_limits_and_test_scope_are_documented() -> None:

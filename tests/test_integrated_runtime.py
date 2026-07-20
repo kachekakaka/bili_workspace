@@ -65,7 +65,7 @@ def test_windows_entrypoints_use_repository_integrated_runtime() -> None:
     bootstrap_ps = _text("scripts/windows/bootstrap-portable.ps1")
 
     assert r"vendor\windows\runtime-manifest.json" in prepare
-    assert 'set "PY=%ROOT%\.runtime\python\python.exe"' in prepare
+    assert r'set "PY=%ROOT%\.runtime\python\python.exe"' in prepare
     assert r"scripts\windows\prepare-runtime.bat" in start
     assert r"scripts\windows\prepare-runtime.bat" in verify
     assert "-m tools.server_instance" in start
@@ -77,8 +77,12 @@ def test_windows_entrypoints_use_repository_integrated_runtime() -> None:
     assert "bootstrap-portable.ps1" in bootstrap_cmd
     assert ".venv" not in prepare
     assert "runtime_manifest.sha256" in bootstrap_ps
-    assert "Get-FileHash" in bootstrap_ps
+    assert "Get-FileHash" not in bootstrap_ps
+    assert "System.Security.Cryptography.SHA256" in bootstrap_ps
     assert "BBDown.exe 冒烟测试失败" in bootstrap_ps
+    for entrypoint in (prepare, start, verify):
+        assert 'set "PYTHONUTF8=1"' in entrypoint
+        assert 'set "PYTHONIOENCODING=utf-8"' in entrypoint
 
 
 def test_runtime_builder_workflow_has_write_permission_and_no_lfs_dependency() -> None:
