@@ -137,8 +137,9 @@ def test_userless_v2_local_database_creates_admin_and_migrates_ownership(
 
         with sqlite3.connect(runtime.database_path) as upgraded:
             upgraded.row_factory = sqlite3.Row
-            assert upgraded.execute("PRAGMA user_version").fetchone() == (
-                DATABASE_SCHEMA_VERSION,
+            assert (
+                upgraded.execute("PRAGMA user_version").fetchone()[0]
+                == DATABASE_SCHEMA_VERSION
             )
             assert upgraded.execute("PRAGMA foreign_key_check").fetchall() == []
             admin = upgraded.execute(
@@ -151,19 +152,28 @@ def test_userless_v2_local_database_creates_admin_and_migrates_ownership(
             assert admin["display_name"] == "管理员"
             assert admin["must_change_password"] == 1
             assert admin["created_by"] == "system-default-admin"
-            assert upgraded.execute(
-                "SELECT owner_user_id FROM task_records WHERE id=?",
-                (payload["id"],),
-            ).fetchone() == (admin["id"],)
-            assert upgraded.execute(
-                "SELECT owner_user_id FROM exports WHERE task_id=?",
-                (payload["id"],),
-            ).fetchone() == (admin["id"],)
-            assert upgraded.execute(
-                "SELECT COUNT(*) FROM audit_log "
-                "WHERE user_id=? AND action='auth.default_admin.create'",
-                (admin["id"],),
-            ).fetchone() == (1,)
+            assert (
+                upgraded.execute(
+                    "SELECT owner_user_id FROM task_records WHERE id=?",
+                    (payload["id"],),
+                ).fetchone()[0]
+                == admin["id"]
+            )
+            assert (
+                upgraded.execute(
+                    "SELECT owner_user_id FROM exports WHERE task_id=?",
+                    (payload["id"],),
+                ).fetchone()[0]
+                == admin["id"]
+            )
+            assert (
+                upgraded.execute(
+                    "SELECT COUNT(*) FROM audit_log "
+                    "WHERE user_id=? AND action='auth.default_admin.create'",
+                    (admin["id"],),
+                ).fetchone()[0]
+                == 1
+            )
 
         token, session = store.login(
             "admin",
