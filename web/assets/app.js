@@ -6,22 +6,48 @@
   const esc = value => String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
   const state = {
     auth: null, csrf: '', status: null, groups: [], tasks: [], taskSummary: {},
-    events: null, page: '',
+    events: null, page: '', users: [],
     library: { q: '', groupId: '', sort: 'newest', codec: '', minHeight: 0, watched: '', page: 1, data: null },
   };
-  const NAV = [
+  const ADMIN_NAV = [
     ['dashboard','⌂','概览'], ['download','↓','下载'], ['search','⌕','搜索'],
     ['library','▶','作品库'], ['groups','▣','分组'], ['tasks','≡','任务'],
-    ['account','◎','账号'], ['settings','⚙','设置'],
+    ['users','♙','用户管理'], ['account','◎','账号'], ['settings','⚙','设置'],
   ];
-  const MOBILE_NAV = [NAV[1], NAV[2], NAV[3], NAV[5], ['more','•••','更多']];
+  const USER_NAV = [['download','↓','下载'], ['tasks','≡','任务']];
+  const ADMIN_MOBILE_NAV = [ADMIN_NAV[1], ADMIN_NAV[2], ADMIN_NAV[3], ADMIN_NAV[5], ['more','•••','更多']];
   const TITLES = {
     dashboard:['PRIVATE MEDIA WORKSPACE','概览'], download:['DOWNLOAD & EXPORT','创建下载'],
     search:['SEARCH BILIBILI','搜索作品'], library:['MEDIA LIBRARY','作品库'],
     groups:['COLLECTION MANAGEMENT','分组管理'], tasks:['DOWNLOAD QUEUE','任务中心'],
-    account:['ACCOUNT & QR LOGIN','账号'], settings:['SERVER SETTINGS','设置'], more:['MORE','更多'],
+    users:['USER MANAGEMENT','用户管理'], account:['ACCOUNT & QR LOGIN','账号'],
+    settings:['SERVER SETTINGS','设置'], more:['MORE','更多'],
   };
   const QUALITY_OPTIONS = [[0,'不限制'],[360,'至少 360P'],[480,'至少 480P'],[720,'至少 720P'],[1080,'至少 1080P'],[1440,'至少 2K / 1440P'],[2160,'至少 4K'],[4320,'至少 8K']];
+
+
+  function authUser() {
+    const user = state.auth?.user || {};
+    return {
+      id: String(user.id || ''),
+      username: String(user.username || state.auth?.username || ''),
+      display_name: String(user.display_name || state.auth?.display_name || ''),
+      role: String(user.role || state.auth?.role || 'user'),
+    };
+  }
+  function isAdmin() { return authUser().role === 'admin'; }
+  function defaultPage() { return isAdmin() ? 'dashboard' : 'download'; }
+  function allowedPages() {
+    return new Set(isAdmin()
+      ? ['dashboard','download','search','library','groups','tasks','users','account','settings','more']
+      : ['download','tasks']);
+  }
+  async function logoutCurrentSession() {
+    await api('/api/auth/logout', { method:'POST' });
+    state.csrf = '';
+    state.auth = null;
+    await bootAuth();
+  }
 
   function formatBytes(value) {
     const n = Number(value);
@@ -176,8 +202,13 @@
   }
 
   function renderNav() {
-    $('#desktopNav').innerHTML = NAV.map(([id,icon,label]) => `<a class="nav-item" data-page="${id}" href="#/${id}"><span class="nav-icon">${icon}</span><span>${label}</span></a>`).join('');
-    $('#mobileNav').innerHTML = MOBILE_NAV.map(([id,icon,label]) => `<a class="nav-item" data-page="${id}" href="#/${id}"><span class="nav-icon">${icon}</span><span>${label}</span></a>`).join('');
+    const desktop = isAdmin() ? ADMIN_NAV : USER_NAV;
+    const mobile = isAdmin() ? ADMIN_MOBILE_NAV : USER_NAV;
+    $('#desktopNav').innerHTML = desktop.map(([id,icon,label]) => `<a class="nav-item" data-page="${id}" href="#/${id}"><span class="nav-icon">${icon}</span><span>${label}</span></a>`).join('');
+    $('#mobileNav').innerHTML = mobile.map(([id,icon,label]) => `<a class="nav-item" data-page="${id}" href="#/${id}"><span class="nav-icon">${icon}</span><span>${label}</span></a>`).join('');
+    document.documentElement.style.setProperty('--mobile-nav-items', String(Math.max(1, mobile.length)));
+    const brand = $('.brand');
+    if (brand) brand.href = `#/${defaultPage()}`;
   }
   function setActiveNav(page) {
     $$('.nav-item').forEach(node => node.classList.toggle('active', node.dataset.page === page));
@@ -185,19 +216,110 @@
     $('#pageKicker').textContent = kicker; $('#pageTitle').textContent = title;
   }
 
+  function renderUserMenu() {
+    const root = $('#userMenuRoot');
+    if (!root || !state.auth?.authenticated) return;
+    const user = authUser();
+    root.classList.remove('hidden');
+    $('#userMenuAvatar').textContent = (user.display_name || user.username || '用').slice(0, 1);
+    $('#userMenuName').textContent = user.display_name || user.username;
+    $('#userMenuRole').textContent = isAdmin() ? '管理员' : '普通用户';
+    const panel = $('#userMenuPanel');
+    panel.innerHTML = `<div class="user-menu-identity"><strong>${esc(user.display_name || user.username)}</strong><span>${esc(user.username)}</span><span class="badge ${isAdmin() ? 'brand' : 'neutral'}">${isAdmin() ? '管理员' : '普通用户'}</span></div><div class="user-menu-actions"><button type="button" data-user-action="profile">修改显示名</button><button type="button" data-user-action="password">修改密码</button><button type="button" data-user-action="sessions">登录设备</button><button type="button" class="danger" data-user-action="logout">退出登录</button></div>`;
+    $('[data-user-action="profile"]', panel).onclick = openProfileDialog;
+    $('[data-user-action="password"]', panel).onclick = openPasswordDialog;
+    $('[data-user-action="sessions"]', panel).onclick = openSessionsDialog;
+    $('[data-user-action="logout"]', panel).onclick = async () => {
+      panel.classList.add('hidden');
+      try { await logoutCurrentSession(); } catch (error) { toast(error.message, 'bad'); }
+    };
+  }
+
+  function closeUserMenu() { $('#userMenuPanel')?.classList.add('hidden'); }
+
+  function openProfileDialog() {
+    closeUserMenu();
+    const user = authUser();
+    const modal = showModal('修改显示名', `<form id="profileForm" class="form-grid"><div class="field full"><label>中文显示名</label><input id="profileDisplayName" class="input" value="${esc(user.display_name)}" minlength="2" maxlength="12" required><small>2–12 个汉字，允许重复。</small></div><div class="field full"><button class="btn primary" type="submit">保存显示名</button></div></form>`, {narrow:true});
+    $('#profileForm', modal.root).onsubmit = async event => {
+      event.preventDefault();
+      const button = $('button[type="submit"]', event.currentTarget); button.disabled = true;
+      try {
+        const updated = (await api('/api/auth/profile', {method:'PATCH', body:{display_name:$('#profileDisplayName', modal.root).value}})).data;
+        state.auth.user = {...(state.auth.user || {}), ...updated};
+        state.auth.display_name = updated.display_name;
+        renderUserMenu();
+        modal.close();
+        toast('显示名已更新', 'good');
+      } catch (error) { toast(error.message, 'bad'); }
+      finally { button.disabled = false; }
+    };
+  }
+
+  function openPasswordDialog() {
+    closeUserMenu();
+    const modal = showModal('修改密码', `<form id="menuPasswordForm" class="form-grid"><div class="field full"><label>当前密码</label><input id="menuCurrentPassword" class="input" type="password" autocomplete="current-password" required></div><div class="field full"><label>新密码</label><input id="menuNewPassword" class="input" type="password" minlength="10" maxlength="64" autocomplete="new-password" required></div><div class="field full"><label>再次输入新密码</label><input id="menuConfirmPassword" class="input" type="password" minlength="10" maxlength="64" autocomplete="new-password" required></div><div class="field full"><button class="btn primary" type="submit">修改并撤销其他设备</button></div></form>`, {narrow:true});
+    $('#menuPasswordForm', modal.root).onsubmit = async event => {
+      event.preventDefault();
+      const next = $('#menuNewPassword', modal.root).value;
+      if (next !== $('#menuConfirmPassword', modal.root).value) { toast('两次输入的新密码不一致', 'bad'); return; }
+      const button = $('button[type="submit"]', event.currentTarget); button.disabled = true;
+      try {
+        const changed = (await api('/api/auth/password', {method:'POST', body:{current_password:$('#menuCurrentPassword', modal.root).value, new_password:next}})).data;
+        state.auth = changed;
+        state.csrf = changed.csrf_token || '';
+        renderNav(); renderUserMenu();
+        modal.close();
+        toast(`密码已更新，已撤销 ${changed.other_sessions_revoked || 0} 个其他会话`, 'good');
+      } catch (error) { toast(error.message, 'bad'); }
+      finally { button.disabled = false; }
+    };
+  }
+
+  async function openSessionsDialog() {
+    closeUserMenu();
+    const modal = showModal('登录设备', '<div class="loading-card">正在读取会话…</div>');
+    const render = async () => {
+      try {
+        const data = (await api('/api/auth/sessions')).data || {};
+        const items = data.items || [];
+        $('.modal-body', modal.root).innerHTML = `<div class="toolbar spread" style="margin-bottom:12px"><span class="metric-foot">有效会话 ${items.length} / ${data.limit || 10}</span><button type="button" id="revokeOtherSessions" class="btn danger small">退出其他设备</button></div><div class="session-list">${items.map(item => `<article class="session-card ${item.current ? 'current' : ''}"><div><strong>${esc(item.current ? '当前设备' : (item.user_agent || '未知浏览器'))}</strong><div class="session-meta"><span>IP：${esc(item.remote_addr || '-')}</span><span>登录：${esc(formatDate(item.created_at))}</span><span>最近连接：${esc(formatDate(item.last_seen_at))}</span><span>过期：${esc(formatDate(item.expires_at))}</span></div></div>${item.current ? '<span class="badge good">当前</span>' : `<button type="button" class="btn danger small" data-revoke-session="${esc(item.id)}">撤销</button>`}</article>`).join('') || '<div class="empty">没有有效会话</div>'}</div>`;
+        $('#revokeOtherSessions', modal.root).onclick = async () => {
+          if (!confirm('退出除当前设备外的所有设备吗？')) return;
+          try { const result = await api('/api/auth/sessions/revoke-others', {method:'POST'}); toast(`已撤销 ${result.data.revoked || 0} 个会话`, 'good'); await render(); } catch (error) { toast(error.message, 'bad'); }
+        };
+        $$('[data-revoke-session]', modal.root).forEach(button => { button.onclick = async () => {
+          if (!confirm('撤销这个登录设备吗？')) return;
+          try { await api(`/api/auth/sessions/${encodeURIComponent(button.dataset.revokeSession)}`, {method:'DELETE'}); toast('会话已撤销', 'good'); await render(); } catch (error) { toast(error.message, 'bad'); }
+        }; });
+      } catch (error) { $('.modal-body', modal.root).innerHTML = `<div class="notice bad">${esc(error.message)}</div>`; }
+    };
+    await render();
+  }
+
   async function refreshGlobals() {
-    const [statusRes, groupsRes, tasksRes] = await Promise.all([
-      api('/api/status'), api('/api/groups'), api('/api/tasks'),
-    ]);
-    state.status = statusRes.data;
-    state.groups = groupsRes.data.records || [];
+    const admin = isAdmin();
+    const requests = admin
+      ? [api('/api/status'), api('/api/groups'), api('/api/tasks')]
+      : [api('/api/status'), null, api('/api/tasks')];
+    const [statusRes, groupsRes, tasksRes] = await Promise.all(requests);
+    state.status = statusRes.data || {};
+    state.groups = admin ? (groupsRes?.data?.records || []) : [];
     state.tasks = tasksRes.data || [];
     state.taskSummary = tasksRes.summary || {};
-    $('#brandMode').textContent = `V${statusRes.data.version} · ${statusRes.data.server_mode ? 'NAS' : '本地'}`;
-    $('#biliBadge').className = `badge ${statusRes.data.login_state === 'valid' ? 'good' : statusRes.data.login_state === 'unknown' ? 'warn' : 'neutral'}`;
-    $('#biliBadge').textContent = statusRes.data.login_state === 'valid' ? 'B站已登录' : statusRes.data.login_state === 'unknown' ? '登录状态未知' : 'B站未登录';
-    $('#connectionDot').className = 'dot good'; $('#connectionText').textContent = '服务已连接';
+    $('#brandMode').textContent = `V${state.status.version || '0.5.6'} · ${state.status.server_mode ? 'NAS' : '本地'}`;
+    const biliBadge = $('#biliBadge');
+    if (admin) {
+      biliBadge.classList.remove('hidden');
+      biliBadge.className = `badge ${state.status.login_state === 'valid' ? 'good' : state.status.login_state === 'unknown' ? 'warn' : 'neutral'}`;
+      biliBadge.textContent = state.status.login_state === 'valid' ? 'B站已登录' : state.status.login_state === 'unknown' ? '登录状态未知' : 'B站未登录';
+    } else {
+      biliBadge.classList.add('hidden');
+    }
+    $('#connectionDot').className = 'dot good';
+    $('#connectionText').textContent = '服务已连接';
     $('#logoutButton').classList.toggle('hidden', !state.auth?.required);
+    renderUserMenu();
   }
 
   function startEvents() {
@@ -207,7 +329,13 @@
       try {
         const payload = JSON.parse(event.data); state.tasks = payload.tasks || []; state.taskSummary = payload.summary || {};
         $('#connectionDot').className = 'dot good'; $('#connectionText').textContent = '实时连接';
-        if (state.page === 'tasks') renderTaskListOnly();
+        const enhancedTasks = window.BiliEnhancements?.state?.tasks;
+        if (enhancedTasks) {
+          enhancedTasks.data = payload.tasks || [];
+          enhancedTasks.summary = payload.summary || {};
+          enhancedTasks.grouped = [];
+        }
+        if (state.page === 'tasks' && window.BiliEnhancements?.taskPage) window.BiliEnhancements.taskPage.renderTaskResults();
         if (state.page === 'dashboard') updateDashboardMetrics();
       } catch (_) {}
     });
@@ -217,8 +345,16 @@
   async function bootApp() {
     renderNav();
     $('#logoutButton').onclick = async () => {
-      try { await api('/api/auth/logout', { method:'POST' }); state.csrf=''; await bootAuth(); }
+      try { await logoutCurrentSession(); }
       catch (error) { toast(error.message,'bad'); }
+    };
+    const userMenuButton = $('#userMenuButton');
+    if (userMenuButton) userMenuButton.onclick = event => {
+      event.stopPropagation();
+      const panel = $('#userMenuPanel');
+      const opening = panel.classList.contains('hidden');
+      panel.classList.toggle('hidden', !opening);
+      userMenuButton.setAttribute('aria-expanded', opening ? 'true' : 'false');
     };
     $('#refreshButton').onclick = async () => {
       try { await refreshGlobals(); await route(true); toast('已刷新','good'); }
@@ -226,7 +362,8 @@
     };
     try { await refreshGlobals(); } catch (error) { toast(error.message,'bad'); }
     startEvents();
-    if (!location.hash) location.hash = '#/dashboard';
+    const requested = (location.hash.replace(/^#\//,'').split('?')[0] || '');
+    if (!requested || !allowedPages().has(requested)) location.hash = `#/${defaultPage()}`;
     await route(true);
   }
 
@@ -237,12 +374,31 @@
   }
 
   async function route(force = false) {
-    const page = (location.hash.replace(/^#\//,'').split('?')[0] || 'dashboard');
+    const requested = (location.hash.replace(/^#\//,'').split('?')[0] || defaultPage());
+    const page = allowedPages().has(requested) ? requested : defaultPage();
+    if (page !== requested) {
+      location.hash = `#/${page}`;
+      return;
+    }
     if (!force && page === state.page) return;
-    state.page = page; setActiveNav(page);
-    const root = $('#pageRoot'); root.innerHTML = '<div class="loading-card">正在载入…</div>';
+    state.page = page;
+    setActiveNav(page);
+    const root = $('#pageRoot');
+    root.innerHTML = '<div class="loading-card">正在载入…</div>';
     try {
-      const renderer = ({dashboard:renderDashboard,download:renderDownload,search:root=>renderEnhancedPage('search',root),library:renderLibrary,groups:renderGroups,tasks:renderTasks,account:renderAccount,settings:renderSettings,more:renderMore})[page] || renderDashboard;
+      const renderer = ({
+        dashboard:renderDashboard,
+        download:renderDownload,
+        search:node=>renderEnhancedPage('search',node),
+        library:renderLibrary,
+        groups:renderGroups,
+        tasks:node=>renderEnhancedPage('tasks',node),
+        users:renderUsers,
+        account:renderAccount,
+        settings:renderSettings,
+        more:renderMore,
+      })[page];
+      if (!renderer) throw new Error('页面不存在');
       await renderer(root);
     } catch (error) {
       root.innerHTML = `<div class="notice bad">${esc(error.message)}</div>`;
@@ -296,35 +452,38 @@
   }
 
   async function renderDownload(root) {
-    const defaultGroup = state.groups.find(item => item.display_name === state.status.default_group) || state.groups[0];
-    root.innerHTML = `<section class="card"><div class="card-head"><div><h2>创建下载</h2><p>保存到 NAS 会进入媒体库；导出到当前设备只使用专用临时目录。</p></div></div>
-      <form id="downloadForm" class="form-grid">
-        <div class="field full"><label>作品链接或 BV / av / ep / ss 编号</label><textarea id="downloadTargets" class="textarea" placeholder="每行一个，例如：&#10;BV1xxxxxxxxx&#10;https://www.bilibili.com/video/BV1xxxxxxxxx" required></textarea></div>
-        <div class="field full"><label>下载目标</label><div class="segmented" id="destinationSegment"><button type="button" data-value="library" class="active">保存到 NAS 媒体库</button><button type="button" data-value="device">导出到当前设备</button></div><input type="hidden" id="downloadDestination" value="library"></div>
-        <div class="field" id="downloadGroupField"><label>保存分组</label><div class="toolbar"><select id="downloadGroup" class="select" style="flex:1">${groupOptions(defaultGroup?.id||'')}</select><button type="button" class="btn" id="newGroupButton">＋ 新建</button></div><small>分组显示名可重命名，不会移动已有大文件。</small></div>
-        <div class="field"><label>最低清晰度</label><select id="downloadQuality" class="select">${qualityOptions(state.status.default_min_height)}</select><small>预检或实际码流低于门槛时会失败，不会保存低清文件。</small></div>
-        <div class="field"><label>重新下载策略</label><label style="font-weight:500"><input id="downloadForce" type="checkbox"> 强制重新下载并事务替换旧文件</label></div>
-        <div class="field full"><div id="destinationNotice" class="notice">成品长期保存在 NAS，可在作品库中播放、下载到手机或移动分组。</div></div>
-        <div class="field full"><button class="btn primary" type="submit">加入下载队列</button></div>
-      </form></section>`;
-    $$('#destinationSegment button',root).forEach(button => button.onclick = () => {
-      $$('#destinationSegment button',root).forEach(item=>item.classList.toggle('active',item===button));
-      $('#downloadDestination').value=button.dataset.value;
-      const device=button.dataset.value==='device';
-      $('#downloadGroupField').classList.toggle('hidden',device);
-      $('#downloadForce').closest('.field').classList.toggle('hidden',device);
-      $('#destinationNotice').className=`notice ${device?'warn':''}`;
-      $('#destinationNotice').textContent=device?'NAS 完成下载与混流后提供一次性浏览器下载；服务器完整发送后立即删除临时文件，中断则保留到过期时间。':'成品长期保存在 NAS，可在作品库中播放、下载到手机或移动分组。';
-    });
-    $('#newGroupButton').onclick=()=>createGroupDialog(group=>{ $('#downloadGroup').innerHTML=groupOptions(group.id); });
-    $('#downloadForm').onsubmit=async event=>{
-      event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget);button.disabled=true;
-      const lines=$('#downloadTargets').value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean);
-      const bvids=lines.filter(v=>/^BV[0-9A-Za-z]+$/i.test(v)); const urls=lines.filter(v=>!/^BV[0-9A-Za-z]+$/i.test(v));
-      try{
-        const result=await api('/api/download',{method:'POST',body:{urls,bvids,items:[],force:$('#downloadForce').checked,group_id:$('#downloadGroup').value,group:'',destination:$('#downloadDestination').value,min_height:Number($('#downloadQuality').value)}});
-        toast(`已创建 ${result.total} 个任务`,'good');location.hash='#/tasks';
-      }catch(error){toast(error.message,'bad');}finally{button.disabled=false;}
+    const normalUser = !isAdmin();
+    const defaultGroup = state.groups.find(item => item.display_name === state.status?.default_group) || state.groups[0];
+    if (normalUser) {
+      root.innerHTML = `<section class="card normal-user-download" data-user-download="1"><div class="card-head"><div><h2>创建下载</h2><p>提交作品链接或编号，服务器完成下载后提供给当前浏览器设备。</p></div></div><form id="downloadForm" class="form-grid"><div class="field full"><label>作品链接或 BV / av / ep / ss 编号</label><textarea id="downloadTargets" class="textarea" placeholder="每行一个，例如：&#10;BV1xxxxxxxxx&#10;https://www.bilibili.com/video/BV1xxxxxxxxx" required></textarea></div><div class="field full"><label>最低清晰度</label><select id="downloadQuality" class="select">${qualityOptions(state.status?.default_min_height || 1080)}</select><small>预检或实际码流低于门槛时任务会失败，不会静默保存低清文件。</small></div><div class="field full"><div id="destinationNotice" class="notice warn">下载完成后导出到当前设备，不会进入管理员媒体库。</div></div><div class="field full"><button class="btn primary" type="submit">加入下载队列</button></div></form></section>`;
+    } else {
+      root.innerHTML = `<section class="card"><div class="card-head"><div><h2>创建下载</h2><p>保存到 NAS 会进入媒体库；导出到当前设备只使用专用临时目录。</p></div></div><form id="downloadForm" class="form-grid"><div class="field full"><label>作品链接或 BV / av / ep / ss 编号</label><textarea id="downloadTargets" class="textarea" placeholder="每行一个，例如：&#10;BV1xxxxxxxxx&#10;https://www.bilibili.com/video/BV1xxxxxxxxx" required></textarea></div><div class="field full"><label>下载目标</label><div class="segmented" id="destinationSegment"><button type="button" data-value="library" class="active">保存到 NAS 媒体库</button><button type="button" data-value="device">导出到当前设备</button></div><input type="hidden" id="downloadDestination" value="library"></div><div class="field" id="downloadGroupField"><label>保存分组</label><div class="toolbar"><select id="downloadGroup" class="select" style="flex:1">${groupOptions(defaultGroup?.id || '')}</select><button type="button" class="btn" id="newGroupButton">＋ 新建</button></div><small>分组显示名可重命名，不会移动已有大文件。</small></div><div class="field"><label>最低清晰度</label><select id="downloadQuality" class="select">${qualityOptions(state.status?.default_min_height || 1080)}</select><small>预检或实际码流低于门槛时会失败，不会保存低清文件。</small></div><div class="field"><label>重新下载策略</label><label style="font-weight:500"><input id="downloadForce" type="checkbox"> 强制重新下载并事务替换旧文件</label></div><div class="field full"><div id="destinationNotice" class="notice">成品长期保存在 NAS，可在作品库中播放、下载到手机或移动分组。</div></div><div class="field full"><button class="btn primary" type="submit">加入下载队列</button></div></form></section>`;
+      $$('#destinationSegment button', root).forEach(button => button.onclick = () => {
+        $$('#destinationSegment button', root).forEach(item => item.classList.toggle('active', item === button));
+        $('#downloadDestination').value = button.dataset.value;
+        const device = button.dataset.value === 'device';
+        $('#downloadGroupField').classList.toggle('hidden', device);
+        $('#downloadForce').closest('.field').classList.toggle('hidden', device);
+        $('#destinationNotice').className = `notice ${device ? 'warn' : ''}`;
+        $('#destinationNotice').textContent = device ? 'NAS 完成下载与混流后提供一次性浏览器下载；服务器完整发送后立即删除临时文件，中断则保留到过期时间。' : '成品长期保存在 NAS，可在作品库中播放、下载到手机或移动分组。';
+      });
+      $('#newGroupButton').onclick = () => createGroupDialog(group => { $('#downloadGroup').innerHTML = groupOptions(group.id); });
+    }
+    $('#downloadForm').onsubmit = async event => {
+      event.preventDefault();
+      const button = $('button[type="submit"]', event.currentTarget); button.disabled = true;
+      const lines = $('#downloadTargets').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      const bvids = lines.filter(value => /^BV[0-9A-Za-z]+$/i.test(value));
+      const urls = lines.filter(value => !/^BV[0-9A-Za-z]+$/i.test(value));
+      const body = normalUser
+        ? {urls,bvids,items:[],force:false,group_id:'',group:'',destination:'device',min_height:Number($('#downloadQuality').value)}
+        : {urls,bvids,items:[],force:$('#downloadForce').checked,group_id:$('#downloadGroup').value,group:'',destination:$('#downloadDestination').value,min_height:Number($('#downloadQuality').value)};
+      try {
+        const result = await api('/api/download', {method:'POST', body});
+        $('#downloadTargets').value = '';
+        toast(`已创建 ${result.total} 个任务，可在任务页查看进度`, 'good');
+      } catch (error) { toast(error.message, 'bad'); }
+      finally { button.disabled = false; }
     };
   }
 
@@ -422,6 +581,96 @@
   }
   async function openTaskLog(taskId){const modal=showModal('任务日志','<div class="loading-card">正在读取日志…</div>');try{const result=await api(`/api/tasks/${encodeURIComponent(taskId)}/log?tail=200000`);$('.modal-body',modal.root).innerHTML=`<div class="toolbar" style="margin-bottom:10px"><a class="btn small" href="/api/tasks/${encodeURIComponent(taskId)}/log/download">下载完整日志</a><button id="copyLog" class="btn small">复制</button></div><pre class="log-box">${esc(result.data.text||'暂无日志')}</pre>`;$('#copyLog',modal.root).onclick=async()=>{try{await navigator.clipboard.writeText(result.data.text||'');toast('日志已复制','good')}catch(_){toast('浏览器不允许复制','bad')}}}catch(error){$('.modal-body',modal.root).innerHTML=`<div class="notice bad">${esc(error.message)}</div>`}}
 
+
+  function userLabel(user) {
+    return `${user.display_name || user.username}（${user.username}）`;
+  }
+
+  function userStatusBadge(user) {
+    if (user.role === 'admin') return '<span class="badge brand">管理员</span>';
+    if (user.disabled) return '<span class="badge bad">已禁用</span>';
+    if (user.must_change_password) return '<span class="badge warn">待改密</span>';
+    return '<span class="badge good">已启用</span>';
+  }
+
+  function userActionButtons(user) {
+    const admin = user.role === 'admin';
+    return `<div class="user-actions"><button type="button" class="btn small" data-user-edit="${esc(user.id)}">改显示名</button>${admin ? '' : `<button type="button" class="btn small" data-user-toggle="${esc(user.id)}">${user.disabled ? '启用' : '禁用'}</button><button type="button" class="btn small" data-user-reset="${esc(user.id)}">重置密码</button><button type="button" class="btn small" data-user-revoke="${esc(user.id)}">撤销会话</button><button type="button" class="btn primary small" data-user-tasks="${esc(user.id)}">查看任务</button>`}</div>`;
+  }
+
+  function userTableRows(users) {
+    return users.map(user => `<tr><td><strong>${esc(user.display_name || user.username)}</strong><small>${esc(user.username)}</small></td><td>${userStatusBadge(user)}</td><td>${Number(user.active_session_count || 0)}</td><td>${esc(formatDate(user.last_login_at))}</td><td>${esc(formatDate(user.created_at, true))}</td><td>${userActionButtons(user)}</td></tr>`).join('');
+  }
+
+  function userCards(users) {
+    return users.map(user => `<article class="user-card"><div class="user-card-head"><div><strong>${esc(user.display_name || user.username)}</strong><small>${esc(user.username)}</small></div>${userStatusBadge(user)}</div><div class="user-card-meta"><span>有效会话：${Number(user.active_session_count || 0)}</span><span>最后登录：${esc(formatDate(user.last_login_at))}</span><span>创建时间：${esc(formatDate(user.created_at, true))}</span></div>${userActionButtons(user)}</article>`).join('');
+  }
+
+  async function loadUsers() {
+    const result = await api('/api/admin/users');
+    state.users = result.data?.items || [];
+    return state.users;
+  }
+
+  async function renderUsers(root) {
+    if (!isAdmin()) { location.hash = '#/download'; return; }
+    const users = await loadUsers();
+    root.innerHTML = `<section class="card"><div class="card-head"><div><h2>用户管理</h2><p>创建普通用户、管理登录设备和查看用户任务。V0.6.0 只允许一个启用的管理员。</p></div><button type="button" id="createUserButton" class="btn primary">＋ 创建用户</button></div><div class="notice">登录账号创建后不可修改；中文显示名允许重复。禁用用户会立即撤销其全部网站会话，已有运行任务不会被自动取消。</div></section><section class="card user-table-shell" style="margin-top:18px"><div class="user-table-scroll"><table class="user-table"><thead><tr><th>用户</th><th>状态</th><th>有效会话</th><th>最后登录</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${userTableRows(users)}</tbody></table></div></section><section class="user-card-list">${userCards(users)}</section>`;
+    $('#createUserButton').onclick = () => openCreateUserDialog(root);
+    bindUserActions(root);
+  }
+
+  function openCreateUserDialog(pageRoot) {
+    const modal = showModal('创建普通用户', `<form id="createUserForm" class="form-grid"><div class="field full"><label>登录账号</label><input id="createUsername" class="input" minlength="3" maxlength="32" autocomplete="off" required><small>以英文字母开头，只允许字母、数字、点、下划线和短横线。</small></div><div class="field full"><label>中文显示名</label><input id="createDisplayName" class="input" minlength="2" maxlength="12" required></div><div class="field full"><label>临时密码</label><input id="createTemporaryPassword" class="input" type="password" minlength="10" maxlength="64" autocomplete="new-password" required><small>用户首次登录后必须修改；至少包含英文字母和数字。</small></div><div class="field full"><button type="submit" class="btn primary">创建用户</button></div></form>`, {narrow:true});
+    $('#createUserForm', modal.root).onsubmit = async event => {
+      event.preventDefault();
+      const button = $('button[type="submit"]', event.currentTarget); button.disabled = true;
+      try {
+        await api('/api/admin/users', {method:'POST', body:{username:$('#createUsername', modal.root).value, display_name:$('#createDisplayName', modal.root).value, temporary_password:$('#createTemporaryPassword', modal.root).value}});
+        modal.close(); toast('普通用户已创建', 'good'); await renderUsers(pageRoot);
+      } catch (error) { toast(error.message, 'bad'); }
+      finally { button.disabled = false; }
+    };
+  }
+
+  function bindUserActions(root) {
+    $$('[data-user-edit]', root).forEach(button => { button.onclick = async () => {
+      const user = state.users.find(item => String(item.id) === String(button.dataset.userEdit));
+      if (!user) return;
+      const value = prompt(`修改 ${userLabel(user)} 的中文显示名：`, user.display_name || '');
+      if (!value || value === user.display_name) return;
+      try { await api(`/api/admin/users/${encodeURIComponent(user.id)}`, {method:'PATCH', body:{display_name:value}}); toast('显示名已更新', 'good'); await renderUsers(root); }
+      catch (error) { toast(error.message, 'bad'); }
+    }; });
+    $$('[data-user-toggle]', root).forEach(button => { button.onclick = async () => {
+      const user = state.users.find(item => String(item.id) === String(button.dataset.userToggle));
+      if (!user) return;
+      const disabled = !user.disabled;
+      if (!confirm(`${disabled ? '禁用' : '启用'} ${userLabel(user)}？${disabled ? ' 该用户全部会话会立即失效。' : ''}`)) return;
+      try { await api(`/api/admin/users/${encodeURIComponent(user.id)}`, {method:'PATCH', body:{disabled}}); toast(disabled ? '用户已禁用' : '用户已启用', 'good'); await renderUsers(root); }
+      catch (error) { toast(error.message, 'bad'); }
+    }; });
+    $$('[data-user-reset]', root).forEach(button => { button.onclick = async () => {
+      const user = state.users.find(item => String(item.id) === String(button.dataset.userReset));
+      if (!user) return;
+      const password = prompt(`为 ${userLabel(user)} 设置临时密码（10–64 位，含字母和数字）：`);
+      if (!password) return;
+      try { const result = await api(`/api/admin/users/${encodeURIComponent(user.id)}/reset-password`, {method:'POST', body:{temporary_password:password}}); toast(`临时密码已重置，撤销 ${result.data?.sessions_revoked || 0} 个会话`, 'good'); await renderUsers(root); }
+      catch (error) { toast(error.message, 'bad'); }
+    }; });
+    $$('[data-user-revoke]', root).forEach(button => { button.onclick = async () => {
+      const user = state.users.find(item => String(item.id) === String(button.dataset.userRevoke));
+      if (!user || !confirm(`撤销 ${userLabel(user)} 的全部登录会话吗？`)) return;
+      try { const result = await api(`/api/admin/users/${encodeURIComponent(user.id)}/revoke-sessions`, {method:'POST'}); toast(`已撤销 ${result.data?.revoked || 0} 个会话`, 'good'); await renderUsers(root); }
+      catch (error) { toast(error.message, 'bad'); }
+    }; });
+    $$('[data-user-tasks]', root).forEach(button => { button.onclick = () => {
+      const enhanced = window.BiliEnhancements;
+      if (enhanced?.state?.tasks) enhanced.state.tasks.ownerUserId = button.dataset.userTasks || '';
+      location.hash = '#/tasks';
+    }; });
+  }
+
   async function renderAccount(root){
     const result=await api('/api/status?refresh_login=true');state.status=result.data;
     const passwordPanel=state.auth?.required?`<form id="passwordForm" class="form-grid" style="margin-top:16px"><div class="field full"><label>当前密码</label><input id="currentPassword" class="input" type="password" autocomplete="current-password" required></div><div class="field"><label>新密码</label><input id="newPassword" class="input" type="password" autocomplete="new-password" minlength="10" required></div><div class="field"><label>确认新密码</label><input id="confirmPassword" class="input" type="password" autocomplete="new-password" minlength="10" required></div><div class="field full"><button class="btn primary" type="submit">更换密码并撤销其他会话</button></div></form>`:'';
@@ -447,5 +696,12 @@
   }
 
   window.addEventListener('hashchange',()=>route());
+  document.addEventListener('click', event => {
+    const root = $('#userMenuRoot');
+    if (root && !root.contains(event.target)) {
+      closeUserMenu();
+      $('#userMenuButton')?.setAttribute('aria-expanded', 'false');
+    }
+  });
   document.addEventListener('DOMContentLoaded',()=>bootAuth().catch(error=>{toast(error.message,'bad');$('#authRoot').classList.remove('hidden');$('#authRoot').innerHTML=`<section class="auth-card"><div class="notice bad">${esc(error.message)}</div></section>`}));
 })();

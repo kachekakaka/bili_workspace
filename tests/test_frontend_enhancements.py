@@ -60,11 +60,11 @@ def test_enhanced_frontend_exposes_requested_controls():
     ):
         assert token in library
     for token in (
-        "enhTaskQueryField",
-        "按标题",
-        "按 BV / 编号",
-        "按分组",
-        "按错误 / 进度",
+        "enhTaskOwner",
+        "enhTaskSort",
+        "enhTaskDirection",
+        "按用户分组显示",
+        "owner_user_id",
         "全部重试失败",
         "当前大小",
         "speed_text",

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2026.07.19.1';
+  const VERSION = '2026.07.20.1';
   const ENHANCED_PAGES = new Set(['search', 'library', 'tasks']);
   const AUTO_RENDER_PAGES = new Set(['library', 'tasks']);
   const QUALITY_OPTIONS = [
@@ -22,6 +22,7 @@
 
   const state = {
     csrf: '',
+    auth: null,
     contextLoadedAt: 0,
     status: null,
     groups: [],
@@ -41,8 +42,9 @@
       q: '', groupId: '', sort: 'newest', codec: '', minHeight: 0, watched: '', tag: '',
     },
     tasks: {
-      data: [], summary: {}, selected: new Set(), eventSource: null,
-      status: '', destination: '', q: '',
+      data: [], summary: {}, grouped: [], selected: new Set(), eventSource: null, users: [],
+      status: '', destination: '', q: '', ownerUserId: '', sort: 'created_at',
+      direction: 'desc', groupByUser: false,
     },
   };
 
@@ -161,20 +163,34 @@
     return payload;
   }
 
+  function isAdmin() {
+    const user = state.auth?.user || {};
+    return String(user.role || state.auth?.role || 'user') === 'admin';
+  }
+
   async function ensureContext(force = false) {
     const now = Date.now();
-    if (!force && state.status && now - state.contextLoadedAt < 60_000) return;
-    const auth = await api('/api/auth/status');
-    state.csrf = auth.data?.csrf_token || '';
-    const [statusResponse, groupsResponse, tagsResponse] = await Promise.all([
-      api('/api/status'), api('/api/groups'), api('/api/enhancements/tags'),
-    ]);
+    if (!force && state.status && state.auth && now - state.contextLoadedAt < 60_000) return;
+    const authResponse = await api('/api/auth/status');
+    state.auth = authResponse.data || {};
+    state.csrf = state.auth.csrf_token || '';
+    const statusResponse = await api('/api/status');
     state.status = statusResponse.data || {};
-    state.groups = groupsResponse.data?.records || [];
-    state.tags = tagsResponse.data?.items || [];
+    if (isAdmin()) {
+      const [groupsResponse, tagsResponse] = await Promise.all([
+        api('/api/groups'), api('/api/enhancements/tags'),
+      ]);
+      state.groups = groupsResponse.data?.records || [];
+      state.tags = tagsResponse.data?.items || [];
+    } else {
+      state.groups = [];
+      state.tags = [];
+      state.search.destination = 'device';
+      state.search.groupId = '';
+    }
     state.contextLoadedAt = now;
 
-    if (!state.search.groupId || !state.groups.some(group => group.id === state.search.groupId)) {
+    if (isAdmin() && (!state.search.groupId || !state.groups.some(group => group.id === state.search.groupId))) {
       const preferred = state.groups.find(group => group.display_name === state.status.default_group) || state.groups[0];
       state.search.groupId = preferred?.id || '';
     }
@@ -290,7 +306,7 @@
   window.BiliEnhancements = {
     VERSION, COMMON_QUALITY_LABELS, state, $, $$, esc, sleep, currentPage,
     formatBytes, formatDate, formatPlay, safeColor, qualityOptions, groupOptions,
-    tagOptions, toast, showModal, api, ensureContext, paginationHtml, tagChips,
+    tagOptions, toast, showModal, api, ensureContext, isAdmin, paginationHtml, tagChips,
     mapLimit, updateTagsEverywhere, assignTags, bindTagButtons, register, renderPage, scheduleRender,
   };
 
