@@ -18,9 +18,29 @@
 - [备份、恢复与旧版本迁移](备份恢复与V0.4迁移.md)
 - [发布、更新与回滚流程](发布与回滚流程.md)
 
+## 当前目录边界
+
+Windows / 源码运行目录：
+
+```text
+config/      配置和标签定义
+userdata/    SQLite、任务、索引、日志、缓存和临时状态
+downloads/   永久媒体文件
+```
+
+Docker 容器固定使用：
+
+```text
+/data/config
+/data/userdata
+/downloads
+```
+
+Docker 构建和 Compose 文件统一位于 `docker/`；根目录只保留三个 Windows 用户入口脚本。
+
 ## 开发计划状态
 
-V0.6.0 PR 1–5 已全部完成。
+V0.6.0 PR 1–5 已全部完成。[V0.6.0 冻结方案](plans/V0.6.0_多用户搜索与会话方案.md)仅用于历史追溯。
 
 V0.6.2 UI/UX 修正版已完成开发、自动化测试和发布。
 
@@ -28,4 +48,4 @@ V0.6.2 UI/UX 修正版已完成开发、自动化测试和发布。
 
 ## 历史资料
 
-历史内容集中在 [`archive/`](archive/README.md)。
+历史内容集中在 [`archive/`](archive/README.md)，历史发布报告位于 [`archive/releases/`](archive/releases/)。开发计划状态见 [`plans/`](plans/README.md)。
