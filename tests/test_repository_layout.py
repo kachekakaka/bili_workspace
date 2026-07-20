@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -112,9 +113,16 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
         "update.bat",
         "verify.bat",
     }
-    actual_files = {path.name for path in ROOT.iterdir() if path.is_file()}
-    generated = {".env"}
-    assert actual_files - generated == allowed_files
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked_root_files = {
+        line for line in result.stdout.splitlines() if line and "/" not in line
+    }
+    assert tracked_root_files == allowed_files
 
     for obsolete in ("Dockerfile", "compose.yaml", "compose.build.yaml"):
         assert not (ROOT / obsolete).exists()
