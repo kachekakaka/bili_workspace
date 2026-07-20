@@ -1,0 +1,41 @@
+/* v0.6.2 UI normalization overrides */
+:root {
+  --control-height-sm: 32px;
+  --control-height-md: 40px;
+  --control-height-lg: 48px;
+}
+
+.btn {
+  min-height: var(--control-height-md);
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn.small {
+  min-height: var(--control-height-sm);
+  padding: 0 10px;
+}
+
+.input,
+.select {
+  height: var(--control-height-md);
+  min-height: var(--control-height-md);
+  padding: 0 12px;
+}
+
+.textarea {
+  min-height: 120px;
+}
+
+.icon-button {
+  height: var(--control-height-md);
+  width: var(--control-height-md);
+}
+
+.toolbar .btn,
+.toolbar .input,
+.toolbar .select {
+  height: var(--control-height-md);
+}
