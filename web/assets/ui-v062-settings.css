@@ -42,6 +42,10 @@
   transform: rotate(180deg);
 }
 
+.v062-settings-advanced:not([open]) > .v062-settings-advanced-grid {
+  display: none !important;
+}
+
 .v062-settings-advanced-grid {
   padding: 14px;
   border-top: 1px solid var(--line);
