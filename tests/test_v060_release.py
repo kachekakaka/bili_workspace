@@ -17,7 +17,7 @@ from app.constants import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_VERSION = "20260720-1"
+FRONTEND_VERSION = "20260720-2"
 
 
 def text(path: str) -> str:
