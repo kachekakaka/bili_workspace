@@ -14,14 +14,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Print root entries
+      - name: Build repository audit
         shell: bash
         run: |
-          echo '=== ROOT ENTRIES ==='
-          find . -maxdepth 1 -mindepth 1 -printf '%f\n' | sort
-          echo '=== TRACKED ROOT FILES ==='
-          git ls-files | awk -F/ 'NF == 1' | sort
-          echo '=== TRACKED TOP LEVEL ==='
-          git ls-files | awk -F/ '{print $1}' | sort -u
-          echo '=== ROOT FILE SIZES ==='
-          find . -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+          {
+            echo '=== ROOT ENTRIES ==='
+            find . -maxdepth 1 -mindepth 1 -printf '%f\n' | sort
+            echo '=== TRACKED ROOT FILES ==='
+            git ls-files | awk -F/ 'NF == 1' | sort
+            echo '=== TRACKED TOP LEVEL ==='
+            git ls-files | awk -F/ '{print $1}' | sort -u
+            echo '=== ROOT FILE SIZES ==='
+            find . -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+            echo '=== ALL TRACKED FILES ==='
+            git ls-files | sort
+          } | tee repository-audit.txt
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-audit
+          path: repository-audit.txt
+          if-no-files-found: error
+          retention-days: 1
