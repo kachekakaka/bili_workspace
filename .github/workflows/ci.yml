@@ -100,7 +100,7 @@ jobs:
       - name: Check Markdown internal links
         run: python tools/check_markdown_links.py
 
-      - name: Test SQLite and userdata migrations
+      - name: Test SQLite, userdata and V0.6.2 UI contracts
         run: >-
           python -m pytest -q -p no:cacheprovider
           tests/test_userdata.py
@@ -110,6 +110,8 @@ jobs:
           tests/test_v060_task_ownership.py
           tests/test_v061_userless_migration.py
           tests/test_v060_release.py
+          tests/test_v062_ui.py
+          tests/test_v062_settings_ui.py
 
       - name: Check Windows call chain and Docker configuration
         run: >-
@@ -141,19 +143,21 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Test fixed desktop, tablet, and phone viewports
+      - name: Test fixed viewports and V0.6.2 interactions
         env:
           BILI_RUN_PLAYWRIGHT: "1"
         run: >-
           python -m pytest -q -p no:cacheprovider --tb=short
           tests/test_playwright_layout.py
+          tests/test_v062_ui_playwright.py
 
   release-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'main' ||
       github.head_ref == 'agent/v060-release-validation' ||
-      github.head_ref == 'agent/v060-userless-db-migration'
+      github.head_ref == 'agent/v060-userless-db-migration' ||
+      github.head_ref == 'feature/ui-v0.6.2'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -169,7 +173,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.lock
           python -m pip check
-      - name: Validate V0.6 accounts, ownership, migrations and search limits
+      - name: Validate V0.6.2 accounts, ownership, migrations, search and UI limits
         run: >-
           python -m pytest -q -p no:cacheprovider --tb=short
           tests/test_v060_accounts.py
@@ -180,13 +184,16 @@ jobs:
           tests/test_v061_userless_migration.py
           tests/test_search_v060.py
           tests/test_v060_release.py
+          tests/test_v062_ui.py
+          tests/test_v062_settings_ui.py
 
   windows-release:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'main' ||
       github.head_ref == 'agent/v060-release-validation' ||
-      github.head_ref == 'agent/v060-userless-db-migration'
+      github.head_ref == 'agent/v060-userless-db-migration' ||
+      github.head_ref == 'feature/ui-v0.6.2'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -228,7 +235,8 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'main' ||
       github.head_ref == 'agent/v060-release-validation' ||
-      github.head_ref == 'agent/v060-userless-db-migration'
+      github.head_ref == 'agent/v060-userless-db-migration' ||
+      github.head_ref == 'feature/ui-v0.6.2'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -254,8 +262,8 @@ jobs:
           tests/test_v061_userless_migration.py
           tests/test_v060_release.py
       - name: Build release image
-        run: docker build --build-arg TARGETARCH=amd64 -t bili-workspace:v0.6.1 .
+        run: docker build --build-arg TARGETARCH=amd64 -t bili-workspace:v0.6.2 .
       - name: Smoke application version inside image
         run: >-
-          docker run --rm --entrypoint python bili-workspace:v0.6.1
-          -c "from app import __version__; assert __version__ == '0.6.1'; print(__version__)"
+          docker run --rm --entrypoint python bili-workspace:v0.6.2
+          -c "from app import __version__; assert __version__ == '0.6.2'; print(__version__)"
