@@ -17,7 +17,7 @@ from app.constants import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_VERSION = "20260720-1"
+FRONTEND_VERSION = "20260720-2"
 
 
 def text(path: str) -> str:
@@ -25,7 +25,7 @@ def text(path: str) -> str:
 
 
 def test_v060_version_and_frozen_constants() -> None:
-    assert APP_VERSION == "0.6.1"
+    assert APP_VERSION == "0.6.2"
     assert DATABASE_SCHEMA_VERSION == 4
     assert MAX_ACTIVE_SESSIONS_PER_USER == 10
     assert NORMAL_USER_TASK_RETENTION_DAYS == 7
@@ -42,13 +42,14 @@ def test_release_versions_are_synchronized() -> None:
     assert f"const LOADED_FRONTEND_VERSION = '{FRONTEND_VERSION}';" in text(
         "web/assets/browser-version.js"
     )
-    assert "# bili_workspace v0.6.1" in text("README.md")
-    assert "## 0.6.1 - 2026-07-20" in text("CHANGELOG.md")
-    assert "bili_workspace v0.6.1" in text("start.bat")
-    assert "v0.6.1 自检全部通过" in text("verify.bat")
-    assert "bili_workspace v0.6.1 源码自检完成" in text(
+    assert "# bili_workspace v0.6.2" in text("README.md")
+    assert "## 0.6.2 - 2026-07-20" in text("CHANGELOG.md")
+    assert "bili_workspace v0.6.2" in text("start.bat")
+    assert "v0.6.2 自检全部通过" in text("verify.bat")
+    assert "bili_workspace v0.6.2 源码自检完成" in text(
         "scripts/dev/verify-source.sh"
     )
+    assert "当前应用版本为 V0.6.2" in text("docs/README.md")
 
 
 def test_release_document_covers_all_delivery_paths() -> None:
@@ -66,6 +67,9 @@ def test_release_document_covers_all_delivery_paths() -> None:
         "390×844",
     ):
         assert token in release
+    ui_review = text("docs/UI_UX_REVIEW_v0.6.2.md")
+    for token in ("普通控件：40px", "统一使用 Modal", "支持搜索的 Select"):
+        assert token in ui_review
 
 
 def test_ci_contains_release_validation_matrix() -> None:
@@ -76,6 +80,8 @@ def test_ci_contains_release_validation_matrix() -> None:
     assert "tests/test_v060_release.py" in workflow
     assert "tests/test_search_v060.py" in workflow
     assert "BILI_RUN_PLAYWRIGHT" in workflow
+    assert "tests/test_v062_ui.py" in workflow
+    assert "tests/test_v062_ui_playwright.py" in workflow
 
 
 def test_migration_backup_is_a_restorable_sqlite_database(tmp_path: Path) -> None:

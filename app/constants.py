@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
 
 WBI_KEY_CACHE_SECONDS = 10 * 60
 SEARCH_PAGE_CACHE_SECONDS = 3 * 60
