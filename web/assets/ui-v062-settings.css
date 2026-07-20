@@ -1,0 +1,55 @@
+.v062-settings-advanced {
+  margin: 2px 0;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.v062-settings-advanced > summary {
+  min-height: 52px;
+  padding: 10px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.v062-settings-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.v062-settings-advanced > summary strong,
+.v062-settings-advanced > summary small {
+  display: block;
+}
+
+.v062-settings-advanced > summary small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.v062-details-caret {
+  font-size: 18px;
+  transition: transform .16s ease;
+}
+
+.v062-settings-advanced[open] .v062-details-caret {
+  transform: rotate(180deg);
+}
+
+.v062-settings-advanced-grid {
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+
+@media (max-width: 820px) {
+  .v062-settings-advanced > summary {
+    min-height: 56px;
+  }
+}
