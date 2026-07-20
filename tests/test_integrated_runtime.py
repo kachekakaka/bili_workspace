@@ -100,17 +100,18 @@ def test_runtime_builder_workflow_has_write_permission_and_no_lfs_dependency() -
 
 
 def test_docker_defaults_to_prebuilt_multi_architecture_ghcr_image() -> None:
-    compose = _text("compose.yaml")
-    build_override = _text("compose.build.yaml")
+    compose = _text("docker/compose.yaml")
     workflow = _text(".github/workflows/docker-image.yml")
     env_default = _text("docker/.env.default")
-    dockerfile = _text("Dockerfile")
+    dockerfile = _text("docker/Dockerfile")
     assert "ghcr.io/kachekakaka/bili_workspace:latest" in compose
-    assert "build:" not in compose
-    assert "build:" in build_override
+    assert "build:" in compose
+    assert "context: .." in compose
+    assert "dockerfile: docker/Dockerfile" in compose
     assert "linux/amd64,linux/arm64" in workflow
     assert "packages: write" in workflow
     assert "BUILD_LOCAL=false" in env_default
+    assert "compose.build.yaml" not in _text("docker/build-and-start.sh")
     assert "requirements/runtime.lock" in dockerfile
 
 
