@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2026.07.20.1';
+  const VERSION = '2026.07.20.2';
   const ENHANCED_PAGES = new Set(['search', 'library', 'tasks']);
   const AUTO_RENDER_PAGES = new Set(['library', 'tasks']);
   const QUALITY_OPTIONS = [

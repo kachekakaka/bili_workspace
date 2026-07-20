@@ -1,8 +1,10 @@
 @echo off
 chcp 65001 >nul
 setlocal EnableExtensions
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
-title bili_workspace v0.5.6
+title bili_workspace v0.6.0
 
 call "%~dp0scripts\windows\prepare-runtime.bat" -Quiet
 if errorlevel 1 goto :failed

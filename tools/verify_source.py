@@ -52,6 +52,7 @@ REQUIRED = (
     "scripts/dev/verify-source.sh",
     "docs/README.md",
     "docs/需求落实清单.md",
+    "docs/V0.6功能与验收.md",
     "docs/产品需求与架构基线.md",
     "docs/发布与回滚流程.md",
     "docs/源文件与恢复清单.md",

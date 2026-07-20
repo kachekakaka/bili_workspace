@@ -1,8 +1,10 @@
 @echo off
 chcp 65001 >nul
 setlocal EnableExtensions
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
-title bili_workspace v0.5.6 - 完整自检
+title bili_workspace v0.6.0 - 完整自检
 
 call "%~dp0scripts\windows\prepare-runtime.bat" -Quiet
 if errorlevel 1 goto :failed
@@ -40,7 +42,7 @@ if errorlevel 1 (
 
 if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
 echo.
-echo ===== v0.5.6 自检全部通过 =====
+echo ===== v0.6.0 自检全部通过 =====
 echo 可直接运行 start.bat。
 if /I "%BILI_VERIFY_NO_PAUSE%"=="1" exit /b 0
 pause
