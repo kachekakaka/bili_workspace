@@ -29,7 +29,8 @@ def test_v060_plan_tracks_completed_release() -> None:
     assert "V0.6.0 功能与验收" in docs_index
     assert "每用户最多 10 个有效 Token" in current
     assert "多用户前端" in current
-    assert "V0.6.0 发布验收" in current
+    assert "V0.6.2 UI/UX 修正版" in current
+    assert "V0.6.2 发布验收" in current
     assert "状态：已完成（PR #21）" in plan
 
 
