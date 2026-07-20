@@ -24,9 +24,8 @@ REQUIRED = (
     "README.md",
     "CHANGELOG.md",
     "THIRD_PARTY_NOTICES.md",
-    "Dockerfile",
-    "compose.yaml",
-    "compose.build.yaml",
+    "docker/Dockerfile",
+    "docker/compose.yaml",
     "requirements/dev.lock",
     "requirements/runtime.lock",
     "app/__main__.py",
@@ -67,6 +66,21 @@ REQUIRED = (
 
 ALLOWED_ROOT_SCRIPTS = {"start.bat", "update.bat", "verify.bat"}
 ROOT_SCRIPT_SUFFIXES = {".bat", ".cmd", ".ps1", ".sh"}
+
+ALLOWED_ROOT_FILES = {
+    ".dockerignore",
+    ".env.default",
+    ".gitattributes",
+    ".gitignore",
+    "CHANGELOG.md",
+    "README.md",
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md",
+    "pyproject.toml",
+    "start.bat",
+    "update.bat",
+    "verify.bat",
+}
 OBSOLETE_RELATIVE = {
     "bootstrap.bat",
     "configure_network.bat",
@@ -88,6 +102,9 @@ OBSOLETE_RELATIVE = {
     "tests/test_release_tools.py",
     "docs/源码仓库与发布包.md",
     "docs/GitHub仓库网页搭建与协作分工指南.md",
+    "Dockerfile",
+    "compose.yaml",
+    "compose.build.yaml",
 }
 FORBIDDEN_NAMES = {
     ".env",
@@ -206,6 +223,15 @@ def _check_root_layout(errors: list[str]) -> None:
         errors.append("根目录包含非用户入口脚本: " + ", ".join(unexpected))
     if missing:
         errors.append("根目录缺少 Windows 用户入口: " + ", ".join(missing))
+
+    root_files = {path.name for path in ROOT.iterdir() if path.is_file()}
+    root_files.discard(".env")
+    extra_files = sorted(root_files - ALLOWED_ROOT_FILES)
+    missing_files = sorted(ALLOWED_ROOT_FILES - root_files)
+    if extra_files:
+        errors.append("根目录包含未归类文件: " + ", ".join(extra_files))
+    if missing_files:
+        errors.append("根目录缺少必要文件: " + ", ".join(missing_files))
 
     obsolete = sorted(rel for rel in OBSOLETE_RELATIVE if (ROOT / rel).exists())
     if obsolete:
