@@ -23,7 +23,7 @@ jobs:
         with:
           ref: agent/v060-userless-db-migration
           fetch-depth: 0
-      - name: Synchronize V0.6.1 metadata
+      - name: Synchronize V0.6.1 non-workflow metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -70,36 +70,22 @@ jobs:
               )
               if marker not in text:
                   raise SystemExit('CHANGELOG header not found')
-              text = text.replace(marker, marker + section, 1)
-              changelog.write_text(text, encoding='utf-8')
-
-          ci_path = Path('.github/workflows/ci.yml')
-          ci = ci_path.read_text(encoding='utf-8')
-          old = "github.head_ref == 'agent/v060-release-validation'"
-          new = (
-              "github.head_ref == 'agent/v060-release-validation' || "
-              "github.head_ref == 'agent/v060-userless-db-migration'"
-          )
-          ci = ci.replace(old, new)
-          if 'tests/test_v061_userless_migration.py' not in ci:
-              focused = '          tests/test_v060_task_ownership.py\n'
-              ci = ci.replace(
-                  focused,
-                  focused + '          tests/test_v061_userless_migration.py\n',
-                  1,
+              changelog.write_text(
+                  text.replace(marker, marker + section, 1),
+                  encoding='utf-8',
               )
-              release = '          tests/test_v060_release.py\n'
-              position = ci.rfind(release)
-              if position < 0:
-                  raise SystemExit('release validation marker not found')
-              position += len(release)
-              ci = ci[:position] + '          tests/test_v061_userless_migration.py\n' + ci[position:]
-          ci_path.write_text(ci, encoding='utf-8')
           PY
 
-          rm -f .github/workflows/apply-v061-metadata.yml
+          git diff --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add \
+            README.md CHANGELOG.md docs/README.md \
+            start.bat verify.bat scripts/dev/verify-source.sh \
+            tests/test_v060_release.py
+          if git diff --cached --quiet; then
+            echo "V0.6.1 metadata is already synchronized."
+            exit 0
+          fi
           git commit -m "Document V0.6.1 migration hotfix"
           git push origin HEAD:agent/v060-userless-db-migration
