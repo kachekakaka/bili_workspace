@@ -262,7 +262,7 @@ jobs:
           tests/test_v061_userless_migration.py
           tests/test_v060_release.py
       - name: Build release image
-        run: docker build --build-arg TARGETARCH=amd64 -t bili-workspace:v0.6.2 .
+        run: docker build -f docker/Dockerfile --build-arg TARGETARCH=amd64 -t bili-workspace:v0.6.2 .
       - name: Smoke application version inside image
         run: >-
           docker run --rm --entrypoint python bili-workspace:v0.6.2
