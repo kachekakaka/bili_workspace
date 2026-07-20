@@ -1,0 +1,33 @@
+name: Restore PR4 Windows batch files
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/multi-user-frontend'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@v4
+        with:
+          ref: agent/multi-user-frontend
+          fetch-depth: 0
+      - name: Restore exact main batch file blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout origin/main -- start.bat update.bat verify.bat
+          rm -f .github/workflows/restore-pr4-batch-files.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Restore Windows batch file line endings"
+          git push origin "HEAD:agent/multi-user-frontend"
