@@ -107,6 +107,45 @@ def search_items(page: int) -> list[dict]:
     ]
 
 
+def task_items() -> list[dict]:
+    return [
+        {
+            "id": "task-admin-1",
+            "owner_user_id": "user-a",
+            "owner_label": "访客甲（guest-a）",
+            "owner": {"id": "user-a", "username": "guest-a", "display_name": "访客甲", "role": "user"},
+            "destination": "device",
+            "destination_label": "设备导出",
+            "key": "BV1TASK00001",
+            "bvid": "BV1TASK00001",
+            "title": "测试任务",
+            "display_title": "测试任务",
+            "status": "success",
+            "created_at": 1_700_000_000,
+            "finished_at": 1_700_000_100,
+            "export_state": "ready",
+            "export_expires_at": 1_800_000_000,
+            "min_height": 1080,
+            "min_height_label": "1080P",
+        }
+    ]
+
+
+def mock_users() -> list[dict]:
+    return [
+        {
+            "id": "admin-user", "username": "administrator", "display_name": "管理员",
+            "role": "admin", "disabled": False, "must_change_password": False,
+            "active_session_count": 1, "last_login_at": 1_700_000_000, "created_at": 1_699_000_000,
+        },
+        {
+            "id": "user-a", "username": "guest-a", "display_name": "访客甲",
+            "role": "user", "disabled": False, "must_change_password": False,
+            "active_session_count": 2, "last_login_at": 1_700_000_050, "created_at": 1_699_500_000,
+        },
+    ]
+
+
 def mock_api(route: Route) -> None:
     parsed = urlparse(route.request.url)
     path = parsed.path
@@ -164,7 +203,21 @@ def mock_api(route: Route) -> None:
             }
         )
     elif path == "/api/tasks":
-        payload = envelope([], summary={"all": 0, "active": 0, "queued": 0, "running": 0, "failed": 0})
+        items = task_items()
+        payload = envelope(items, summary={"all": len(items), "active": 0, "queued": 0, "running": 0, "failed": 0}, grouped=[])
+    elif path == "/api/admin/users":
+        payload = envelope({"items": mock_users()})
+    elif path == "/api/auth/sessions":
+        payload = envelope({
+            "items": [
+                {
+                    "id": "session-current", "current": True, "user_agent": "Chromium 测试浏览器",
+                    "remote_addr": "127.0.0.1", "created_at": 1_700_000_000,
+                    "last_seen_at": 1_700_000_100, "expires_at": 1_800_000_000,
+                }
+            ],
+            "limit": 10,
+        })
     elif path == "/api/enhancements/tags":
         payload = envelope({"items": [{"name": "夯", "color": "#d4a017"}]})
     elif path == "/api/library/summary":
@@ -313,7 +366,7 @@ def test_search_filtering_preload_and_layout(browser: Browser, width: int, heigh
 
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
 def test_current_admin_pages_fit_fixed_viewports(browser: Browser, width: int, height: int) -> None:
-    pages = ["dashboard", "download", "search", "library", "groups", "tasks", "account", "settings"]
+    pages = ["dashboard", "download", "search", "library", "groups", "tasks", "users", "account", "settings"]
     with static_site() as base_url:
         page = browser.new_page(viewport={"width": width, "height": height})
         page.route("**/api/**", mock_api)
@@ -327,11 +380,166 @@ def test_current_admin_pages_fit_fixed_viewports(browser: Browser, width: int, h
             )
             if name in {"search", "library", "tasks"}:
                 page.wait_for_selector(f'[data-enhanced-view="{name}"]')
+            if name == "tasks":
+                assert page.locator("#enhTaskOwner").count() == 1
+                assert "访客甲（guest-a）" in page.locator("#enhTaskOwner").inner_text()
+                assert "用户：访客甲（guest-a）" in page.locator("[data-task-id=task-admin-1]").inner_text()
+            if name == "users":
+                if width <= 820:
+                    assert page.locator(".user-card-list").is_visible()
+                    assert not page.locator(".user-table-shell").is_visible()
+                else:
+                    assert page.locator(".user-table-shell").is_visible()
+                    assert not page.locator(".user-card-list").is_visible()
             assert_no_horizontal_overflow(page)
             assert_visible_controls_do_not_overlap(
                 page,
                 "#pageRoot button, #pageRoot input, #pageRoot select",
             )
+        page.close()
+
+
+@pytest.mark.parametrize(("width", "height"), VIEWPORTS)
+def test_normal_user_has_only_download_and_tasks_at_fixed_viewports(
+    browser: Browser, width: int, height: int
+) -> None:
+    forbidden_requests: list[str] = []
+
+    def user_api(route: Route) -> None:
+        parsed = urlparse(route.request.url)
+        path = parsed.path
+        if path == "/api/events":
+            route.abort()
+            return
+        if path == "/api/auth/status":
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(
+                    envelope(
+                        {
+                            "authenticated": True,
+                            "required": True,
+                            "setup_required": False,
+                            "csrf_token": "user-csrf",
+                            "username": "guest-a",
+                            "display_name": "访客甲",
+                            "role": "user",
+                            "permissions": [
+                                "download:create-device",
+                                "tasks:read-own",
+                                "tasks:write-own",
+                            ],
+                            "must_change_password": False,
+                            "user": {
+                                "id": "user-a",
+                                "username": "guest-a",
+                                "display_name": "访客甲",
+                                "role": "user",
+                            },
+                        }
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
+            return
+        if path == "/api/status":
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(
+                    envelope(
+                        {
+                            "version": "0.5.6",
+                            "server_mode": True,
+                            "default_min_height": 1080,
+                            "active_tasks": 0,
+                            "task_summary": {
+                                "all": 1,
+                                "active": 0,
+                                "queued": 0,
+                                "running": 0,
+                                "failed": 0,
+                            },
+                        }
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
+            return
+        if path == "/api/tasks":
+            items = task_items()
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(
+                    envelope(
+                        items,
+                        summary={
+                            "all": len(items),
+                            "active": 0,
+                            "queued": 0,
+                            "running": 0,
+                            "failed": 0,
+                        },
+                        grouped=[],
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
+            return
+        if path in {"/api/groups", "/api/enhancements/tags", "/api/search", "/api/library"}:
+            forbidden_requests.append(path)
+            route.fulfill(
+                status=403,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps({"ok": False, "code": "forbidden", "error": "没有权限"}, ensure_ascii=False),
+            )
+            return
+        mock_api(route)
+
+    with static_site() as base_url:
+        page = browser.new_page(viewport={"width": width, "height": height})
+        page.route("**/api/**", user_api)
+        page.goto(f"{base_url}/#/download", wait_until="domcontentloaded")
+        page.wait_for_selector('[data-user-download="1"]')
+
+        assert page.locator("#desktopNav .nav-item span:last-child").all_inner_texts() == ["下载", "任务"]
+        assert page.locator("#mobileNav .nav-item").count() == 2
+        assert page.locator("#destinationSegment").count() == 0
+        assert page.locator("#downloadGroup").count() == 0
+        assert page.locator("#downloadForce").count() == 0
+        assert "下载完成后导出到当前设备，不会进入管理员媒体库。" in page.locator("#destinationNotice").inner_text()
+
+        page.click("#userMenuButton")
+        page.wait_for_selector("#userMenuPanel:not(.hidden)")
+        menu_text = page.locator("#userMenuPanel").inner_text()
+        assert "访客甲" in menu_text
+        assert "guest-a" in menu_text
+        assert "修改显示名" in menu_text
+        assert "修改密码" in menu_text
+        assert "登录设备" in menu_text
+        assert "退出登录" in menu_text
+        page.click("#pageTitle")
+
+        page.evaluate("location.hash = '#/search'")
+        page.wait_for_function("location.hash === '#/download'")
+        page.evaluate("location.hash = '#/tasks'")
+        page.wait_for_selector('[data-enhanced-view="tasks"][data-task-role="user"]')
+        assert page.locator("#enhTaskOwner").count() == 0
+        assert page.locator("#enhTaskDestination").count() == 0
+        assert "我的任务" in page.locator('[data-enhanced-view="tasks"]').inner_text()
+        assert forbidden_requests == []
+        assert_no_horizontal_overflow(page)
+        assert_visible_controls_do_not_overlap(
+            page,
+            "#pageRoot button, #pageRoot input, #pageRoot select",
+        )
+        if width == 390:
+            heights = page.locator("#mobileNav .nav-item").evaluate_all(
+                "nodes => nodes.map(node => node.getBoundingClientRect().height)"
+            )
+            assert min(heights) >= 44
         page.close()
 
 
