@@ -52,10 +52,8 @@ jobs:
             tests/test_v062_ui.py \
             tests/test_v062_settings_ui.py \
             tests/test_v062_ui_playwright.py \
-            tests/test_v070_route_ready_playwright.py \
             tests/test_playwright_layout.py \
-            tests/test_v070_tasks_playwright.py \
-            tests/test_v070_library_playwright.py 2>&1 | tee v062-playwright.log
+            tests/test_v070_*_playwright.py 2>&1 | tee v062-playwright.log
 
       - name: Upload Playwright log
         if: always()
