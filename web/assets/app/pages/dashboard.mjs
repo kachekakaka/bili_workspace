@@ -2,6 +2,7 @@ import { bindCoverFallback, formatBytes, mediaCard, metric } from './shared.mjs'
 import { once } from '../core/lifecycle.mjs';
 
 export async function mount(root, context) {
+  context.taskStream.start();
   const [summaryResponse, recentResponse] = await Promise.all([
     context.api('/api/library/summary', { signal: context.signal }),
     context.api('/api/library?page=1&page_size=6&sort=recent', { signal: context.signal }),
