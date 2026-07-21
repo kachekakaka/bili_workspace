@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parent.parent
 LEGACY_ASSETS = (
     "enhancements-core.js",
     "enhancements-search.js",
-    "enhancements-library.js",
 )
 
 
@@ -25,6 +24,7 @@ def test_frontend_assets_are_loaded_in_dependency_order():
     assert "/assets/app.js" not in index
     assert index.index("/assets/app/main.mjs") > positions[-1]
     assert "/assets/enhancements.css" in index
+    assert "/assets/enhancements-catalog-v2.css" not in index
     assert not (ROOT / ".github" / "materialize").exists()
 
 
@@ -32,7 +32,7 @@ def test_frontend_exposes_requested_controls_during_staged_migration():
     search = (ROOT / "web" / "assets" / "enhancements-search.js").read_text(
         encoding="utf-8"
     )
-    library = (ROOT / "web" / "assets" / "enhancements-library.js").read_text(
+    library = (ROOT / "web" / "assets" / "app" / "pages" / "library.mjs").read_text(
         encoding="utf-8"
     )
     tasks = (ROOT / "web" / "assets" / "app" / "pages" / "tasks.mjs").read_text(
@@ -54,7 +54,10 @@ def test_frontend_exposes_requested_controls_during_staged_migration():
         "group",
         "tag",
         "下载到设备",
-        "mark_tag: '不要'",
+        "__untagged__",
+        "data-library-move",
+        "enhMediaPlayer",
+        "mark_tag: ''",
     ):
         assert token in library
     for token in (
