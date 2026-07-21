@@ -13,7 +13,6 @@ export async function mount(root, context) {
   const statusResponse = await context.api('/api/status?refresh_login=true', { signal: context.signal });
   const status = statusResponse.data || {};
   context.shared.patch({ status });
-  context.syncLegacy();
   const user = accountUser(context.session);
   const host = document.createElement('div');
   host.innerHTML = `<div id="v062AccountTabs" class="v062-account-tabs" role="tablist"><button type="button" class="active" data-v062-account-tab="bilibili" role="tab" aria-selected="true">Bilibili 登录</button><button type="button" data-v062-account-tab="website" role="tab" aria-selected="false">网站账号与设备</button></div>
