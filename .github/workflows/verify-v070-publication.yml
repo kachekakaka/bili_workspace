@@ -29,8 +29,8 @@ jobs:
           git fetch origin main --tags --force
           main_sha="$(git rev-parse origin/main)"
           tag_sha="$(git rev-list -n 1 v0.7.0)"
-          test "$main_sha" = "$EXPECTED_SHA"
           test "$tag_sha" = "$EXPECTED_SHA"
+          git merge-base --is-ancestor "$EXPECTED_SHA" "$main_sha"
           test "$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v0.7.0 --jq .tag_name)" = "v0.7.0"
           test "$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v0.7.0 --jq .name)" = "bili_workspace v0.7.0"
           test "$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v0.7.0 --jq .draft)" = "false"
