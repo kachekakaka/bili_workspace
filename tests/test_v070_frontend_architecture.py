@@ -21,6 +21,7 @@ CURRENT_SCRIPT_ORDER = [
     "/assets/enhancements-ui-v062.js",
     "/assets/enhancements-ui-v062-settings.js",
     "/assets/browser-version.js",
+    "/assets/app/legacy/bridge.mjs",
 ]
 
 LEGACY_DELETION_STAGE = {
@@ -51,6 +52,22 @@ PURE_MODULES = [
     "web/assets/app/core/search-policy.mjs",
 ]
 
+CORE_MODULES = [
+    *PURE_MODULES,
+    "web/assets/app/core/api.mjs",
+    "web/assets/app/core/router.mjs",
+    "web/assets/app/core/auth-session.mjs",
+    "web/assets/app/core/context-store.mjs",
+    "web/assets/app/core/task-stream.mjs",
+]
+
+COMPONENT_MODULES = [
+    "web/assets/app/components/modal.mjs",
+    "web/assets/app/components/confirm-dialog.mjs",
+    "web/assets/app/components/toast.mjs",
+    "web/assets/app/components/searchable-select.mjs",
+]
+
 
 def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
@@ -60,11 +77,13 @@ def _asset_path(src: str) -> str:
     return src.split("?", 1)[0]
 
 
-def test_pr1_keeps_the_v062_production_entry_unchanged() -> None:
+def test_pr2_keeps_legacy_shell_explicit_and_independently_bootable() -> None:
     index = _text("web/index.html")
     scripts = [_asset_path(src) for src in re.findall(r'<script[^>]+src="([^"]+)"', index)]
     assert scripts == CURRENT_SCRIPT_ORDER
-    assert 'type="module"' not in index
+    assert 'data-app-shell="legacy"' in index
+    assert '<script src="/assets/app.js' in index
+    assert '<script type="module" src="/assets/app/legacy/bridge.mjs' in index
     assert "/assets/app/main.mjs" not in index
 
 
@@ -76,18 +95,34 @@ def test_legacy_files_exist_and_have_a_frozen_deletion_stage() -> None:
         assert f"PR {stage}" in inventory
 
 
-def test_pr1_module_space_contains_only_pure_mjs_contracts() -> None:
-    forbidden = ("window.", "document.", "MutationObserver", "BiliEnhancements")
-    for path in PURE_MODULES:
+def test_pr2_core_and_components_do_not_read_legacy_globals() -> None:
+    for path in [*CORE_MODULES, *COMPONENT_MODULES]:
         module = ROOT / path
         assert module.is_file(), path
         source = module.read_text(encoding="utf-8")
         assert "export " in source
-        for token in forbidden:
-            assert token not in source, f"{path}: {token}"
+        assert "BiliEnhancements" not in source, path
+        assert "BiliLegacyApp" not in source, path
+        assert "MutationObserver" not in source, path
+        assert "stopImmediatePropagation" not in source, path
+
+    for path in PURE_MODULES:
+        source = _text(path)
+        assert "window." not in source, path
+        assert "document." not in source, path
 
     assert not (ROOT / "package.json").exists()
     assert not (ROOT / "package-lock.json").exists()
+
+
+def test_pr2_has_exactly_one_legacy_bridge_file() -> None:
+    files = sorted(path.relative_to(ROOT).as_posix() for path in (WEB / "assets" / "app" / "legacy").rglob("*.*"))
+    assert files == ["web/assets/app/legacy/bridge.mjs"]
+    source = _text(files[0])
+    assert "BiliLegacyApp" in source
+    assert "BiliEnhancements" in source
+    assert "MutationObserver" not in source
+    assert "stopImmediatePropagation" not in source
 
 
 def test_v070_does_not_create_versioned_overlay_files() -> None:
