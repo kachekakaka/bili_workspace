@@ -106,8 +106,6 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
     assert searched["local_status_label"] == "已删除"
     assert searched["deleted_record"] is True
 
-    # An explicit re-download is allowed; once a valid file exists again, the
-    # tombstone is cleared and search returns the normal downloaded state.
     redownload = client.post(
         "/api/download",
         json={"items": [{"bvid": bvid, "title": "重新下载"}], "min_height": 0},
@@ -124,7 +122,7 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
 
 def test_frontend_search_and_library_are_integrated_without_overlay_competition():
     index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    search = (ROOT / "web" / "assets" / "enhancements-search.js").read_text(
+    search = (ROOT / "web" / "assets" / "app" / "pages" / "search.mjs").read_text(
         encoding="utf-8"
     )
     library = (ROOT / "web" / "assets" / "app" / "pages" / "library.mjs").read_text(
@@ -136,6 +134,7 @@ def test_frontend_search_and_library_are_integrated_without_overlay_competition(
     app = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
 
     for removed in (
+        "enhancements-search.js",
         "enhancements-search-overlay.js",
         "enhancements-deletion-status.js",
         "enhancements-library.js",
@@ -153,9 +152,10 @@ def test_frontend_search_and_library_are_integrated_without_overlay_competition(
         "屏蔽已下载和已删除",
         "AbortController",
         "requestIdleCallback",
-        "navigator.connection",
+        "navigator?.connection",
         "刷新B站结果",
         "本页没有标题匹配项，可查看下一页；系统不会自动抓取全部页面。",
+        "仍停留在搜索页",
     ):
         assert token in search
     for forbidden in ("tags/bulk", "MutationObserver", "insertBefore", "enh-spacer"):
