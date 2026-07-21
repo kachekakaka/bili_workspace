@@ -13,24 +13,31 @@ def _text(path: str) -> str:
 
 def test_browser_displays_application_frontend_and_server_versions() -> None:
     index = _text("web/index.html")
-    script = _text("web/assets/browser-version.js")
+    main = _text("web/assets/app/main.mjs")
+    version = _text("web/assets/app/core/version-check.mjs")
 
     assert f'data-frontend-version="{FRONTEND_VERSION}"' in index
     assert 'id="browserVersionBadge"' in index
     assert f"前端 {FRONTEND_VERSION}" in index
-    assert f"const LOADED_FRONTEND_VERSION = '{FRONTEND_VERSION}';" in script
-    assert "应用 ${application}" in script
-    assert "版本不一致" in script
-    assert "服务仍是旧版" in script
-    assert "fetch(`/healthz?_=${Date.now()}`" in script
+    assert f"const LOADED_FRONTEND_VERSION = '{FRONTEND_VERSION}';" in main
     for token in (
+        "versionMismatchReason",
+        "应用 ${application}",
+        "版本不一致",
+        "服务仍是旧版",
+        "点击恢复",
+        "fetchImpl(`/healthz?_=${Date.now()}`",
         "loadedFrontendVersion",
         "expectedFrontendVersion",
         "serverFrontendVersion",
         "serverBuildId",
         "cacheMatch",
+        "recoveryAction",
+        "location?.reload",
     ):
-        assert token in script
+        assert token in version
+    assert "MutationObserver" not in version
+    assert "BiliEnhancements" not in version
 
 
 def test_frontend_assets_use_one_visible_cache_batch() -> None:
@@ -43,13 +50,15 @@ def test_frontend_assets_use_one_visible_cache_batch() -> None:
 
     assert versioned_assets
     assert {version for _, version in versioned_assets} == {FRONTEND_VERSION}
-    assert f"/assets/browser-version.js?v={FRONTEND_VERSION}" in index
     assert f"/assets/app/main.mjs?v={FRONTEND_VERSION}" in index
-    assert "enhancements-search.js" not in index
-    assert "enhancements-search-overlay.js" not in index
-    assert "enhancements-deletion-status.js" not in index
-    assert index.index("browser-version.js") < index.index("app/main.mjs")
-    assert "import * as searchPage from './pages/search.mjs';" in main
+    for stylesheet in ("tokens.css", "base.css", "components.css", "pages.css"):
+        assert f"/assets/styles/{stylesheet}?v={FRONTEND_VERSION}" in index
+    assert "browser-version.js" not in index
+    assert "enhancements-" not in index
+    assert "ui-v062.css" not in index
+    assert index.index("qrcode.min.js") < index.index("app/main.mjs")
+    assert "import { createVersionChecker } from './core/version-check.mjs';" in main
+    assert "versionChecker.start()" in main
 
 
 def test_healthz_exposes_the_running_source_build(client) -> None:

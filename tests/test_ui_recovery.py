@@ -12,9 +12,9 @@ def test_dashboard_and_library_recovery_is_replaced_by_formal_modules():
     dashboard = (ROOT / "web" / "assets" / "app" / "pages" / "dashboard.mjs").read_text(
         encoding="utf-8"
     )
-    library = (ROOT / "web" / "assets" / "app" / "pages" / "library.mjs").read_text(
-        encoding="utf-8"
-    )
+    library = (
+        ROOT / "web" / "assets" / "app" / "pages" / "library-impl.mjs"
+    ).read_text(encoding="utf-8")
     expected = re.search(r'data-frontend-version="([^"]+)"', index)
     versions = re.findall(r'/assets/[^"\']+\?v=([^"\']+)', index)
     assert expected is not None
@@ -30,7 +30,7 @@ def test_dashboard_and_library_recovery_is_replaced_by_formal_modules():
         "最近观看与下载",
         "运行状态",
         "enh-dashboard-stack",
-        "data-dashboard-sections=\"stacked\"",
+        'data-dashboard-sections="stacked"',
     ):
         assert token in dashboard
     for token in (

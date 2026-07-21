@@ -157,8 +157,9 @@ export async function mount(root, context) {
         context.toast.show(error.message, 'bad');
       }
     } else if (button.dataset.userTasks !== undefined) {
-      const state = context.legacy.state();
-      if (state?.tasks) state.tasks.ownerUserId = user.id;
+      try {
+        sessionStorage.setItem('bili-v070-task-owner', String(user.id || ''));
+      } catch {}
       context.navigate('tasks');
     }
   }, { signal: context.signal });

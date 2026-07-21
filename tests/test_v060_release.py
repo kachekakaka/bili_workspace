@@ -40,7 +40,7 @@ def test_release_versions_are_synchronized() -> None:
     index = text("web/index.html")
     assert f'data-frontend-version="{FRONTEND_VERSION}"' in index
     assert f"const LOADED_FRONTEND_VERSION = '{FRONTEND_VERSION}';" in text(
-        "web/assets/browser-version.js"
+        "web/assets/app/main.mjs"
     )
     assert "# bili_workspace v0.6.2" in text("README.md")
     assert "## 0.6.2 - 2026-07-20" in text("CHANGELOG.md")
