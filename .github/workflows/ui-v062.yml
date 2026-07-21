@@ -42,7 +42,7 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Run V0.6.2 UI and V0.7 task lifecycle tests
+      - name: Run V0.6.2 UI and V0.7 page lifecycle tests
         env:
           BILI_RUN_PLAYWRIGHT: "1"
         shell: bash
@@ -53,7 +53,8 @@ jobs:
             tests/test_v062_settings_ui.py \
             tests/test_v062_ui_playwright.py \
             tests/test_playwright_layout.py \
-            tests/test_v070_tasks_playwright.py 2>&1 | tee v062-playwright.log
+            tests/test_v070_tasks_playwright.py \
+            tests/test_v070_library_playwright.py 2>&1 | tee v062-playwright.log
 
       - name: Upload Playwright log
         if: always()
