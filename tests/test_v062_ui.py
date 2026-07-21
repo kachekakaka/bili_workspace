@@ -29,9 +29,9 @@ def test_v062_control_height_tokens_are_consistent() -> None:
 def test_module_pages_replace_prompt_style_user_and_group_actions() -> None:
     users = text("web/assets/app/pages/users.mjs")
     groups = text("web/assets/app/pages/groups.mjs")
-    for selector in ("[data-user-edit]", "[data-user-reset]"):
-        assert selector in users
-    assert "data-rename-group" in groups
+    for control in ("data-user-edit=", "data-user-reset="):
+        assert control in users
+    assert "data-rename-group=" in groups
     assert "title: '修改显示名'" in users
     assert "title: '设置临时密码'" in users
     assert "title: '重命名分组'" in groups
