@@ -154,8 +154,7 @@ jobs:
           python -m pytest -q -p no:cacheprovider --tb=short
           tests/test_playwright_layout.py
           tests/test_v062_ui_playwright.py
-          tests/test_v070_tasks_playwright.py
-          tests/test_v070_library_playwright.py
+          tests/test_v070_*_playwright.py
 
   release-validation:
     if: >-
