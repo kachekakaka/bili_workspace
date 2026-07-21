@@ -192,8 +192,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          $prepareLog = Join-Path $env:RUNNER_TEMP 'windows-prepare.log'
           cmd.exe /d /c scripts\windows\prepare-runtime.bat -Force 2>&1 |
-            Tee-Object -FilePath windows-prepare.log
+            Tee-Object -FilePath $prepareLog
           $code = $LASTEXITCODE
           if ($code -ne 0) { exit $code }
       - name: Test clean clone and in-place upgrade path
@@ -201,8 +202,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           $env:BILI_VERIFY_NO_PAUSE = "1"
+          $verifyLog = Join-Path $env:RUNNER_TEMP 'windows-verify.log'
           cmd.exe /d /c verify.bat 2>&1 |
-            Tee-Object -FilePath windows-verify.log
+            Tee-Object -FilePath $verifyLog
           $code = $LASTEXITCODE
           if ($code -ne 0) { exit $code }
       - name: Upload Windows release logs
@@ -211,8 +213,8 @@ jobs:
         with:
           name: windows-release-${{ github.run_attempt }}
           path: |
-            windows-prepare.log
-            windows-verify.log
+            ${{ runner.temp }}/windows-prepare.log
+            ${{ runner.temp }}/windows-verify.log
           if-no-files-found: warn
           retention-days: 7
 
