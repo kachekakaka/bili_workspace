@@ -32,20 +32,34 @@ def test_local_verifiers_cover_all_frontend_modules() -> None:
     assert "node --test tests/frontend/*.test.mjs" in source
 
 
-def test_v070_release_workflow_is_gated_and_idempotent() -> None:
+def test_v070_release_workflow_is_gated_idempotent_and_dispatches_docker() -> None:
     workflow = text(".github/workflows/release-v070.yml")
+    docker = text(".github/workflows/docker-image.yml")
     for token in (
         'workflows: ["CI", "V0.6.2 UI"]',
         "head_branch == 'main'",
         "head_sha",
         "ci_status",
         "ui_status",
+        "actions: write",
         "git tag -a v0.7.0",
         "gh release create v0.7.0",
         "gh release view v0.7.0",
         "docs/releases/V0.7.0.md",
+        "actions/workflows/docker-image.yml/runs",
+        'display_title == "Build Docker v0.7.0"',
+        "gh workflow run docker-image.yml --ref main -f release_tag=v0.7.0",
     ):
         assert token in workflow
+    for token in (
+        "workflow_dispatch:",
+        "release_tag:",
+        "run-name: Build Docker",
+        "ref: ${{ inputs.release_tag || github.ref }}",
+        "type=raw,value=${{ inputs.release_tag }}",
+        "platforms: linux/amd64,linux/arm64",
+    ):
+        assert token in docker
 
 
 def test_v070_docs_state_completion_and_rollback_contract() -> None:
@@ -53,6 +67,7 @@ def test_v070_docs_state_completion_and_rollback_contract() -> None:
     plans = text("docs/plans/README.md")
     acceptance = text("docs/V0.7功能与验收.md")
     notes = text("docs/releases/V0.7.0.md")
+    release_process = text("docs/发布与回滚流程.md")
     assert "当前应用版本为 V0.7.0" in docs
     assert "V0.7.0 前端结构整理方案" in plans
     assert "已完成" in plans
@@ -60,3 +75,4 @@ def test_v070_docs_state_completion_and_rollback_contract() -> None:
     assert "schema v4" in acceptance
     assert "v0.6.2" in acceptance
     assert "bili_workspace v0.7.0" in notes
+    assert "显式 dispatch" in release_process
