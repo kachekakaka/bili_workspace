@@ -6,10 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
 
-PR5_SCRIPT_ORDER = [
+PR6_SCRIPT_ORDER = [
     "/assets/qrcode.min.js",
     "/assets/enhancements-core.js",
-    "/assets/enhancements-search.js",
     "/assets/browser-version.js",
     "/assets/app/main.mjs",
 ]
@@ -17,7 +16,6 @@ PR5_SCRIPT_ORDER = [
 REMAINING_LEGACY_ASSETS = {
     "app.js": 7,
     "enhancements-core.js": 7,
-    "enhancements-search.js": 6,
     "browser-version.js": 7,
     "app.css": 7,
     "enhancements.css": 7,
@@ -36,6 +34,7 @@ REMOVED_ASSETS = [
     "web/assets/enhancements-ui-recovery.js",
     "web/assets/enhancements-library-overlay.js",
     "web/assets/enhancements-catalog-v2.css",
+    "web/assets/enhancements-search.js",
 ]
 
 CORE_MODULES = [
@@ -79,18 +78,18 @@ def _asset_path(src: str) -> str:
     return src.split("?", 1)[0]
 
 
-def test_pr5_keeps_the_module_shell_and_only_loads_search_legacy() -> None:
+def test_pr6_keeps_the_module_shell_with_no_legacy_page_renderer() -> None:
     index = _text("web/index.html")
     scripts = [_asset_path(src) for src in re.findall(r'<script[^>]+src="([^"]+)"', index)]
-    assert scripts == PR5_SCRIPT_ORDER
+    assert scripts == PR6_SCRIPT_ORDER
     assert 'data-app-shell="module"' in index
     assert '<script type="module" src="/assets/app/main.mjs' in index
     assert '<script src="/assets/app.js' not in index
+    assert "enhancements-search" not in index
     assert "enhancements-library" not in index
-    assert "enhancements-ui-recovery" not in index
-    assert "enhancements-tag-palette" not in index
-    assert "enhancements-catalog-v2.css" not in index
+    assert 'data-enhanced-view="search"' not in index
     assert 'data-enhanced-view="library"' not in index
+    assert 'data-enhanced-view="tasks"' not in index
 
 
 def test_replaced_assets_are_deleted() -> None:
@@ -144,7 +143,7 @@ def test_every_page_exports_mount_and_avoids_dom_patch_techniques() -> None:
         assert re.search(r"(?<![.\w])confirm\(", source) is None, path
 
 
-def test_pr5_has_exactly_one_legacy_bridge_file() -> None:
+def test_pr6_still_has_one_bridge_pending_pr7_removal() -> None:
     files = sorted(path.relative_to(ROOT).as_posix() for path in (WEB / "assets" / "app" / "legacy").rglob("*.*"))
     assert files == ["web/assets/app/legacy/bridge.mjs"]
     source = _text(files[0])
@@ -152,7 +151,6 @@ def test_pr5_has_exactly_one_legacy_bridge_file() -> None:
     assert "BiliEnhancements" in source
     assert "MutationObserver" not in source
     assert "stopImmediatePropagation" not in source
-    assert "root.replaceChildren(host)" in source
 
 
 def test_module_shell_has_single_core_services_and_application_dialogs() -> None:
@@ -219,17 +217,57 @@ def test_library_is_a_single_formal_renderer_with_full_behavior() -> None:
     assert re.search(r"(?<![.\w])confirm\(", library) is None
 
 
-def test_catalog_chip_styles_are_absorbed_without_a_version_overlay() -> None:
+def test_search_is_a_single_formal_renderer_with_bounded_requests() -> None:
+    search = _text("web/assets/app/pages/search.mjs")
+    policy = _text("web/assets/app/core/search-policy.mjs")
+    assert "legacyBridge" not in search
+    assert "context.legacy" not in search
+    assert 'data-enhanced-view="search"' in search
+    assert search.count('data-enhanced-view="search"') == 1
+    for token in (
+        "enhSearchQuery",
+        "enhSearchOrder",
+        "enhSearchRefresh",
+        "data-search-filter-mode=\"all\"",
+        "data-search-filter-mode=\"any\"",
+        "修改不会联网",
+        "searchPageKey",
+        "shouldPrefetchNextPage",
+        "requestGeneration",
+        "AbortController",
+        "preloadController",
+        "data-search-page",
+        "/api/preview",
+        "/api/download",
+        "/api/enhancements/tags",
+        "仍停留在搜索页",
+        "context.confirm",
+    ):
+        assert token in search
+    for token in (
+        "normalize('NFKC')",
+        "filterSearchItems",
+        "searchPageKey",
+        "shouldPrefetchNextPage",
+    ):
+        assert token in policy
+    assert "MutationObserver" not in search
+    assert "stopImmediatePropagation" not in search
+    assert "window.confirm" not in search
+    assert re.search(r"(?<![.\w])confirm\(", search) is None
+
+
+def test_catalog_and_search_styles_are_absorbed_without_version_overlays() -> None:
     css = _text("web/assets/enhancements.css")
     for token in (
         ".enh-library-chip-filters",
         ".enh-chip-filter-row",
         ".enh-filter-chip",
         ".enh-colored-filter-chip",
-        ".enh-untagged-chip",
-        ".enh-native-chip-filter",
-        ".enh-mode-help",
-        ".enh-query-term",
+        ".enh-search-primary-grid",
+        ".enh-search-secondary-grid",
+        ".enh-search-options-grid",
+        ".enh-search-batch-layout",
     ):
         assert token in css
 
