@@ -25,7 +25,6 @@ export async function mount(root, context) {
     const response = await context.api('/api/groups', { signal: context.signal });
     groups = response.data?.records || [];
     context.shared.patch({ groups });
-    context.syncLegacy();
     if (context.isCurrent()) render();
   };
 
@@ -120,11 +119,9 @@ export async function mount(root, context) {
     const group = groups.find(item => String(item.id) === String(groupId));
     if (!group) return;
     if (target.dataset.browseGroup !== undefined) {
-      const legacy = context.legacy.state();
-      if (legacy?.library) {
-        legacy.library.groupId = group.id;
-        legacy.library.page = 1;
-      }
+      try {
+        sessionStorage.setItem('bili-v070-library-group', String(group.id || ''));
+      } catch {}
       context.navigate('library');
     } else if (target.dataset.renameGroup !== undefined) {
       openRename(group);
