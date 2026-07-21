@@ -9,21 +9,24 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v062_styles_are_retained_while_behavior_moves_to_modules() -> None:
+def test_v062_styles_are_retained_in_semantic_layers() -> None:
     index = text("web/index.html")
-    assert "/assets/ui-v062.css?v=20260720-2" in index
+    assert "/assets/styles/tokens.css?v=20260720-2" in index
+    assert "/assets/styles/pages.css?v=20260720-2" in index
+    assert "/assets/ui-v062.css" not in index
     assert "/assets/enhancements-ui-v062.js" not in index
     assert "/assets/app/main.mjs?v=20260720-2" in index
 
 
 def test_v062_control_height_tokens_are_consistent() -> None:
-    css = text("web/assets/ui-v062.css")
-    assert "--control-height-sm: 32px" in css
-    assert "--control-height-md: 40px" in css
-    assert "--control-height-lg: 48px" in css
-    assert ".input,\n.select" in css
-    assert "height: var(--control-height-md)" in css
-    assert "min-height: 44px" in css
+    tokens = text("web/assets/styles/tokens.css")
+    pages = text("web/assets/styles/pages.css")
+    assert "--control-height-sm: 32px" in tokens
+    assert "--control-height-md: 40px" in tokens
+    assert "--control-height-lg: 48px" in tokens
+    assert ".input,\n.select" in pages
+    assert "height: var(--control-height-md)" in pages
+    assert "min-height: 44px" in pages
 
 
 def test_module_pages_replace_prompt_style_user_and_group_actions() -> None:
