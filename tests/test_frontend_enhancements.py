@@ -7,10 +7,7 @@ from tests.conftest import wait_terminal
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LEGACY_ASSETS = (
-    "enhancements-core.js",
-    "enhancements-search.js",
-)
+LEGACY_ASSETS = ("enhancements-core.js",)
 
 
 def test_frontend_assets_are_loaded_in_dependency_order():
@@ -23,13 +20,14 @@ def test_frontend_assets_are_loaded_in_dependency_order():
     assert positions == sorted(positions)
     assert "/assets/app.js" not in index
     assert index.index("/assets/app/main.mjs") > positions[-1]
+    assert "/assets/enhancements-search.js" not in index
     assert "/assets/enhancements.css" in index
     assert "/assets/enhancements-catalog-v2.css" not in index
     assert not (ROOT / ".github" / "materialize").exists()
 
 
 def test_frontend_exposes_requested_controls_during_staged_migration():
-    search = (ROOT / "web" / "assets" / "enhancements-search.js").read_text(
+    search = (ROOT / "web" / "assets" / "app" / "pages" / "search.mjs").read_text(
         encoding="utf-8"
     )
     library = (ROOT / "web" / "assets" / "app" / "pages" / "library.mjs").read_text(
@@ -45,7 +43,16 @@ def test_frontend_exposes_requested_controls_during_staged_migration():
         encoding="utf-8"
     )
 
-    for token in ("屏蔽已下载和已删除", "B站原页面", "data-search-page", "标题二级筛选", "刷新B站结果"):
+    for token in (
+        "屏蔽已下载和已删除",
+        "B站原页面",
+        "data-search-page",
+        "标题二级筛选",
+        "刷新B站结果",
+        "shouldPrefetchNextPage",
+        "requestGeneration",
+        "仍停留在搜索页",
+    ):
         assert token in search
     for token in (
         "enhLibraryTag",
