@@ -130,9 +130,17 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
     assert (ROOT / "docker" / "compose.yaml").is_file()
 
 
-def test_completed_plans_are_not_presented_as_pending() -> None:
-    plan = ROOT / "docs" / "plans" / "V0.6.0_多用户搜索与会话方案.md"
-    assert plan.is_file()
+def test_plan_index_distinguishes_current_and_completed_work() -> None:
+    plans = ROOT / "docs" / "plans"
+    assert (plans / "V0.6.0_多用户搜索与会话方案.md").is_file()
+    assert (plans / "V0.7.0_前端结构整理方案.md").is_file()
+    assert (plans / "V0.7.0_前端结构整理方案_REVIEW.md").is_file()
+
     index = _text("docs/plans/README.md")
-    assert "当前没有未完成的已批准计划" in index
-    assert "已完成计划" in index
+    assert "## 当前计划" in index
+    assert "V0.7.0 前端结构整理方案" in index
+    assert "已批准，待按 PR 1–8 顺序实施" in index
+    assert "V0.7.0 方案 Review" in index
+    assert "## 已完成计划" in index
+    assert "V0.6.0 多用户、会话 Token、搜索与界面开发基线" in index
+    assert "当前没有未完成的已批准计划" not in index
