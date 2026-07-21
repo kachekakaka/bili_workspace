@@ -177,7 +177,7 @@ function renderChrome() {
   document.querySelector('#userMenuName').textContent = name;
   document.querySelector('#userMenuRole').textContent = admin ? '管理员' : '普通用户';
   document.querySelector('#userMenuAvatar').textContent = name.slice(0, 1) || '用';
-  document.querySelector('#userMenuPanel').innerHTML = `<div class="user-menu-summary"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(user.username || '')} · ${admin ? '管理员' : '普通用户'}</small></div><button type="button" role="menuitem" data-menu-account>网站账号与设备</button><button type="button" role="menuitem" data-menu-bilibili>Bilibili 登录</button><button type="button" role="menuitem" data-menu-logout>退出网站</button>`;
+  document.querySelector('#userMenuPanel').innerHTML = `<div class="user-menu-summary"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(user.username || '')} · ${admin ? '管理员' : '普通用户'}</small></div><button type="button" role="menuitem" data-menu-account>修改显示名</button><button type="button" role="menuitem" data-menu-account>修改密码</button><button type="button" role="menuitem" data-menu-account>登录设备</button><button type="button" role="menuitem" data-menu-bilibili>Bilibili 登录</button><button type="button" role="menuitem" data-menu-logout>退出登录</button>`;
 
   document.querySelector('#userMenuButton').addEventListener('click', () => {
     const panel = document.querySelector('#userMenuPanel');
