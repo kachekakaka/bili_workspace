@@ -9,10 +9,14 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: verify-v070-publication-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   publication:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout main and tags
         uses: actions/checkout@v4
@@ -45,14 +49,14 @@ jobs:
           set -euo pipefail
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           image="ghcr.io/kachekakaka/bili_workspace:v0.7.0"
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 60); do
             if docker buildx imagetools inspect "$image" > manifest.txt 2>&1; then
               cat manifest.txt
               grep -q 'linux/amd64' manifest.txt
               grep -q 'linux/arm64' manifest.txt
               exit 0
             fi
-            echo "等待多架构镜像发布（${attempt}/30）"
+            echo "等待多架构镜像发布（${attempt}/60）"
             sleep 20
           done
           cat manifest.txt || true
