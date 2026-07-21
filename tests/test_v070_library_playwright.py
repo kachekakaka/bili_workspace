@@ -71,7 +71,28 @@ def test_library_module_filters_moves_and_does_not_duplicate_actions(
         if path in {"/api/media/file-1/stream", "/api/media/file-2/stream"}:
             route.fulfill(status=204, body="")
             return
-        if path == "/api/enhancements/library" and method == "GET":
+        if path == "/api/groups":
+            payload = envelope(
+                {
+                    "default_group": "分组 A",
+                    "default_min_height": 1080,
+                    "items": ["分组 A", "分组 B"],
+                    "records": [
+                        {"id": "group-a", "display_name": "分组 A", "folder_key": "a", "media_count": 1, "task_count": 0},
+                        {"id": "group-b", "display_name": "分组 B", "folder_key": "b", "media_count": 0, "task_count": 0},
+                    ],
+                }
+            )
+        elif path == "/api/enhancements/tags" and method == "GET":
+            payload = envelope(
+                {
+                    "items": [
+                        {"name": "夯", "color": "#dc2626"},
+                        {"name": "NPC", "color": "#64748b"},
+                    ]
+                }
+            )
+        elif path == "/api/enhancements/library" and method == "GET":
             payload = envelope(
                 {
                     "items": [dict(item)],
