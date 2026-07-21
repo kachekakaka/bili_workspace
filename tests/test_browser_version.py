@@ -35,17 +35,21 @@ def test_browser_displays_application_frontend_and_server_versions() -> None:
 
 def test_frontend_assets_use_one_visible_cache_batch() -> None:
     index = _text("web/index.html")
+    main = _text("web/assets/app/main.mjs")
     versioned_assets = re.findall(
-        r'(?:href|src)="(/assets/[^"?]+\.(?:css|js))\?v=([^"&]+)"',
+        r'(?:href|src)="(/assets/[^"?]+\.(?:css|js|mjs))\?v=([^"&]+)"',
         index,
     )
 
     assert versioned_assets
     assert {version for _, version in versioned_assets} == {FRONTEND_VERSION}
     assert f"/assets/browser-version.js?v={FRONTEND_VERSION}" in index
+    assert f"/assets/app/main.mjs?v={FRONTEND_VERSION}" in index
+    assert "enhancements-search.js" not in index
     assert "enhancements-search-overlay.js" not in index
     assert "enhancements-deletion-status.js" not in index
-    assert index.index("enhancements-search.js") < index.index("browser-version.js")
+    assert index.index("browser-version.js") < index.index("app/main.mjs")
+    assert "import * as searchPage from './pages/search.mjs';" in main
 
 
 def test_healthz_exposes_the_running_source_build(client) -> None:
