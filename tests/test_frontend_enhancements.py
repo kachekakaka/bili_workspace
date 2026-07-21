@@ -14,9 +14,9 @@ def test_frontend_exposes_requested_controls_after_final_migration():
     library = (
         ROOT / "web" / "assets" / "app" / "pages" / "library-impl.mjs"
     ).read_text(encoding="utf-8")
-    tasks = (ROOT / "web" / "assets" / "app" / "pages" / "tasks.mjs").read_text(
-        encoding="utf-8"
-    )
+    tasks = (
+        ROOT / "web" / "assets" / "app" / "pages" / "tasks-impl.mjs"
+    ).read_text(encoding="utf-8")
     dashboard = (
         ROOT / "web" / "assets" / "app" / "pages" / "dashboard.mjs"
     ).read_text(encoding="utf-8")
