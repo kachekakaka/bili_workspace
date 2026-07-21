@@ -7,26 +7,28 @@ from tests.conftest import wait_terminal
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LEGACY_ASSETS = ("enhancements-core.js",)
 
 
-def test_frontend_assets_are_loaded_in_dependency_order():
+def test_frontend_assets_use_the_final_module_entry_and_semantic_styles():
     index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-    positions = []
-    for name in LEGACY_ASSETS:
-        path = ROOT / "web" / "assets" / name
-        assert path.is_file()
-        positions.append(index.index(f"/assets/{name}"))
-    assert positions == sorted(positions)
-    assert "/assets/app.js" not in index
-    assert index.index("/assets/app/main.mjs") > positions[-1]
-    assert "/assets/enhancements-search.js" not in index
-    assert "/assets/enhancements.css" in index
-    assert "/assets/enhancements-catalog-v2.css" not in index
+    assert "/assets/app/main.mjs" in index
+    assert "/assets/qrcode.min.js" in index
+    assert "/assets/styles/tokens.css" in index
+    assert "/assets/styles/base.css" in index
+    assert "/assets/styles/components.css" in index
+    assert "/assets/styles/pages.css" in index
+    for removed in (
+        "/assets/app.js",
+        "/assets/enhancements-core.js",
+        "/assets/browser-version.js",
+        "/assets/enhancements.css",
+        "/assets/ui-v062.css",
+    ):
+        assert removed not in index
     assert not (ROOT / ".github" / "materialize").exists()
 
 
-def test_frontend_exposes_requested_controls_during_staged_migration():
+def test_frontend_exposes_requested_controls_after_final_migration():
     search = (ROOT / "web" / "assets" / "app" / "pages" / "search.mjs").read_text(
         encoding="utf-8"
     )
