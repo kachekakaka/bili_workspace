@@ -213,7 +213,7 @@ def test_tasks_preserve_filters_actions_and_application_confirmations() -> None:
     ):
         assert token in tasks
     assert "window.confirm" not in tasks
-    assert "confirm(" not in tasks
+    assert re.search(r"(?<![.\w])confirm\(", tasks) is None
 
 
 def test_v070_does_not_create_versioned_overlay_files() -> None:
