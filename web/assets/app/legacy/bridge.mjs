@@ -10,12 +10,17 @@ async function mountLegacyPage(page, root, context = {}) {
   const legacy = legacyEnhancements();
   if (!legacy?.renderPage) throw new Error(`旧页面适配器未加载：${page}`);
   if (context.signal?.aborted) return Object.freeze({ dispose: () => false });
-  await legacy.renderPage(page, root);
-  if (context.signal?.aborted) root.replaceChildren();
+  const host = globalRef.document.createElement('div');
+  host.dataset.legacyPageHost = page;
+  if (typeof context.commit === 'function') context.commit(() => root.replaceChildren(host));
+  else root.replaceChildren(host);
+  await legacy.renderPage(page, host);
+  if (context.signal?.aborted || (typeof context.isCurrent === 'function' && !context.isCurrent())) {
+    host.remove();
+    return Object.freeze({ dispose: () => false });
+  }
   return Object.freeze({
-    dispose: once(() => {
-      if (root?.dataset?.enhancedView) delete root.dataset.enhancedView;
-    }),
+    dispose: once(() => host.remove()),
   });
 }
 

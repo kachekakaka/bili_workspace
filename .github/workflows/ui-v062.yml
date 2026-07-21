@@ -34,10 +34,10 @@ jobs:
           python -m pip install -r requirements/dev.lock
           python -m pip check
 
-      - name: Check JavaScript syntax
+      - name: Check JavaScript and module syntax
+        shell: bash
         run: |
-          node --check web/assets/enhancements-ui-v062.js
-          node --check web/assets/enhancements-ui-v062-settings.js
+          find web -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | sort -z | xargs -0 -n1 node --check
 
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium

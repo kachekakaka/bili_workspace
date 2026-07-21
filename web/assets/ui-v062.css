@@ -52,6 +52,14 @@
   gap: 14px;
 }
 
+.user-table-shell {
+  display: block !important;
+}
+
+.user-card-list {
+  display: none !important;
+}
+
 .v062-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -261,6 +269,14 @@
 
   .page-root {
     padding-top: 14px;
+  }
+
+  .user-table-shell {
+    display: none !important;
+  }
+
+  .user-card-list {
+    display: grid !important;
   }
 
   .v062-select-option-grid {

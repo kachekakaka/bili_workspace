@@ -10,15 +10,9 @@ export function mountSearchableSelect(select, {
   force = false,
   documentRef = globalThis.document,
 } = {}) {
-  if (!(select instanceof documentRef.defaultView.HTMLSelectElement)) {
-    throw new TypeError('select must be an HTMLSelectElement');
-  }
-  if (!modal?.open || (!force && select.options.length <= threshold)) {
-    return Object.freeze({ dispose: () => false, enhanced: false });
-  }
-  if (select.dataset.v070Searchable === '1') {
-    return Object.freeze({ dispose: () => false, enhanced: true });
-  }
+  if (!(select instanceof documentRef.defaultView.HTMLSelectElement)) throw new TypeError('select must be an HTMLSelectElement');
+  if (!modal?.open || (!force && select.options.length <= threshold)) return Object.freeze({ dispose: () => false, enhanced: false });
+  if (select.dataset.v062Searchable === '1') return Object.freeze({ dispose: () => false, enhanced: true });
 
   const originalParent = select.parentNode;
   const originalNext = select.nextSibling;
@@ -27,7 +21,7 @@ export function mountSearchableSelect(select, {
   originalParent.insertBefore(wrapper, select);
   wrapper.appendChild(select);
   select.classList.add('v062-native-select');
-  select.dataset.v070Searchable = '1';
+  select.dataset.v062Searchable = '1';
   const trigger = documentRef.createElement('button');
   trigger.type = 'button';
   trigger.className = 'v062-select-trigger';
@@ -90,7 +84,7 @@ export function mountSearchableSelect(select, {
     dispose: once(() => {
       controller.abort();
       select.classList.remove('v062-native-select');
-      delete select.dataset.v070Searchable;
+      delete select.dataset.v062Searchable;
       if (originalNext && originalNext.parentNode === originalParent) originalParent.insertBefore(select, originalNext);
       else originalParent.appendChild(select);
       wrapper.remove();

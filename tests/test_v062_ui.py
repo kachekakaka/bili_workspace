@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -10,11 +9,11 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v062_assets_are_loaded_after_enhancement_core() -> None:
+def test_v062_styles_are_retained_while_behavior_moves_to_modules() -> None:
     index = text("web/index.html")
     assert "/assets/ui-v062.css?v=20260720-2" in index
-    assert "/assets/enhancements-ui-v062.js?v=20260720-2" in index
-    assert index.index("enhancements-core.js") < index.index("enhancements-ui-v062.js")
+    assert "/assets/enhancements-ui-v062.js" not in index
+    assert "/assets/app/main.mjs?v=20260720-2" in index
 
 
 def test_v062_control_height_tokens_are_consistent() -> None:
@@ -27,33 +26,39 @@ def test_v062_control_height_tokens_are_consistent() -> None:
     assert "min-height: 44px" in css
 
 
-def test_v062_replaces_prompt_style_user_and_group_actions() -> None:
-    script = text("web/assets/enhancements-ui-v062.js")
-    for selector in ("[data-user-edit]", "[data-user-reset]", "[data-rename-group]"):
-        assert selector in script
-    assert "interceptLegacyPromptActions" in script
-    assert "showModal('修改显示名'" in script
-    assert "showModal('设置临时密码'" in script
-    assert "showModal('重命名分组'" in script
-    assert "event.stopImmediatePropagation()" in script
-    assert "prompt(" not in script
+def test_module_pages_replace_prompt_style_user_and_group_actions() -> None:
+    users = text("web/assets/app/pages/users.mjs")
+    groups = text("web/assets/app/pages/groups.mjs")
+    for control in ("data-user-edit=", "data-user-reset="):
+        assert control in users
+    assert "data-rename-group=" in groups
+    assert "title: '修改显示名'" in users
+    assert "title: '设置临时密码'" in users
+    assert "title: '重命名分组'" in groups
+    combined = users + groups
+    assert "stopImmediatePropagation" not in combined
+    assert "prompt(" not in combined
+    assert "window.confirm" not in combined
 
 
-def test_v062_separates_bilibili_and_website_account_surfaces() -> None:
-    script = text("web/assets/enhancements-ui-v062.js")
-    assert 'id = \'v062AccountTabs\'' in script
+def test_module_account_separates_bilibili_and_website_surfaces() -> None:
+    script = text("web/assets/app/pages/account.mjs")
+    main = text("web/assets/app/main.mjs")
+    assert 'id="v062AccountTabs"' in script
     assert 'data-v062-account-tab="bilibili"' in script
     assert 'data-v062-account-tab="website"' in script
-    assert "网站账号与设备" in script
+    for label in ("修改显示名", "修改密码", "登录设备"):
+        assert label in main
     assert "/api/auth/sessions" in script
     assert "/api/auth/sessions/revoke-others" in script
     assert "/api/auth/profile" in script
 
 
-def test_v062_large_dynamic_selects_use_searchable_list() -> None:
-    script = text("web/assets/enhancements-ui-v062.js")
-    assert "SEARCHABLE_OPTION_THRESHOLD = 8" in script
-    assert "SEARCHABLE_SELECT_ID = /(group|user|owner)/i" in script
-    assert "openSearchableSelect" in script
-    assert "v062-select-option-grid" in script
-    assert "输入关键词筛选" in script
+def test_large_dynamic_selects_use_the_shared_searchable_component() -> None:
+    component = text("web/assets/app/components/searchable-select.mjs")
+    download = text("web/assets/app/pages/download.mjs")
+    assert "threshold = 8" in component
+    assert "mountSearchableSelect" in component
+    assert "v062-select-option-grid" in component
+    assert "输入关键词筛选" in component
+    assert "context.mountSearchableSelect" in download

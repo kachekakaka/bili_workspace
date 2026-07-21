@@ -7,30 +7,30 @@ from tests.conftest import wait_terminal
 
 
 ROOT = Path(__file__).resolve().parent.parent
-ASSETS = (
+LEGACY_ASSETS = (
     "enhancements-core.js",
     "enhancements-search.js",
     "enhancements-library.js",
     "enhancements-task-actions.js",
     "enhancements-tasks.js",
-    "enhancements-polish.js",
 )
 
 
-def test_enhancement_assets_are_loaded_in_dependency_order():
+def test_frontend_assets_are_loaded_in_dependency_order():
     index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     positions = []
-    for name in ASSETS:
+    for name in LEGACY_ASSETS:
         path = ROOT / "web" / "assets" / name
         assert path.is_file()
         positions.append(index.index(f"/assets/{name}"))
     assert positions == sorted(positions)
-    assert index.index("/assets/app.js") < positions[0]
+    assert "/assets/app.js" not in index
+    assert index.index("/assets/app/main.mjs") > positions[-1]
     assert "/assets/enhancements.css" in index
     assert not (ROOT / ".github" / "materialize").exists()
 
 
-def test_enhanced_frontend_exposes_requested_controls():
+def test_frontend_exposes_requested_controls_during_staged_migration():
     search = (ROOT / "web" / "assets" / "enhancements-search.js").read_text(
         encoding="utf-8"
     )
@@ -43,7 +43,10 @@ def test_enhanced_frontend_exposes_requested_controls():
     actions = (ROOT / "web" / "assets" / "enhancements-task-actions.js").read_text(
         encoding="utf-8"
     )
-    polish = (ROOT / "web" / "assets" / "enhancements-polish.js").read_text(
+    dashboard = (ROOT / "web" / "assets" / "app" / "pages" / "dashboard.mjs").read_text(
+        encoding="utf-8"
+    )
+    download = (ROOT / "web" / "assets" / "app" / "pages" / "download.mjs").read_text(
         encoding="utf-8"
     )
 
@@ -73,11 +76,8 @@ def test_enhanced_frontend_exposes_requested_controls():
         assert token in tasks
     for token in ("编辑画质并重试", "min_height", "preferred_quality", "原任务 ID"):
         assert token in actions
-    for token in (
-        "enh-dashboard-stack",
-        "downloadForm",
-    ):
-        assert token in polish
+    assert "enh-dashboard-stack" in dashboard
+    assert 'id="downloadForm"' in download
 
 
 def test_duration_text_is_sortable():
