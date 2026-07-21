@@ -128,12 +128,14 @@ def test_frontend_search_and_library_are_integrated_without_overlay_competition(
     library = (ROOT / "web" / "assets" / "app" / "pages" / "library.mjs").read_text(
         encoding="utf-8"
     )
-    css = (ROOT / "web" / "assets" / "enhancements.css").read_text(
+    css = (ROOT / "web" / "assets" / "styles" / "components.css").read_text(
         encoding="utf-8"
     )
-    app = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    main = (ROOT / "web" / "assets" / "app" / "main.mjs").read_text(encoding="utf-8")
 
     for removed in (
+        "app.js",
+        "enhancements-core.js",
         "enhancements-search.js",
         "enhancements-search-overlay.js",
         "enhancements-deletion-status.js",
@@ -145,7 +147,8 @@ def test_frontend_search_and_library_are_integrated_without_overlay_competition(
     ):
         assert removed not in index
         assert not (ROOT / "web" / "assets" / removed).exists()
-    assert "function renderSearch(" not in app
+    assert "import * as searchPage from './pages/search.mjs';" in main
+    assert "import * as libraryPage from './pages/library.mjs';" in main
     for token in (
         "精准：标题包含全部词",
         "模糊：标题包含任意词",
