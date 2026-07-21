@@ -11,7 +11,7 @@ from app.paths import ROOT
 _FRONTEND_VERSION_RE = re.compile(
     r'data-frontend-version=["\']([^"\']+)["\']', re.IGNORECASE
 )
-_SOURCE_SUFFIXES = {".bat", ".css", ".html", ".js", ".ps1", ".py"}
+_SOURCE_SUFFIXES = {".bat", ".css", ".html", ".js", ".mjs", ".ps1", ".py"}
 
 
 def _source_files() -> list[Path]:
