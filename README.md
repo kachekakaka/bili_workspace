@@ -50,7 +50,7 @@ Docker 固定映射：
 /downloads
 ```
 
-仓库只跟踪 `.default` 模板；实际 `.env`、配置、SQLite、任务、媒体和凭据均被 Git 忽略。升级只补充缺少的默认字段，不覆盖已有用户值。
+仓库只跟踪 `.default` 模板；实际 `.env`、配置、SQLite、任务、媒体和凭据均被 Git 忽略。升级只补充缺少的默认字段，不覆盖已有用户值。运行数据的详细职责与恢复边界见 [`userdata/README.md`](userdata/README.md)。
 
 ## Windows 开箱即用
 
@@ -159,6 +159,7 @@ CI 发布门禁包括：
 - [任务所有权与保留策略](docs/任务所有权与保留策略.md)
 - [发布、更新与回滚流程](docs/发布与回滚流程.md)
 - [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)
+- [运行数据目录说明](userdata/README.md)
 - [源文件与恢复清单](docs/源文件与恢复清单.md)
 
 ## 已知边界

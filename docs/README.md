@@ -20,6 +20,7 @@
 
 V0.6.0 功能验收、V0.6.2 UI/UX Review 和 UI 回归清单继续保留，作为兼容与历史验收依据：
 
+- [V0.6.0 冻结方案](plans/V0.6.0_多用户搜索与会话方案.md)
 - [V0.6.0 功能与验收](V0.6功能与验收.md)
 - [V0.6.2 UI/UX Review](UI_UX_REVIEW_v0.6.2.md)
 - [UI 问题与回归清单](UI_ISSUES.md)
