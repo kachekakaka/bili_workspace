@@ -11,8 +11,6 @@ LEGACY_ASSETS = (
     "enhancements-core.js",
     "enhancements-search.js",
     "enhancements-library.js",
-    "enhancements-task-actions.js",
-    "enhancements-tasks.js",
 )
 
 
@@ -37,10 +35,7 @@ def test_frontend_exposes_requested_controls_during_staged_migration():
     library = (ROOT / "web" / "assets" / "enhancements-library.js").read_text(
         encoding="utf-8"
     )
-    tasks = (ROOT / "web" / "assets" / "enhancements-tasks.js").read_text(
-        encoding="utf-8"
-    )
-    actions = (ROOT / "web" / "assets" / "enhancements-task-actions.js").read_text(
+    tasks = (ROOT / "web" / "assets" / "app" / "pages" / "tasks.mjs").read_text(
         encoding="utf-8"
     )
     dashboard = (ROOT / "web" / "assets" / "app" / "pages" / "dashboard.mjs").read_text(
@@ -72,10 +67,12 @@ def test_frontend_exposes_requested_controls_during_staged_migration():
         "当前大小",
         "speed_text",
         "task.duration",
+        "编辑画质并重试",
+        "min_height",
+        "preferred_quality",
+        "原任务 ID",
     ):
         assert token in tasks
-    for token in ("编辑画质并重试", "min_height", "preferred_quality", "原任务 ID"):
-        assert token in actions
     assert "enh-dashboard-stack" in dashboard
     assert 'id="downloadForm"' in download
 
