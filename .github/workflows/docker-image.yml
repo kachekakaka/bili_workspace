@@ -1,4 +1,5 @@
 name: Build multi-architecture Docker image
+run-name: Build Docker ${{ inputs.release_tag || github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -35,6 +36,12 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      - name: Checkout requested source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
       - name: Validate optional release tag
         if: inputs.release_tag != ''
         shell: bash
@@ -43,10 +50,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          test "$GITHUB_REF_NAME" = "$RELEASE_TAG"
-
-      - name: Checkout
-        uses: actions/checkout@v4
+          git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" --force
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
