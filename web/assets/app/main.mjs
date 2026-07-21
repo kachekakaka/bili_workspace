@@ -4,11 +4,11 @@ import { createContextStore } from './core/context-store.mjs';
 import { resolveRoute } from './core/route-policy.mjs';
 import { createRouter } from './core/router.mjs';
 import { createTaskStream } from './core/task-stream.mjs';
+import { createVersionChecker } from './core/version-check.mjs';
 import { createModalService } from './components/modal.mjs';
 import { createToastService } from './components/toast.mjs';
 import { createConfirmDialog } from './components/confirm-dialog.mjs';
 import { mountSearchableSelect } from './components/searchable-select.mjs';
-import { legacyBridge } from './legacy/bridge.mjs';
 import * as dashboardPage from './pages/dashboard.mjs';
 import * as downloadPage from './pages/download.mjs';
 import * as searchPage from './pages/search.mjs';
@@ -20,24 +20,39 @@ import * as accountPage from './pages/account.mjs';
 import * as settingsPage from './pages/settings.mjs';
 import * as morePage from './pages/more.mjs';
 
+const LOADED_FRONTEND_VERSION = '20260720-2';
 const ADMIN_NAV = Object.freeze([
   ['dashboard', '⌂', '概览'], ['download', '↓', '下载'], ['search', '⌕', '搜索'],
   ['library', '▶', '作品库'], ['groups', '▣', '分组'], ['tasks', '≡', '任务'],
   ['users', '♙', '用户管理'], ['account', '◎', '账号'], ['settings', '⚙', '设置'],
 ]);
 const USER_NAV = Object.freeze([['download', '↓', '下载'], ['tasks', '≡', '任务']]);
-const ADMIN_MOBILE_NAV = Object.freeze([ADMIN_NAV[1], ADMIN_NAV[2], ADMIN_NAV[3], ADMIN_NAV[5], ['more', '•••', '更多']]);
+const ADMIN_MOBILE_NAV = Object.freeze([
+  ADMIN_NAV[1], ADMIN_NAV[2], ADMIN_NAV[3], ADMIN_NAV[5], ['more', '•••', '更多'],
+]);
 const TITLES = Object.freeze({
-  dashboard: ['PRIVATE MEDIA WORKSPACE', '概览'], download: ['DOWNLOAD & EXPORT', '创建下载'],
-  search: ['SEARCH BILIBILI', '搜索作品'], library: ['MEDIA LIBRARY', '作品库'],
-  groups: ['COLLECTION MANAGEMENT', '分组管理'], tasks: ['DOWNLOAD QUEUE', '任务中心'],
-  users: ['USER MANAGEMENT', '用户管理'], account: ['ACCOUNT & QR LOGIN', '账号'],
-  settings: ['SERVER SETTINGS', '设置'], more: ['MORE', '更多'],
+  dashboard: ['PRIVATE MEDIA WORKSPACE', '概览'],
+  download: ['DOWNLOAD & EXPORT', '创建下载'],
+  search: ['SEARCH BILIBILI', '搜索作品'],
+  library: ['MEDIA LIBRARY', '作品库'],
+  groups: ['COLLECTION MANAGEMENT', '分组管理'],
+  tasks: ['DOWNLOAD QUEUE', '任务中心'],
+  users: ['USER MANAGEMENT', '用户管理'],
+  account: ['ACCOUNT & QR LOGIN', '账号'],
+  settings: ['SERVER SETTINGS', '设置'],
+  more: ['MORE', '更多'],
 });
 const PAGE_MODULES = Object.freeze({
-  dashboard: dashboardPage, download: downloadPage, search: searchPage, library: libraryPage,
-  groups: groupsPage, tasks: tasksPage, users: usersPage, account: accountPage,
-  settings: settingsPage, more: morePage,
+  dashboard: dashboardPage,
+  download: downloadPage,
+  search: searchPage,
+  library: libraryPage,
+  groups: groupsPage,
+  tasks: tasksPage,
+  users: usersPage,
+  account: accountPage,
+  settings: settingsPage,
+  more: morePage,
 });
 
 const authRoot = document.querySelector('#authRoot');
@@ -49,6 +64,12 @@ const confirmDialog = createConfirmDialog(modal);
 const session = createSessionStore();
 const shared = createContextStore();
 const taskStream = createTaskStream();
+const versionChecker = createVersionChecker({
+  badge: document.querySelector('#browserVersionBadge'),
+  brandNode: document.querySelector('#brandMode'),
+  loadedVersion: LOADED_FRONTEND_VERSION,
+  expectedVersion: document.documentElement.dataset.frontendVersion || '',
+});
 let router = null;
 let authController = null;
 let chromeController = null;
@@ -65,23 +86,6 @@ function escapeHtml(value) {
   }[character]));
 }
 
-function syncLegacy() {
-  const legacy = legacyBridge.state();
-  if (!legacy) return;
-  const snapshot = shared.get();
-  legacy.auth = {
-    ...session.get(),
-    csrf_token: session.get().csrfToken,
-    display_name: session.get().displayName,
-    must_change_password: session.get().mustChangePassword,
-  };
-  legacy.csrf = session.get().csrfToken;
-  legacy.status = snapshot.status || null;
-  legacy.groups = [...(snapshot.groups || [])];
-  legacy.tags = [...(snapshot.tags || [])];
-  legacy.contextLoadedAt = Date.now();
-}
-
 async function refreshShared({ signal } = {}) {
   const statusResponse = await api('/api/status', { signal });
   let groups = [];
@@ -95,15 +99,8 @@ async function refreshShared({ signal } = {}) {
     tags = tagsResponse.data?.items || [];
   }
   shared.replace({ status: statusResponse.data || {}, groups, tags });
-  syncLegacy();
   renderStatusBadges();
   return shared.get();
-}
-
-function closeLegacyStream() {
-  const source = legacyBridge.state()?.tasks?.eventSource;
-  if (source) source.close();
-  if (legacyBridge.state()?.tasks) legacyBridge.state().tasks.eventSource = null;
 }
 
 function stopApp({ clear = false } = {}) {
@@ -112,7 +109,6 @@ function stopApp({ clear = false } = {}) {
   chromeController?.abort();
   chromeController = null;
   taskStream.stop({ clear });
-  closeLegacyStream();
   modal.dispose();
   if (clear) {
     shared.clear();
@@ -190,7 +186,9 @@ function renderChrome() {
     closeUserMenu();
     if (button.dataset.menuLogout !== undefined) void logout();
     else {
-      try { sessionStorage.setItem('bili-v062-account-tab', button.dataset.menuAccount !== undefined ? 'website' : 'bilibili'); } catch {}
+      try {
+        sessionStorage.setItem('bili-v062-account-tab', button.dataset.menuAccount !== undefined ? 'website' : 'bilibili');
+      } catch {}
       navigate('account');
     }
   }, { signal });
@@ -200,7 +198,7 @@ function renderChrome() {
     const button = document.querySelector('#refreshButton');
     button.disabled = true;
     try {
-      await refreshShared({ signal });
+      await Promise.all([refreshShared({ signal }), versionChecker.refresh()]);
       await remount();
       toast.show('已刷新', 'good');
     } catch (error) {
@@ -228,8 +226,6 @@ function appContext(routeContext) {
     toast,
     confirm: confirmDialog,
     mountSearchableSelect,
-    legacy: legacyBridge,
-    syncLegacy,
     refreshShared,
     renderChrome,
     logout,
@@ -241,16 +237,14 @@ function appContext(routeContext) {
 function routeMount(page) {
   return async (root, routeContext) => {
     setActiveRoute(page);
-    const module = PAGE_MODULES[page];
-    return module.mount(root, appContext(routeContext));
+    return PAGE_MODULES[page].mount(root, appContext(routeContext));
   };
 }
 
 function createAppRouter() {
-  const routes = Object.fromEntries(Object.keys(PAGE_MODULES).map(page => [page, routeMount(page)]));
   return createRouter({
     root: pageRoot,
-    routes,
+    routes: Object.fromEntries(Object.keys(PAGE_MODULES).map(page => [page, routeMount(page)])),
     resolve: hash => resolveRoute(hash, session.get().role),
     onError(error) {
       if (error instanceof AuthExpiredError || error?.name === 'AbortError') return;
@@ -295,7 +289,13 @@ function showForcedPassword(auth) {
     button.disabled = true;
     try {
       if (authRoot.querySelector('#newPassword').value !== authRoot.querySelector('#confirmPassword').value) throw new Error('两次输入的新密码不一致');
-      const payload = await api('/api/auth/password', { method: 'POST', body: { current_password: authRoot.querySelector('#currentPassword').value, new_password: authRoot.querySelector('#newPassword').value } });
+      const payload = await api('/api/auth/password', {
+        method: 'POST',
+        body: {
+          current_password: authRoot.querySelector('#currentPassword').value,
+          new_password: authRoot.querySelector('#newPassword').value,
+        },
+      });
       session.patch({ csrf_token: payload.data?.csrf_token || session.get().csrfToken, must_change_password: false });
       toast.show('密码已修改', 'good');
       await bootAuth();
@@ -323,8 +323,22 @@ function showLogin(auth, message = '') {
     button.disabled = true;
     try {
       const payload = setup
-        ? await api('/api/auth/setup', { method: 'POST', body: { username: authRoot.querySelector('#authUser').value, display_name: authRoot.querySelector('#authDisplayName').value, password: authRoot.querySelector('#authPassword').value, bootstrap_token: authRoot.querySelector('#authToken').value } })
-        : await api('/api/auth/login', { method: 'POST', body: { username: authRoot.querySelector('#authUser').value, password: authRoot.querySelector('#authPassword').value } });
+        ? await api('/api/auth/setup', {
+          method: 'POST',
+          body: {
+            username: authRoot.querySelector('#authUser').value,
+            display_name: authRoot.querySelector('#authDisplayName').value,
+            password: authRoot.querySelector('#authPassword').value,
+            bootstrap_token: authRoot.querySelector('#authToken').value,
+          },
+        })
+        : await api('/api/auth/login', {
+          method: 'POST',
+          body: {
+            username: authRoot.querySelector('#authUser').value,
+            password: authRoot.querySelector('#authPassword').value,
+          },
+        });
       session.patch({ csrf_token: payload.data?.csrf_token || '' });
       toast.show('登录成功', 'good');
       await bootAuth();
@@ -353,18 +367,14 @@ async function bootAuth() {
   const response = await api('/api/auth/status');
   const auth = response.data || {};
   session.set(auth);
-  syncLegacy();
-  if (auth.authenticated && (auth.must_change_password || auth.mustChangePassword)) {
-    showForcedPassword(auth);
-  } else if (auth.authenticated) {
-    await bootAuthenticated();
-  } else {
-    showLogin(auth);
-  }
+  if (auth.authenticated && (auth.must_change_password || auth.mustChangePassword)) showForcedPassword(auth);
+  else if (auth.authenticated) await bootAuthenticated();
+  else showLogin(auth);
 }
 
 async function boot() {
   try {
+    versionChecker.start();
     await bootAuth();
   } catch (error) {
     authRoot.classList.remove('hidden');
