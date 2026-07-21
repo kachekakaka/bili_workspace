@@ -73,10 +73,13 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Check JavaScript syntax
+      - name: Check JavaScript and module syntax
         shell: bash
         run: |
-          find web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+          find web -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | sort -z | xargs -0 -n1 node --check
+
+      - name: Run dependency-free frontend module tests
+        run: node --test tests/frontend/*.test.mjs
 
   focused-validation:
     runs-on: ubuntu-latest
@@ -100,7 +103,7 @@ jobs:
       - name: Check Markdown internal links
         run: python tools/check_markdown_links.py
 
-      - name: Test SQLite, userdata and V0.6.2 UI contracts
+      - name: Test SQLite, userdata and frontend architecture contracts
         run: >-
           python -m pytest -q -p no:cacheprovider
           tests/test_userdata.py
@@ -112,6 +115,7 @@ jobs:
           tests/test_v060_release.py
           tests/test_v062_ui.py
           tests/test_v062_settings_ui.py
+          tests/test_v070_frontend_architecture.py
 
       - name: Check Windows call chain and Docker configuration
         run: >-
