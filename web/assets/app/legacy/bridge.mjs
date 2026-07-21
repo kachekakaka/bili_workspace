@@ -11,7 +11,7 @@ async function mountLegacyPage(page, root, context = {}) {
   if (!legacy?.renderPage) throw new Error(`旧页面适配器未加载：${page}`);
   if (context.signal?.aborted) return Object.freeze({ dispose: () => false });
   const host = globalRef.document.createElement('div');
-  host.dataset.enhancedView = page;
+  host.dataset.legacyPageHost = page;
   if (typeof context.commit === 'function') context.commit(() => root.replaceChildren(host));
   else root.replaceChildren(host);
   await legacy.renderPage(page, host);
