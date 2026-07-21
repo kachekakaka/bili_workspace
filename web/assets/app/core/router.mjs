@@ -43,6 +43,7 @@ export function createRouter({
     const generation = gate.begin();
     const record = { route, generation, controller, handle: null };
     active = record;
+    root.innerHTML = '<div class="loading-card">正在载入…</div>';
     const context = Object.freeze({
       route,
       generation,
