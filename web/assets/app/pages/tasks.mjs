@@ -390,11 +390,9 @@ export async function mount(root, context) {
     } else if (button.dataset.taskEditRetry) {
       await openRetryEditor(button.dataset.taskEditRetry);
     } else if (button.dataset.taskLibrary !== undefined) {
-      const legacy = context.legacy.state();
-      if (legacy?.library) {
-        legacy.library.q = button.dataset.taskLibrary || '';
-        legacy.library.page = 1;
-      }
+      try {
+        sessionStorage.setItem('bili-v070-library-query', button.dataset.taskLibrary || '');
+      } catch {}
       context.navigate('library');
     } else if (button.dataset.taskDiscardExport) {
       const accepted = await context.confirm({ title: '删除临时文件', message: '确定删除这个设备导出的临时文件吗？', confirmLabel: '删除', danger: true });
