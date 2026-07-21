@@ -1,13 +1,21 @@
 export const SEARCH_FILTER_MODES = Object.freeze(['raw', 'exact', 'fuzzy']);
 
+export function normalizeSearchText(value) {
+  return String(value || '').normalize('NFKC').toLocaleLowerCase();
+}
+
 export function splitTitleTerms(value) {
-  return [...new Set(
-    String(value || '')
-      .trim()
-      .toLocaleLowerCase()
-      .split(/\s+/u)
-      .filter(Boolean),
-  )];
+  const terms = [];
+  const seen = new Set();
+  for (const raw of String(value || '').split(/[\s,，;；|/\\()（）\[\]{}<>《》]+/u)) {
+    const term = raw.trim();
+    const folded = normalizeSearchText(term);
+    if (!term || seen.has(folded)) continue;
+    seen.add(folded);
+    terms.push(term.slice(0, 50));
+    if (terms.length >= 6) break;
+  }
+  return terms;
 }
 
 export function titleMatches(title, filterText, mode = 'raw') {
@@ -15,10 +23,9 @@ export function titleMatches(title, filterText, mode = 'raw') {
   if (!SEARCH_FILTER_MODES.includes(mode)) return false;
   const terms = splitTitleTerms(filterText);
   if (!terms.length) return true;
-  const normalizedTitle = String(title || '').toLocaleLowerCase();
-  return mode === 'exact'
-    ? terms.every(term => normalizedTitle.includes(term))
-    : terms.some(term => normalizedTitle.includes(term));
+  const normalizedTitle = normalizeSearchText(title);
+  const matches = terms.map(term => normalizedTitle.includes(normalizeSearchText(term)));
+  return mode === 'exact' ? matches.every(Boolean) : matches.some(Boolean);
 }
 
 export function filterSearchItems(items, filterText, mode = 'raw') {
@@ -29,7 +36,7 @@ export function filterSearchItems(items, filterText, mode = 'raw') {
 
 export function searchPageKey({ keyword = '', order = 'totalrank', page = 1 } = {}) {
   return JSON.stringify([
-    String(keyword).trim(),
+    normalizeSearchText(String(keyword).trim()),
     String(order || 'totalrank'),
     Math.max(1, Number.parseInt(page, 10) || 1),
   ]);
