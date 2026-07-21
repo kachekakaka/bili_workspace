@@ -1,7 +1,13 @@
 name: Build multi-architecture Docker image
+run-name: Build Docker ${{ inputs.release_tag || github.ref_name }}
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional immutable release tag to publish, for example v0.7.0
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -21,7 +27,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: docker-${{ github.ref }}
+  group: docker-${{ github.ref }}-${{ inputs.release_tag || 'source' }}
   cancel-in-progress: true
 
 jobs:
@@ -30,8 +36,22 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      - name: Checkout requested source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate optional release tag
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" --force
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "$RELEASE_TAG")"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -54,6 +74,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
+            type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
             type=sha
 
       - name: Build and push amd64/arm64 image
