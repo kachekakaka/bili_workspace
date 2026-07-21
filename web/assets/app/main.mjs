@@ -170,7 +170,7 @@ function renderChrome() {
   const desktop = admin ? ADMIN_NAV : USER_NAV;
   const mobile = admin ? ADMIN_MOBILE_NAV : USER_NAV;
   document.querySelector('#desktopNav').innerHTML = desktop.map(([id, icon, label]) => `<a class="nav-item" data-page="${id}" href="#/${id}"><span>${icon}</span><span>${label}</span></a>`).join('');
-  document.querySelector('#mobileNav').innerHTML = mobile.map(([id, icon, label]) => `<a class="mobile-nav-item" data-page="${id}" href="#/${id}"><span>${icon}</span><small>${label}</small></a>`).join('');
+  document.querySelector('#mobileNav').innerHTML = mobile.map(([id, icon, label]) => `<a class="nav-item mobile-nav-item" data-page="${id}" href="#/${id}"><span>${icon}</span><small>${label}</small></a>`).join('');
   const user = userValue();
   const name = user.display_name || user.username || '用户';
   document.querySelector('#userMenuRoot').classList.remove('hidden');
