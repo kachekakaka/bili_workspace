@@ -43,10 +43,12 @@ def test_module_pages_replace_prompt_style_user_and_group_actions() -> None:
 
 def test_module_account_separates_bilibili_and_website_surfaces() -> None:
     script = text("web/assets/app/pages/account.mjs")
+    main = text("web/assets/app/main.mjs")
     assert 'id="v062AccountTabs"' in script
     assert 'data-v062-account-tab="bilibili"' in script
     assert 'data-v062-account-tab="website"' in script
-    assert "网站账号与设备" in text("web/assets/app/main.mjs")
+    for label in ("修改显示名", "修改密码", "登录设备"):
+        assert label in main
     assert "/api/auth/sessions" in script
     assert "/api/auth/sessions/revoke-others" in script
     assert "/api/auth/profile" in script
