@@ -51,10 +51,28 @@ test('TaskStream start is idempotent and owns only one EventSource', () => {
   assert.equal(first, second);
   assert.equal(FakeEventSource.instances.length, 1);
   assert.equal(stream.activeSourceCount(), 1);
+  assert.equal(first.url, '/api/events');
   first.emit('tasks', JSON.stringify({ tasks: [{ id: 'task-1' }], summary: { all: 1 } }));
   assert.equal(values.at(-1).tasks[0].id, 'task-1');
   stream.stop({ clear: true });
   assert.equal(first.closed, true);
   assert.equal(stream.activeSourceCount(), 0);
   assert.deepEqual(stream.get().tasks, []);
+});
+
+test('entering and leaving a task view ten times only changes subscribers', () => {
+  FakeEventSource.instances = [];
+  const stream = createTaskStream({ EventSourceImpl: FakeEventSource });
+  stream.start();
+  for (let index = 0; index < 10; index += 1) {
+    const unsubscribeTasks = stream.subscribe(() => {});
+    const unsubscribeConnection = stream.subscribeConnection(() => {});
+    assert.equal(stream.activeSourceCount(), 1);
+    assert.equal(unsubscribeTasks(), true);
+    assert.equal(unsubscribeTasks(), false);
+    assert.equal(unsubscribeConnection(), true);
+    assert.equal(unsubscribeConnection(), false);
+  }
+  assert.equal(FakeEventSource.instances.length, 1);
+  stream.stop();
 });
