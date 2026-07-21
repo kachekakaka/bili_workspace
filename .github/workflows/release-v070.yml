@@ -1,0 +1,83 @@
+name: Publish V0.7.0 Release
+
+on:
+  workflow_run:
+    workflows: ["CI", "V0.6.2 UI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-v0.7.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Require both main validation workflows for the same SHA
+        id: gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if [[ "$sha" != "${{ github.event.workflow_run.head_sha }}" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          status_for() {
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/runs" \
+              -f head_sha="$sha" -f branch=main -f event=push -f per_page=100 \
+              --jq ".workflow_runs[] | select(.name == \"$1\") | .conclusion" | head -n 1
+          }
+          ci_status="$(status_for CI)"
+          ui_status="$(status_for 'V0.6.2 UI')"
+          echo "CI=$ci_status UI=$ui_status SHA=$sha"
+          if [[ "$ci_status" != success || "$ui_status" != success ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python - <<'PY'
+          from app import __version__
+          assert __version__ == "0.7.0", __version__
+          PY
+          grep -F 'data-frontend-version="20260720-2"' web/index.html
+          grep -F "const LOADED_FRONTEND_VERSION = '20260720-2';" web/assets/app/main.mjs
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Create immutable tag and GitHub Release
+        if: steps.gates.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.gates.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git show-ref --tags --verify --quiet refs/tags/v0.7.0; then
+            test "$(git rev-list -n 1 v0.7.0)" = "$RELEASE_SHA"
+          else
+            git tag -a v0.7.0 "$RELEASE_SHA" -m "bili_workspace v0.7.0"
+            git push origin refs/tags/v0.7.0
+          fi
+          if gh release view v0.7.0 >/dev/null 2>&1; then
+            echo "Release v0.7.0 already exists."
+          else
+            gh release create v0.7.0 \
+              --verify-tag \
+              --target "$RELEASE_SHA" \
+              --title "bili_workspace v0.7.0" \
+              --notes-file docs/releases/V0.7.0.md
+          fi

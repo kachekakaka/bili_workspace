@@ -2,6 +2,20 @@
 
 本项目遵循语义化版本号。
 
+## 0.7.0 - 2026-07-21
+
+- 将前端切换为浏览器原生 `.mjs` ES Modules 和静态 import，不引入 npm、打包器或生产 Node 依赖；
+- 建立单一 API client、Session/Context store、generation-safe Router、Modal、Toast、Confirm、SearchableSelect 和 TaskStream；
+- Dashboard、Download、Search、Library、Groups、Tasks、Users、Account、Settings 和 More 全部迁移为正式 `mount()`/幂等 `dispose()` 页面；
+- Search 保持当前页请求、本地标题筛选、最多预载下一页和路由竞态取消；Library 保持筛选、标签、批量操作、改分组、Range 播放和续播；
+- Dashboard 与 Tasks 共享唯一 EventSource，反复进入退出页面不会创建重复 SSE、重复事件或重复请求；
+- 删除旧 `app.js`、全部 `enhancements-*` renderer/overlay、Legacy Bridge、`browser-version.js` 和版本专用 CSS 覆盖；
+- 最终入口收口为 `qrcode.min.js`、唯一 `app/main.mjs` 和 tokens/base/components/pages 四层 CSS；
+- 版本检查合入 App Shell，浏览器资源与服务版本不一致时提供重启服务和强制刷新提示；
+- 构建指纹加入 `.mjs`，Windows/Linux 自检加入全部 `.js/.mjs` 语法和依赖无关 Node tests；
+- 新增最终架构、页面生命周期、竞态、请求计数、五档 Playwright、Windows 和 Docker 发布门禁；
+- 数据库继续为 schema v4，不修改下载算法、API 协议、权限矩阵、标签业务模型或持久化目录。
+
 ## 0.6.2 - 2026-07-20
 
 - 统一桌面端按钮、输入框和下拉框的普通高度为 40px，移动端触控控件保持不低于 44px，并压缩过大的页面留白和下载输入区域；
@@ -25,79 +39,53 @@
 - 增加 10 分钟 WBI 密钥缓存、3 分钟原始搜索页缓存和签名失效单次重试；
 - 搜索响应直接合并标签、下载状态和删除状态，停用搜索页 overlay 与额外标签批量请求；
 - 修正搜索控件、批量栏和 768px 竖屏平板断点，并用 Playwright Chromium 验证五个固定视口；
-- CI 增加 Playwright、SQLite/userdata 迁移、Windows/Docker 静态检查和 Markdown 内部链接门槛。
+- CI 增加 Playwright、SQLite/userdata 迁移、Windows/Docker 静态检查和 Markdown 内部链接门槛；
 - 所有运行模式改为网站账号登录；Windows 回环全新安装创建受限临时管理员，Docker/NAS 保留一次性初始化令牌；
 - `users`、`sessions` 和审计 schema 升级，迁移前自动备份 SQLite、事务迁移、外键检查并只保留最近 3 份备份；
 - 每次登录创建独立 HttpOnly Token，数据库只保存哈希；每用户最多 10 个有效会话并按最近连接时间淘汰；
 - 增加强制首次改密、当前 Token/CSRF 轮换、本人设备会话管理以及管理员普通用户 API；
-- 增加账号规则、并发登录、Token/CSRF、迁移失败回滚、损坏数据库保护和默认密码监听边界测试。
 - 数据库升级到 schema v4，新增正式 `task_records` 和任务/导出所有者迁移，v3→v4 不重复撤销有效会话；
 - 普通用户下载被强制为当前设备导出，任务、日志、SSE 和导出文件按 `owner_user_id` 隔离；
 - 设备导出内部按用户命名空间隔离，允许不同用户同时导出同一个 BV；
 - 普通用户活动任务最多 10 个，终态任务保留 7 天且最多 100 条；管理员终态任务最多 500 条；
-- 管理员任务 API 增加用户、状态、目标、关键词、排序和按用户分组查询。
-- 普通用户导航收敛为“下载”和“任务”，下载页只保留作品输入、最低清晰度和设备导出提示；
-- 顶部用户菜单支持修改显示名、修改密码、查看/撤销登录设备和退出登录；
-- 管理员新增响应式用户管理页，可创建、启停、重置普通用户并查看其任务；
-- 管理员任务中心增加用户筛选、SQLite 排序和按用户分组显示，任务卡明确显示拥有者；
-- Playwright 扩展到普通用户双页面、用户菜单、用户管理表格/手机卡片和管理员任务用户视图。
+- 管理员任务 API 增加用户、状态、目标、关键词、排序和按用户分组查询；
+- 普通用户导航收敛为“下载”和“任务”，管理员新增响应式用户管理和按用户筛选/分组的任务中心。
 
 ## 0.5.6 - 2026-07-18
 
 - Windows x64 集成可移植 Python 3.13.14、锁定依赖、BBDown 和 FFmpeg，`git pull` 后直接运行 `start.bat`；
-- 删除 Windows 首次启动对 PyPI、GitHub Release 和系统 Python 的依赖；
-- 集成运行包由 GitHub Windows Runner从固定官方来源构建，校验上游和成品 SHA-256，并执行冒烟测试；
-- 两个运行包均小于普通 Git 的 100 MiB 单文件限制，不要求 Git LFS；
 - Docker 默认拉取 GHCR 的 amd64/arm64 预构建镜像，同时保留 `BUILD_LOCAL=true` 的本机构建后备；
-- 持久化目录调整为 `config/`、`userdata/`、`downloads/`，Docker 分别映射 `/data/config`、`/data/userdata`、`/downloads`；
-- SQLite、任务快照、下载索引、任务日志、缓存和临时文件统一放入 `userdata/`，媒体目录只保留媒体文件，并提供旧数据安全迁移；
-- 搜索支持精准/模糊/原始模式，精准与模糊只对一次 B站原始搜索返回的标题做全部词或任意词匹配；
-- 搜索可屏蔽已下载和已删除作品，删除记录使用独立 tombstone，显式重新下载成功后清除；
-- 作品库新增标签/无标签与分组 chip、修改分组和多字段正逆序排序，任务中心补齐批量控制与真实进度；
-- 当前主线文档、根 README、配置目录和运行数据目录说明统一到实际持久化布局，并增加自动回归检查；
-- 清理根目录和过期发布工具：只保留三个 Windows 用户入口，将内部/备用脚本与依赖锁文件分类收纳，移除旧 Release 下载兼容代码、重复依赖文件和无引用文档，并归档历史版本报告。
+- 持久化目录调整为 `config/`、`userdata/`、`downloads/`；
+- SQLite、任务快照、下载索引、任务日志、缓存和临时文件统一放入 `userdata/`；
+- 清理根目录和过期发布工具并归档历史版本报告。
 
 ## 0.5.5 - 2026-07-18
 
 - 将 GitHub `main` 恢复为直接可审查源码树，删除 Base64、临时隧道和 Actions 源码恢复链路；
-- Windows 全新克隆新增 BBDown 官方固定发布包与 PyPI 固定 FFmpeg wheel 的 SHA-256 校验后备；
-- 将后续需求、性能优化、配置边界和原始基线包哈希固化到仓库文档；
-- 保持配置模板自动补字段、可配置 IP/端口、QNAP 四目录持久化、媒体库、分组、设备导出和网页扫码登录。
+- 固化 `.default` 配置模板与缺失字段自动补全；
+- 保持可配置 IP/端口、QNAP 持久化、媒体库、分组、设备导出和网页扫码登录。
 
 ## 0.5.4 - 2026-07-18
 
-- 修复 Windows 网络较慢时 `pip` 下载依赖因默认读取超时而中断的问题；
-- 修复依赖安装中断后 `.venv` 虽已创建、源码自检却不再补装缺失依赖的问题；
-- 修复源码自检仍强制下载 Windows 运行包、Release 资产尚未上传时被 HTTP 404 阻断的问题；
-- 修复从 `config/config.json` 设置局域网主机名时，HTTP 可信 Host 未同步导致手机或域名访问被拒绝的问题；
-- 加强监听主机名校验，拒绝标签首尾连字符、空标签和超长标签。
+- 修复 Windows 慢网络依赖安装和源码自检问题；
+- 修复可信 Host 与局域网访问配置；
+- 加强监听主机名校验。
 
 ## 0.5.3 - 2026-07-18
 
-- 重建为可直接克隆的标准 Git 仓库，移除 bootstrap/Base64 源码恢复流程；
-- 固化 `.default` 配置模板与缺失字段自动补全，实际配置、SQLite、任务和分组数据继续保持未跟踪；
-- 明确 Windows、局域网、域名和 QNAP Docker 的可配置监听地址与 1–65535 端口；
-- 保留 `/data/config`、`/data/media`、`/data/cache`、`/data/tmp` 四类持久化映射；
-- 增加需求落实清单、配置目录说明以及仓库恢复/发布校验。
+- 重建为可直接克隆的标准 Git 仓库；
+- 固化 `.default` 配置模板与增量升级；
+- 明确 Windows、局域网、域名和 QNAP Docker 的监听及持久化边界。
 
 ## 0.5.2 - 2026-07-18
 
-- 修复 GitHub 仓库仅包含占位文件和源码归档分段的问题，正式提交可审查、可测试的完整源码树；
-- 配置改为 `.default` 模板与实际文件分离，启动和更新时递归补充新增字段而不覆盖用户值；
-- 支持旧根目录 `config.json` 自动迁移到 `config/config.json`；
-- IP、监听地址和端口可配置，非回环监听自动启用服务器模式和管理员认证；
-- Windows 新增 `configure_network.bat` 和 `update.bat`；
-- Docker/QNAP 使用四个固定持久化目录，`docker/.env` 从 `.env.default` 自动生成和增量升级；
-- 自动化测试扩展到 130 项。
+- 修复远端缺少完整可审查源码树；
+- 配置改为模板与实际文件分离；
+- 增加更新、网络配置和仓库恢复校验。
 
 ## 0.5.0 - 2026-07-17
 
 - Windows 本地运行与 QNAP/NAS Docker 部署；
-- 下载前清晰度预览、最低清晰度硬校验和实际码流展示；
-- 可选择、新建、重命名、合并和浏览逻辑分组；
-- SQLite 持久化任务、媒体库、用户会话与播放进度；
-- 浏览器在线播放、Range 请求、续播和原文件下载；
-- NAS 临时下载并导出到当前设备，完整发送后清理临时产物；
-- 原文件优先播放，并支持按需生成 H.264/AAC MP4 兼容副本；
-- 管理员认证、CSRF、可信 Host/代理、安全 Cookie 与审计日志；
-- 网页 Bilibili 二维码登录，凭据仅保存在服务器端。
+- 下载前清晰度预览和实际码流展示；
+- 媒体库、分组、在线播放、Range、续播和设备导出；
+- 管理员认证、CSRF、可信 Host/代理、安全 Cookie、审计日志和 Bilibili 扫码登录。

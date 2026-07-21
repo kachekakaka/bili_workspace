@@ -13,9 +13,10 @@ PYTHON_BIN="${PYTHON:-python3}"
 "$PYTHON_BIN" -m pytest -q -p no:cacheprovider
 
 if command -v node >/dev/null 2>&1; then
-  find web -type f -name '*.js' -print0 | xargs -0 -n1 node --check
+  find web -type f \( -name '*.js' -o -name '*.mjs' \) -print0 | sort -z | xargs -0 -n1 node --check
+  node --test tests/frontend/*.test.mjs
 else
   echo "[跳过] 未安装 Node.js；Python 源码、静态检查和测试已完成。"
 fi
 
-echo "[通过] bili_workspace v0.6.2 源码自检完成。"
+echo "[通过] bili_workspace v0.7.0 源码自检完成。"
