@@ -147,7 +147,7 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Test fixed viewports and V0.7 task lifecycles
+      - name: Test fixed viewports and V0.7 page lifecycles
         env:
           BILI_RUN_PLAYWRIGHT: "1"
         run: >-
@@ -155,6 +155,7 @@ jobs:
           tests/test_playwright_layout.py
           tests/test_v062_ui_playwright.py
           tests/test_v070_tasks_playwright.py
+          tests/test_v070_library_playwright.py
 
   release-validation:
     if: >-

@@ -6,14 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 WEB = ROOT / "web"
 
-PR4_SCRIPT_ORDER = [
+PR5_SCRIPT_ORDER = [
     "/assets/qrcode.min.js",
     "/assets/enhancements-core.js",
-    "/assets/enhancements-tag-palette.js",
     "/assets/enhancements-search.js",
-    "/assets/enhancements-library.js",
-    "/assets/enhancements-ui-recovery.js",
-    "/assets/enhancements-library-overlay.js",
     "/assets/browser-version.js",
     "/assets/app/main.mjs",
 ]
@@ -21,15 +17,10 @@ PR4_SCRIPT_ORDER = [
 REMAINING_LEGACY_ASSETS = {
     "app.js": 7,
     "enhancements-core.js": 7,
-    "enhancements-tag-palette.js": 5,
     "enhancements-search.js": 6,
-    "enhancements-library.js": 5,
-    "enhancements-ui-recovery.js": 5,
-    "enhancements-library-overlay.js": 5,
     "browser-version.js": 7,
     "app.css": 7,
     "enhancements.css": 7,
-    "enhancements-catalog-v2.css": 5,
     "ui-v062.css": 7,
 }
 
@@ -40,6 +31,11 @@ REMOVED_ASSETS = [
     "web/assets/ui-v062-settings.css",
     "web/assets/enhancements-task-actions.js",
     "web/assets/enhancements-tasks.js",
+    "web/assets/enhancements-tag-palette.js",
+    "web/assets/enhancements-library.js",
+    "web/assets/enhancements-ui-recovery.js",
+    "web/assets/enhancements-library-overlay.js",
+    "web/assets/enhancements-catalog-v2.css",
 ]
 
 CORE_MODULES = [
@@ -83,19 +79,21 @@ def _asset_path(src: str) -> str:
     return src.split("?", 1)[0]
 
 
-def test_pr4_keeps_the_module_shell_and_removes_legacy_task_entries() -> None:
+def test_pr5_keeps_the_module_shell_and_only_loads_search_legacy() -> None:
     index = _text("web/index.html")
     scripts = [_asset_path(src) for src in re.findall(r'<script[^>]+src="([^"]+)"', index)]
-    assert scripts == PR4_SCRIPT_ORDER
+    assert scripts == PR5_SCRIPT_ORDER
     assert 'data-app-shell="module"' in index
     assert '<script type="module" src="/assets/app/main.mjs' in index
     assert '<script src="/assets/app.js' not in index
-    assert "enhancements-task-actions.js" not in index
-    assert "enhancements-tasks.js" not in index
-    assert 'data-enhanced-view="tasks"' not in index
+    assert "enhancements-library" not in index
+    assert "enhancements-ui-recovery" not in index
+    assert "enhancements-tag-palette" not in index
+    assert "enhancements-catalog-v2.css" not in index
+    assert 'data-enhanced-view="library"' not in index
 
 
-def test_replaced_dom_and_task_assets_are_deleted() -> None:
+def test_replaced_assets_are_deleted() -> None:
     index = _text("web/index.html")
     for path in REMOVED_ASSETS:
         assert not (ROOT / path).exists(), path
@@ -146,7 +144,7 @@ def test_every_page_exports_mount_and_avoids_dom_patch_techniques() -> None:
         assert re.search(r"(?<![.\w])confirm\(", source) is None, path
 
 
-def test_pr4_has_exactly_one_legacy_bridge_file() -> None:
+def test_pr5_has_exactly_one_legacy_bridge_file() -> None:
     files = sorted(path.relative_to(ROOT).as_posix() for path in (WEB / "assets" / "app" / "legacy").rglob("*.*"))
     assert files == ["web/assets/app/legacy/bridge.mjs"]
     source = _text(files[0])
@@ -170,12 +168,6 @@ def test_module_shell_has_single_core_services_and_application_dialogs() -> None
     assert "MutationObserver" not in main
     assert "stopImmediatePropagation" not in main
 
-    users = _text("web/assets/app/pages/users.mjs")
-    groups = _text("web/assets/app/pages/groups.mjs")
-    assert "v062UserDisplayNameForm" in users
-    assert "v062UserPasswordForm" in users
-    assert "v062GroupRenameForm" in groups
-
 
 def test_tasks_and_dashboard_share_the_single_task_stream() -> None:
     stream = _text("web/assets/app/core/task-stream.mjs")
@@ -188,32 +180,58 @@ def test_tasks_and_dashboard_share_the_single_task_stream() -> None:
     assert "context.taskStream.subscribeConnection(" in tasks
     assert "context.taskStream.start()" in dashboard
     assert "context.taskStream.subscribe(" in dashboard
-    assert "legacyBridge" not in tasks
     assert "new EventSource" not in tasks
     assert "new EventSource" not in dashboard
 
 
-def test_tasks_preserve_filters_actions_and_application_confirmations() -> None:
-    tasks = _text("web/assets/app/pages/tasks.mjs")
+def test_library_is_a_single_formal_renderer_with_full_behavior() -> None:
+    library = _text("web/assets/app/pages/library.mjs")
+    assert "legacyBridge" not in library
+    assert "context.legacy" not in library
+    assert 'data-enhanced-view="library"' in library
+    assert library.count('data-enhanced-view="library"') == 1
     for token in (
-        "enhTaskOwner",
-        "enhTaskDestination",
-        "enhTaskStatus",
-        "enhTaskSort",
-        "enhTaskDirection",
-        "enhTaskGroupByUser",
-        "按用户分组显示",
-        "data-task-action",
-        "data-task-log",
-        "data-task-edit-retry",
-        "编辑画质并重试",
-        "/api/enhancements/tasks/batch",
-        "/api/enhancements/tasks/clear",
+        "enhLibraryQuery",
+        "enhLibraryGroup",
+        "enhLibraryTag",
+        "__untagged__",
+        "enhLibrarySortField",
+        "enhLibrarySortDirection",
+        "enhLibraryCodec",
+        "enhLibraryHeight",
+        "enhLibraryWatched",
+        "/api/enhancements/library?",
+        "/api/enhancements/tags",
+        "/api/enhancements/library/items",
+        "/api/enhancements/library/delete",
+        "data-library-move",
+        "/move",
+        "enhMediaPlayer",
+        "/progress",
+        "data-enh-play-file",
+        "bindCoverFallback",
         "context.confirm",
     ):
-        assert token in tasks
-    assert "window.confirm" not in tasks
-    assert re.search(r"(?<![.\w])confirm\(", tasks) is None
+        assert token in library
+    assert "MutationObserver" not in library
+    assert "stopImmediatePropagation" not in library
+    assert "window.confirm" not in library
+    assert re.search(r"(?<![.\w])confirm\(", library) is None
+
+
+def test_catalog_chip_styles_are_absorbed_without_a_version_overlay() -> None:
+    css = _text("web/assets/enhancements.css")
+    for token in (
+        ".enh-library-chip-filters",
+        ".enh-chip-filter-row",
+        ".enh-filter-chip",
+        ".enh-colored-filter-chip",
+        ".enh-untagged-chip",
+        ".enh-native-chip-filter",
+        ".enh-mode-help",
+        ".enh-query-term",
+    ):
+        assert token in css
 
 
 def test_v070_does_not_create_versioned_overlay_files() -> None:

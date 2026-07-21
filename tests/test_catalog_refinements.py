@@ -122,25 +122,31 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
     assert client.app.state.deletion_store.for_keys([bvid]) == {}
 
 
-def test_frontend_search_is_integrated_without_overlay_competition():
+def test_frontend_search_and_library_are_integrated_without_overlay_competition():
     index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     search = (ROOT / "web" / "assets" / "enhancements-search.js").read_text(
         encoding="utf-8"
     )
-    library = (ROOT / "web" / "assets" / "enhancements-library-overlay.js").read_text(
+    library = (ROOT / "web" / "assets" / "app" / "pages" / "library.mjs").read_text(
         encoding="utf-8"
     )
-    css = (ROOT / "web" / "assets" / "enhancements-catalog-v2.css").read_text(
+    css = (ROOT / "web" / "assets" / "enhancements.css").read_text(
         encoding="utf-8"
     )
     app = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
 
-    assert "enhancements-search-overlay.js" not in index
-    assert "enhancements-deletion-status.js" not in index
-    assert not (ROOT / "web" / "assets" / "enhancements-search-overlay.js").exists()
-    assert not (ROOT / "web" / "assets" / "enhancements-deletion-status.js").exists()
+    for removed in (
+        "enhancements-search-overlay.js",
+        "enhancements-deletion-status.js",
+        "enhancements-library.js",
+        "enhancements-library-overlay.js",
+        "enhancements-ui-recovery.js",
+        "enhancements-tag-palette.js",
+        "enhancements-catalog-v2.css",
+    ):
+        assert removed not in index
+        assert not (ROOT / "web" / "assets" / removed).exists()
     assert "function renderSearch(" not in app
-    assert "AUTO_RENDER_PAGES = new Set(['library', 'tasks'])" in (ROOT / "web" / "assets" / "enhancements-core.js").read_text(encoding="utf-8")
     for token in (
         "精准：标题包含全部词",
         "模糊：标题包含任意词",
@@ -154,8 +160,16 @@ def test_frontend_search_is_integrated_without_overlay_competition():
         assert token in search
     for forbidden in ("tags/bulk", "MutationObserver", "insertBefore", "enh-spacer"):
         assert forbidden not in search
-    for token in ("无标签", "data-library-group-chip", "data-catalog-move", "修改作品分组"):
+    for token in (
+        "无标签",
+        "data-library-group-chip",
+        "data-library-move",
+        "修改作品分组",
+        "context.confirm",
+    ):
         assert token in library
+    for forbidden in ("MutationObserver", "stopImmediatePropagation", "window.confirm"):
+        assert forbidden not in library
     assert ".enh-chip-strip" in css
     assert ".enh-colored-filter-chip" in css
 
