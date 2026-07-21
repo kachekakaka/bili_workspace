@@ -6,6 +6,7 @@ on:
     types: [completed]
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -24,6 +25,7 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+
       - name: Require both main validation workflows for the same SHA
         id: gates
         env:
@@ -56,28 +58,55 @@ jobs:
           grep -F "const LOADED_FRONTEND_VERSION = '20260720-2';" web/assets/app/main.mjs
           echo "ready=true" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - name: Create immutable tag and GitHub Release
+
+      - name: Ensure immutable tag and GitHub Release
         if: steps.gates.outputs.ready == 'true'
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_SHA: ${{ steps.gates.outputs.sha }}
+          MAIN_SHA: ${{ steps.gates.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           if git show-ref --tags --verify --quiet refs/tags/v0.7.0; then
-            test "$(git rev-list -n 1 v0.7.0)" = "$RELEASE_SHA"
+            release_sha="$(git rev-list -n 1 v0.7.0)"
+            echo "Using existing immutable release tag at $release_sha"
           else
-            git tag -a v0.7.0 "$RELEASE_SHA" -m "bili_workspace v0.7.0"
+            release_sha="$MAIN_SHA"
+            git tag -a v0.7.0 "$release_sha" -m "bili_workspace v0.7.0"
             git push origin refs/tags/v0.7.0
           fi
           if gh release view v0.7.0 >/dev/null 2>&1; then
+            test "$(gh api repos/${GITHUB_REPOSITORY}/releases/tags/v0.7.0 --jq .tag_name)" = v0.7.0
             echo "Release v0.7.0 already exists."
           else
             gh release create v0.7.0 \
               --verify-tag \
-              --target "$RELEASE_SHA" \
+              --target "$release_sha" \
               --title "bili_workspace v0.7.0" \
               --notes-file docs/releases/V0.7.0.md
+          fi
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch release Docker image when not already published
+        if: steps.gates.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          active_or_success="$(
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/docker-image.yml/runs" \
+              -f event=workflow_dispatch -f per_page=100 \
+              --jq '.workflow_runs[] | select(.display_title == "Build Docker v0.7.0") | select(.status == "queued" or .status == "in_progress" or .conclusion == "success") | .status' \
+              | head -n 1
+          )"
+          if [[ -n "$active_or_success" ]]; then
+            echo "Docker release workflow is already $active_or_success."
+          else
+            gh workflow run docker-image.yml --ref main -f release_tag=v0.7.0
+            echo "Dispatched Docker image build for v0.7.0 from $RELEASE_SHA."
           fi
