@@ -70,7 +70,7 @@ export function mediaCard(item) {
 }
 
 export function modalActions(label) {
-  return `<div class="v062-modal-actions"><button type="button" class="btn" data-dialog-cancel>取消</button><button type="submit" class="btn primary">${esc(label)}</button></div>`;
+  return `<div class="v062-modal-actions"><button type="button" class="btn" data-dialog-cancel data-v062-cancel>取消</button><button type="submit" class="btn primary">${esc(label)}</button></div>`;
 }
 
 export function bindDialogCancel(modal) {
