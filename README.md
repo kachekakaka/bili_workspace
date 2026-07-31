@@ -52,6 +52,13 @@ Docker 固定映射：
 
 仓库只跟踪 `.default` 模板；实际 `.env`、配置、SQLite、任务、媒体和凭据均被 Git 忽略。升级只补充缺少的默认字段，不覆盖已有用户值。运行数据的详细职责与恢复边界见 [`userdata/README.md`](userdata/README.md)。
 
+## 构建与交付
+
+- Windows 用户入口为 `start.bat`，部署自检入口为 `verify.bat`；运行时由仓库集成的 Portable Python、BBDown 和 FFmpeg 资产提供。
+- Docker 构建与启动入口为 `docker/build-and-start.sh`，支持本地构建或拉取 GHCR 多架构镜像。
+- 当前交付渠道为 GitHub tag/Release、仓库集成 Windows 运行资产，以及 `ghcr.io/kachekakaka/bili_workspace` 的 `latest` 和版本标签镜像。
+- [项目文档入口](docs/README.md)保存当前需求、设计、运维与归档导航；[测试治理入口](SoftwareTesting/README.md)定义普通验证、全量测试和正式认证。
+
 ## Windows 开箱即用
 
 全新安装：
@@ -71,13 +78,13 @@ start.bat
 
 `start.bat` 使用仓库内经过校验的 Windows Portable Python、固定依赖、BBDown 和 FFmpeg 运行包，不依赖系统 Python、PyPI 或临时 Release 下载。
 
-完整自检：
+Windows 部署自检：
 
 ```bat
 verify.bat
 ```
 
-`verify.bat` 会验证源码边界、Python compileall、Ruff、完整 pytest、所有 `.js/.mjs` 语法、依赖无关 Node 单元测试，以及内置 Python、BBDown、FFmpeg 冒烟。
+`verify.bat` 会验证源码边界、Python compileall、Ruff、完整 pytest，以及内置 Python、BBDown、FFmpeg 冒烟；检测到 Node.js 时还会执行全部 `.js/.mjs` 语法和依赖无关 Node 单元测试。Node.js 只用于开发和发布验证，不是应用运行依赖。正式发布设置 `BILI_VERIFY_REQUIRE_NODE=1` 启用严格模式；文档门禁由独立的 T-DOC 执行。
 
 ## IP、端口和手机访问
 
@@ -116,7 +123,7 @@ git pull --ff-only origin main
 ./docker/build-and-start.sh
 ```
 
-默认拉取 GHCR 镜像；无法访问 GHCR 时可在 `docker/.env` 设置 `BUILD_LOCAL=true` 本地构建。完整步骤见 [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)。
+默认拉取 GHCR 镜像；无法访问 GHCR 时可在 `docker/.env` 设置 `BUILD_LOCAL=true` 本地构建。完整步骤见 [QNAP Docker 部署指南](docs/运维/QNAP_Docker部署指南.md)。
 
 ## 备份与升级
 
@@ -142,25 +149,32 @@ sh scripts/dev/verify-source.sh
 
 CI 发布门禁包括：
 
+- T-DOC 文档机械门禁；
 - Python 3.11、3.12、3.13；
 - compileall、Ruff、完整 pytest；
 - 全部 `.js/.mjs` 语法和 Node 单元测试；
 - Playwright 1920×1080、1440×900、1024×768、768×1024、390×844；
-- Windows `verify.bat` 干净检出与原地升级；
+- Windows 干净检出中的运行包准备与严格 `verify.bat`；
 - Docker build、持久化/迁移测试和镜像内 `0.7.0` 冒烟。
 
 ## 文档
 
 - [文档索引](docs/README.md)
+- [需求文档入口](docs/需求文档.md)
+- [设计文档入口](docs/设计文档.md)
+- [已知问题与待做需求](docs/已知问题与待做需求.md)
+- [软件测试 Registry](docs/软件测试.md)
+- [测试治理入口](SoftwareTesting/README.md)
 - [V0.7.0 功能与验收](docs/V0.7功能与验收.md)
 - [V0.7.0 Release notes](docs/releases/V0.7.0.md)
 - [当前需求落实清单](docs/需求落实清单.md)
 - [账号权限与会话管理](docs/账号权限与会话管理.md)
 - [任务所有权与保留策略](docs/任务所有权与保留策略.md)
-- [发布、更新与回滚流程](docs/发布与回滚流程.md)
-- [QNAP Docker 部署指南](docs/QNAP_Docker部署指南.md)
+- [运维文档入口](docs/运维/README.md)
+- [发布、更新与回滚流程](docs/运维/发布与回滚流程.md)
+- [QNAP Docker 部署指南](docs/运维/QNAP_Docker部署指南.md)
 - [运行数据目录说明](userdata/README.md)
-- [源文件与恢复清单](docs/源文件与恢复清单.md)
+- [源文件与恢复清单](docs/运维/源文件与恢复清单.md)
 
 ## 已知边界
 

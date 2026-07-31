@@ -3,8 +3,9 @@ chcp 65001 >nul
 setlocal EnableExtensions
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+set "NODE_CHECK_SKIPPED=0"
 cd /d "%~dp0"
-title bili_workspace v0.7.0 - 完整自检
+title bili_workspace v0.7.0 - Windows 部署自检
 
 call "%~dp0scripts\windows\prepare-runtime.bat" -Quiet
 if errorlevel 1 goto :failed
@@ -32,7 +33,12 @@ if errorlevel 1 goto :failed
 
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [跳过] 未检测到 Node.js；其余自检不受影响。
+  if /I "%BILI_VERIFY_REQUIRE_NODE%"=="1" (
+    echo [阻断] 严格验证要求 Node.js，但当前环境未检测到 node。
+    goto :failed
+  )
+  set "NODE_CHECK_SKIPPED=1"
+  echo [提示] 未检测到 Node.js；跳过仅用于开发和发布的前端语法与单元测试。
 ) else (
   for /r "web" %%F in (*.js) do (
     node --check "%%F"
@@ -50,7 +56,12 @@ if errorlevel 1 (
 
 if exist "%SMOKE_DIR%" rmdir /s /q "%SMOKE_DIR%"
 echo.
-echo ===== v0.7.0 自检全部通过 =====
+if "%NODE_CHECK_SKIPPED%"=="1" (
+  echo ===== v0.7.0 Windows 部署自检通过 =====
+  echo 前端开发检查未执行；这不影响应用部署运行。
+) else (
+  echo ===== v0.7.0 Windows 部署自检全部通过 =====
+)
 echo 可直接运行 start.bat。
 if /I "%BILI_VERIFY_NO_PAUSE%"=="1" exit /b 0
 pause

@@ -72,6 +72,10 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           if git show-ref --tags --verify --quiet refs/tags/v0.7.0; then
             release_sha="$(git rev-list -n 1 v0.7.0)"
+            if [[ "$release_sha" != "$MAIN_SHA" ]]; then
+              echo "::error::Existing tag v0.7.0 points to $release_sha, not validated main $MAIN_SHA."
+              exit 1
+            fi
             echo "Using existing immutable release tag at $release_sha"
           else
             release_sha="$MAIN_SHA"

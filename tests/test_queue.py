@@ -117,17 +117,18 @@ def test_history_limit_never_drops_queued_tasks(tmp_env):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     queue = TaskQueue(store, index, runner=runner, max_history=100, max_pending=200)
-    created = queue.enqueue([_target(i) for i in range(105)])
-    assert len(created) == 105
-    assert started.wait(timeout=2)
-    assert len(queue.list_tasks()) == 105
-    assert all(queue.get_task(task["id"]) is not None for task in created)
-    release.set()
-    deadline = time.time() + 10
-    while time.time() < deadline and len(calls) < 105:
-        time.sleep(0.02)
-    assert len(calls) == 105
-    queue.stop()
+    try:
+        created = queue.enqueue([_target(i) for i in range(105)])
+        assert len(created) == 105
+        assert started.wait(timeout=2)
+        assert len(queue.list_tasks()) == 105
+        assert all(queue.get_task(task["id"]) is not None for task in created)
+        release.set()
+        assert wait_terminal(queue, created[-1]["id"], timeout=30)["status"] == "success"
+        assert len(calls) == 105
+    finally:
+        release.set()
+        queue.stop()
 
 
 def test_cancel_queued_task(tmp_env):

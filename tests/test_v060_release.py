@@ -44,7 +44,7 @@ def test_release_versions_are_synchronized() -> None:
     assert "# bili_workspace v0.7.0" in text("README.md")
     assert "## 0.7.0 - 2026-07-21" in text("CHANGELOG.md")
     assert "bili_workspace v0.7.0" in text("start.bat")
-    assert "v0.7.0 自检全部通过" in text("verify.bat")
+    assert "v0.7.0 Windows 部署自检全部通过" in text("verify.bat")
     assert "bili_workspace v0.7.0 源码自检完成" in text(
         "scripts/dev/verify-source.sh"
     )
@@ -77,6 +77,7 @@ def test_ci_contains_release_validation_matrix() -> None:
     assert "bili-workspace:v0.7.0" in workflow
     assert "tests/test_v070_release.py" in workflow
     assert "BILI_RUN_PLAYWRIGHT" in workflow
+    assert "BILI_VERIFY_REQUIRE_NODE" in workflow
 
 
 def test_migration_backup_is_a_restorable_sqlite_database(tmp_path: Path) -> None:

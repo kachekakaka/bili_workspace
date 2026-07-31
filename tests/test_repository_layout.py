@@ -85,11 +85,11 @@ def test_historical_release_reports_are_archived() -> None:
     )
     for name in reports:
         assert not (ROOT / "docs" / name).exists()
-        assert (ROOT / "docs" / "archive" / "releases" / name).is_file()
+        assert (ROOT / "archive" / "docs" / "releases" / name).is_file()
 
     index = _text("docs/README.md")
-    assert "archive/releases/" in index
-    assert "历史文档" in _text("docs/archive/README.md")
+    assert "../archive/docs/README.md" in index
+    assert "文档归档" in _text("archive/docs/README.md")
 
 
 def test_docker_context_excludes_windows_runtime_and_helper_assets() -> None:
@@ -104,6 +104,7 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
         ".env.default",
         ".gitattributes",
         ".gitignore",
+        "AGENTS.md",
         "CHANGELOG.md",
         "README.md",
         "SECURITY.md",
@@ -114,7 +115,15 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
         "verify.bat",
     }
     result = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files"],
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -130,14 +139,14 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
     assert (ROOT / "docker" / "compose.yaml").is_file()
 
 
-def test_plan_index_distinguishes_current_and_completed_work() -> None:
-    plans = ROOT / "docs" / "plans"
+def test_completed_plan_index_is_archived() -> None:
+    plans = ROOT / "archive" / "docs" / "plans"
     assert (plans / "V0.6.0_多用户搜索与会话方案.md").is_file()
     assert (plans / "V0.7.0_前端结构整理方案.md").is_file()
     assert (plans / "V0.7.0_前端结构整理方案_REVIEW.md").is_file()
     assert (ROOT / "docs" / "V0.7功能与验收.md").is_file()
 
-    index = _text("docs/plans/README.md")
+    index = _text("archive/docs/plans/README.md")
     assert "## 当前计划" in index
     assert "当前没有未完成的已批准计划" in index
     assert "## 已完成计划" in index

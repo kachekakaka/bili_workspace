@@ -28,13 +28,18 @@ def test_local_verifiers_cover_all_frontend_modules() -> None:
     source = text("scripts/dev/verify-source.sh")
     assert "for /r \"web\" %%F in (*.mjs)" in windows
     assert "node --test" in windows
+    assert "BILI_VERIFY_REQUIRE_NODE" in windows
+    assert "SoftwareTesting\\doc_consistency\\test_doc_consistency.py" not in windows
     assert "-name '*.mjs'" in source
     assert "node --test tests/frontend/*.test.mjs" in source
+    assert "T-PROJECT 完整源码自检要求 Node.js" in source
+    assert "SoftwareTesting/doc_consistency/test_doc_consistency.py" not in source
 
 
 def test_v070_release_workflow_is_gated_idempotent_and_dispatches_docker() -> None:
     workflow = text(".github/workflows/release-v070.yml")
     docker = text(".github/workflows/docker-image.yml")
+    assert not (ROOT / ".github/workflows/release-v062.yml").exists()
     for token in (
         'workflows: ["CI", "V0.6.2 UI"]',
         "head_branch == 'main'",
@@ -45,6 +50,7 @@ def test_v070_release_workflow_is_gated_idempotent_and_dispatches_docker() -> No
         "git tag -a v0.7.0",
         "gh release create v0.7.0",
         "gh release view v0.7.0",
+        "not validated main",
         "docs/releases/V0.7.0.md",
         "actions/workflows/docker-image.yml/runs",
         'display_title == "Build Docker v0.7.0"',
@@ -64,10 +70,10 @@ def test_v070_release_workflow_is_gated_idempotent_and_dispatches_docker() -> No
 
 def test_v070_docs_state_completion_and_rollback_contract() -> None:
     docs = text("docs/README.md")
-    plans = text("docs/plans/README.md")
+    plans = text("archive/docs/plans/README.md")
     acceptance = text("docs/V0.7功能与验收.md")
     notes = text("docs/releases/V0.7.0.md")
-    release_process = text("docs/发布与回滚流程.md")
+    release_process = text("docs/运维/发布与回滚流程.md")
     assert "当前应用版本为 V0.7.0" in docs
     assert "V0.7.0 前端结构整理方案" in plans
     assert "已完成" in plans

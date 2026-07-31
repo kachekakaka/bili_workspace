@@ -8,7 +8,7 @@ media-runtime.pack   BBDown 1.6.3 + FFmpeg
 runtime-manifest.json
 ```
 
-文件由 `.github/workflows/build-integrated-runtime.yml` 在 GitHub Windows Runner 中从固定官方来源构建，构建前校验上游 SHA-256，构建后执行 Python 导入、BBDown 和 FFmpeg 冒烟测试，并把最终包哈希写入清单。
+文件由 `.github/workflows/build-integrated-runtime.yml` 在 GitHub Windows Runner 中从固定官方来源构建，构建前校验上游 SHA-256，构建后执行严格 Windows 部署自检，并把最终包哈希写入清单。工作流只上传 Artifact，不 commit、push 或创建 PR；是否把新运行包纳入仓库由维护者另行确认。
 
 两个 `.pack` 都是 ZIP 格式但使用独立扩展名，避免与用户下载 ZIP 混淆。每个文件均小于 GitHub 普通 Git 的 100 MiB 单文件限制，因此不要求 Git LFS。
 

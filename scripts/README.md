@@ -4,8 +4,8 @@
 
 ```text
 start.bat   启动应用
-update.bat  快进更新 main 并执行完整自检
-verify.bat  校验源码、便携 Python、BBDown、FFmpeg 和前端脚本
+update.bat  快进更新 main 并执行 Windows 部署自检
+verify.bat  校验源码、便携 Python、BBDown、FFmpeg；有 Node.js 时追加前端检查
 ```
 
 其余脚本按用途收纳：

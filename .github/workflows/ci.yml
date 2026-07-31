@@ -85,8 +85,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.lock
           python -m pip check
-      - name: Check Markdown internal links
-        run: python tools/check_markdown_links.py
+      - name: Check documentation skeleton
+        run: python -B -X utf8 SoftwareTesting/doc_consistency/test_doc_consistency.py --workspace-root .
       - name: Test SQLite, userdata and frontend architecture contracts
         run: >-
           python -m pytest -q -p no:cacheprovider
@@ -202,6 +202,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           $env:BILI_VERIFY_NO_PAUSE = "1"
+          $env:BILI_VERIFY_REQUIRE_NODE = "1"
           $verifyLog = Join-Path $env:RUNNER_TEMP 'windows-verify.log'
           cmd.exe /d /c verify.bat 2>&1 |
             Tee-Object -FilePath $verifyLog

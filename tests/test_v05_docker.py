@@ -91,7 +91,7 @@ def test_current_persistence_documentation_matches_runtime_layout():
     current_docs = (
         "README.md",
         "docs/README.md",
-        "docs/QNAP_Docker部署指南.md",
+        "docs/运维/QNAP_Docker部署指南.md",
         "docs/需求落实清单.md",
         "docs/产品需求与架构基线.md",
         "config/README.md",

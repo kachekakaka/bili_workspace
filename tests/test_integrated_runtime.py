@@ -85,16 +85,19 @@ def test_windows_entrypoints_use_repository_integrated_runtime() -> None:
         assert 'set "PYTHONIOENCODING=utf-8"' in entrypoint
 
 
-def test_runtime_builder_workflow_has_write_permission_and_no_lfs_dependency() -> None:
+def test_runtime_builder_workflow_uploads_artifact_without_repository_writes() -> None:
     workflow = _text(".github/workflows/build-integrated-runtime.yml")
     attributes = _text(".gitattributes")
-    assert "contents: write" in workflow
+    assert "contents: read" in workflow
     assert "tools/build_integrated_runtime.py" in workflow
     assert "requirements/dev.lock" in workflow
     assert "python-runtime.pack" in workflow
     assert "media-runtime.pack" in workflow
     assert "scripts/windows/prepare-runtime.bat" in workflow
-    assert "git push origin HEAD:main" in workflow
+    assert "BILI_VERIFY_REQUIRE_NODE" in workflow
+    assert "actions/upload-artifact@v4" in workflow
+    assert "git commit" not in workflow
+    assert "git push" not in workflow
     assert "git lfs" not in workflow.lower()
     assert "*.pack filter=lfs" not in attributes
 

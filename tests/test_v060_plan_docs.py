@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PLAN = ROOT / "docs" / "plans" / "V0.6.0_多用户搜索与会话方案.md"
+PLAN = ROOT / "archive" / "docs" / "plans" / "V0.6.0_多用户搜索与会话方案.md"
 
 
 def _text(path: Path) -> str:
@@ -15,6 +15,8 @@ def test_v060_plan_tracks_completed_release() -> None:
     assert PLAN.is_file()
     plan = _text(PLAN)
     docs_index = _text(ROOT / "docs" / "README.md")
+    requirements_entry = _text(ROOT / "docs" / "需求文档.md")
+    archive_index = _text(ROOT / "archive" / "docs" / "README.md")
     current = _text(ROOT / "docs" / "需求落实清单.md")
 
     assert "状态：**已完成（PR 1–5 已合并，V0.6.0 已发布）**" in plan
@@ -23,9 +25,9 @@ def test_v060_plan_tracks_completed_release() -> None:
     assert "状态：已完成（PR #18）" in plan
     assert "状态：已完成（PR #19）" in plan
     assert "状态：已完成（PR #20）" in plan
-    assert "任务所有权与保留策略" in docs_index
-    assert "plans/V0.6.0_多用户搜索与会话方案.md" in docs_index
-    assert "账号权限与会话管理" in docs_index
+    assert "任务所有权与保留策略" in requirements_entry
+    assert "plans/V0.6.0_多用户搜索与会话方案.md" in archive_index
+    assert "账号权限与会话管理" in requirements_entry
     assert "V0.6.0 功能与验收" in docs_index
     assert "每用户最多 10 个有效 Token" in current
     assert "多用户前端" in current
@@ -55,8 +57,8 @@ def test_v060_frozen_limits_and_test_scope_are_documented() -> None:
 
 def test_v05_acceptance_checklist_is_archived() -> None:
     current = ROOT / "docs" / "V0.5功能与验收.md"
-    archived = ROOT / "docs" / "archive" / "v0.5" / "V0.5功能与验收.md"
-    archive_index = _text(ROOT / "docs" / "archive" / "README.md")
+    archived = ROOT / "archive" / "docs" / "v0.5" / "V0.5功能与验收.md"
+    archive_index = _text(ROOT / "archive" / "docs" / "README.md")
 
     assert not current.exists()
     assert archived.is_file()

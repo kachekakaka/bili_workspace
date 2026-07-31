@@ -28,4 +28,4 @@ scripts/windows/bilibili-login.bat
 BBDown_portable\run.bat --help
 ```
 
-完整运行时和源码边界见 [`vendor/windows/README.md`](../vendor/windows/README.md) 与 [`docs/源文件与恢复清单.md`](../docs/源文件与恢复清单.md)。
+完整运行时和源码边界见 [`vendor/windows/README.md`](../vendor/windows/README.md) 与 [`docs/运维/源文件与恢复清单.md`](../docs/运维/源文件与恢复清单.md)。

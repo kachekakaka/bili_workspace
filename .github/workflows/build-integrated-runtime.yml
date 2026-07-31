@@ -16,7 +16,7 @@ on:
       - .github/workflows/build-integrated-runtime.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: integrated-windows-runtime
@@ -48,42 +48,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem vendor/windows/*-runtime.pack | Format-Table Name,Length
 
-      - name: Test the exact git-pull and start runtime path
+      - name: Validate generated runtime packs
         shell: pwsh
         run: |
           cmd /c scripts\windows\prepare-runtime.bat -Force
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $python = Join-Path $PWD '.runtime/python/python.exe'
-          & $python tools/verify_source.py
+          $env:BILI_VERIFY_NO_PAUSE = "1"
+          $env:BILI_VERIFY_REQUIRE_NODE = "1"
+          cmd /c verify.bat
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -m compileall -q app tests tools docker
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -m ruff check --no-cache app tests tools docker
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & $python -m pytest -q -p no:cacheprovider
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Commit generated runtime packs
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git config http.postBuffer 524288000
-          git add -f vendor/windows/python-runtime.pack \
-                     vendor/windows/media-runtime.pack \
-                     vendor/windows/runtime-manifest.json
-          if git diff --cached --quiet; then
-            echo 'Integrated runtime is already current.'
-            exit 0
-          fi
-          git commit -m 'Integrate portable Windows runtime v0.5.6 [skip ci]'
-          git push origin HEAD:main
 
       - name: Upload a recovery artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bili-workspace-windows-runtime-v0.5.6
+          name: bili-workspace-windows-runtime-${{ github.sha }}
           path: |
             vendor/windows/python-runtime.pack
             vendor/windows/media-runtime.pack

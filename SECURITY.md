@@ -2,7 +2,7 @@
 
 ## Supported version
 
-当前维护版本为 V0.5.x。
+当前维护版本为 V0.7.x。
 
 ## Reporting a vulnerability
 
