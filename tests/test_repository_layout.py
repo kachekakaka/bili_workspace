@@ -17,7 +17,7 @@ def test_root_only_contains_primary_windows_entrypoints() -> None:
         for path in ROOT.iterdir()
         if path.is_file() and path.suffix.lower() in script_suffixes
     }
-    assert scripts == {"start.bat", "update.bat", "verify.bat"}
+    assert scripts == {"start.bat", "verify.bat"}
 
 
 def test_helpers_and_dependency_locks_are_grouped() -> None:
@@ -28,6 +28,7 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
         "scripts/windows/bootstrap-portable.ps1",
         "scripts/windows/bootstrap-runtime.bat",
         "scripts/windows/prepare-runtime.bat",
+        "scripts/windows/new-test-run.ps1",
         "scripts/windows/configure-network.bat",
         "scripts/windows/bilibili-login.bat",
         "scripts/dev/verify-source.sh",
@@ -41,6 +42,7 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
         "login.bat",
         "run.bat",
         "setup.bat",
+        "update.bat",
         "verify-source.bat",
         "verify-source.sh",
         "requirements-dev.txt",
@@ -63,18 +65,20 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
 
 def test_entrypoints_use_internal_runtime_preparation() -> None:
     start = _text("start.bat")
-    update = _text("update.bat")
     verify = _text("verify.bat")
     prepare = _text("scripts/windows/prepare-runtime.bat")
 
     assert r"scripts\windows\prepare-runtime.bat" in start
-    assert r"scripts\windows\prepare-runtime.bat" in verify
-    assert "call verify.bat" in update
+    assert r"scripts\windows\bootstrap-runtime.bat" in verify
+    assert r"scripts\windows\new-test-run.ps1" in verify
     assert r"vendor\windows\runtime-manifest.json" in prepare
     assert r".runtime\python\python.exe" in prepare
     assert ".venv" not in prepare
     assert "pip install" not in prepare
     assert "bootstrap_windows_runtime" not in prepare
+    assert ".bili-workspace-test-run.json" in _text(
+        "scripts/windows/new-test-run.ps1"
+    )
 
 
 def test_historical_release_reports_are_archived() -> None:
@@ -111,7 +115,6 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
         "THIRD_PARTY_NOTICES.md",
         "pyproject.toml",
         "start.bat",
-        "update.bat",
         "verify.bat",
     }
     result = subprocess.run(
@@ -144,7 +147,10 @@ def test_completed_plan_index_is_archived() -> None:
     assert (plans / "V0.6.0_多用户搜索与会话方案.md").is_file()
     assert (plans / "V0.7.0_前端结构整理方案.md").is_file()
     assert (plans / "V0.7.0_前端结构整理方案_REVIEW.md").is_file()
-    assert (ROOT / "docs" / "V0.7功能与验收.md").is_file()
+    assert (ROOT / "archive" / "docs" / "releases" / "V0.7功能与验收.md").is_file()
+    assert not (ROOT / "docs" / "V0.7功能与验收.md").exists()
+    assert not (ROOT / ".github" / "workflows" / "release-v070.yml").exists()
+    assert (ROOT / "archive" / "docs" / "workflows" / "release-v070.yml").is_file()
 
     index = _text("archive/docs/plans/README.md")
     assert "## 当前计划" in index

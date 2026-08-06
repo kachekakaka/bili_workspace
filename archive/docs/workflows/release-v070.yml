@@ -1,3 +1,4 @@
+# Historical workflow snapshot. It is outside .github/workflows and must not be executed.
 name: Publish V0.7.0 Release
 
 on:

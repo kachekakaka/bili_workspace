@@ -108,6 +108,7 @@ jobs:
           tests/test_configure_network.py
           tests/test_v05_docker.py
           tests/test_repository_layout.py
+          tests/test_t_project_isolation.py
 
   playwright:
     runs-on: ubuntu-latest
@@ -136,7 +137,7 @@ jobs:
           tests/test_v062_ui_playwright.py
           tests/test_v070_*_playwright.py
 
-  release-validation:
+  product-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'main' ||
@@ -175,7 +176,7 @@ jobs:
           tests/test_v062_settings_ui.py
           tests/test_v070_frontend_architecture.py
 
-  windows-release:
+  windows-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'main' ||
@@ -188,38 +189,31 @@ jobs:
     steps:
       - name: Clean checkout
         uses: actions/checkout@v4
-      - name: Prepare repository-integrated portable runtime
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $prepareLog = Join-Path $env:RUNNER_TEMP 'windows-prepare.log'
-          cmd.exe /d /c scripts\windows\prepare-runtime.bat -Force 2>&1 |
-            Tee-Object -FilePath $prepareLog
-          $code = $LASTEXITCODE
-          if ($code -ne 0) { exit $code }
-      - name: Test clean clone and in-place upgrade path
+      - name: Test clean clone in a T-PROJECT isolated run
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           $env:BILI_VERIFY_NO_PAUSE = "1"
           $env:BILI_VERIFY_REQUIRE_NODE = "1"
+          $env:BILI_TEST_ROOT = Join-Path $env:RUNNER_TEMP 'bili_workspace_test'
           $verifyLog = Join-Path $env:RUNNER_TEMP 'windows-verify.log'
           cmd.exe /d /c verify.bat 2>&1 |
             Tee-Object -FilePath $verifyLog
           $code = $LASTEXITCODE
           if ($code -ne 0) { exit $code }
-      - name: Upload Windows release logs
+      - name: Upload Windows validation logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-${{ github.run_attempt }}
+          name: windows-validation-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/windows-prepare.log
             ${{ runner.temp }}/windows-verify.log
+            ${{ runner.temp }}/bili_workspace_test/**
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
 
-  docker-release:
+  docker-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref_name == 'main' ||
@@ -252,9 +246,9 @@ jobs:
           tests/test_v061_userless_migration.py
           tests/test_v060_release.py
           tests/test_v070_release.py
-      - name: Build release image
-        run: docker build -f docker/Dockerfile --build-arg TARGETARCH=amd64 -t bili-workspace:v0.7.0 .
+      - name: Build validation image
+        run: docker build -f docker/Dockerfile --build-arg TARGETARCH=amd64 -t bili-workspace:validation .
       - name: Smoke application version inside image
         run: >-
-          docker run --rm --entrypoint python bili-workspace:v0.7.0
+          docker run --rm --entrypoint python bili-workspace:validation
           -c "from app import __version__; assert __version__ == '0.7.0'; print(__version__)"

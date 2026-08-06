@@ -136,15 +136,15 @@ class DocConsistencyRulesTest(unittest.TestCase):
         self.assertEqual([], errors)
         self.assertEqual([], warnings)
 
-    def add_valid_plan(self) -> None:
+    def add_valid_plan(self, status: str = "实施中") -> None:
         self.write(
             "docs/已知问题与待做需求.md",
-            """\
+            f"""\
 # 已知问题与待做需求
 
 ## FEATURE-001：示例能力
 
-- 状态：实施中
+- 状态：{status}
 - [活动方案](方案/FEATURE-001-示例能力.md)
 """,
         )
@@ -385,6 +385,35 @@ C:\\Users\\example\\project
         self.add_valid_plan()
         self.assert_clean()
 
+    def test_pending_item_may_have_no_plan_or_one_plan(self) -> None:
+        self.replace("docs/已知问题与待做需求.md", "待实施", "待确认")
+        self.assert_clean()
+
+        self.add_valid_plan("待确认")
+        self.assert_clean()
+
+    def test_pending_item_must_not_have_multiple_plans(self) -> None:
+        self.add_valid_plan("待确认")
+        self.write(
+            "docs/方案/FEATURE-001-备选方案.md",
+            """\
+# 备选方案
+
+- 测试层级：普通验证
+- 验证影响域：文档骨架
+- 具体验证项：运行 T-DOC
+""",
+        )
+        self.write(
+            "docs/已知问题与待做需求.md",
+            self.read("docs/已知问题与待做需求.md")
+            + "- [备选方案](方案/FEATURE-001-备选方案.md)\n",
+        )
+
+        errors, _ = self.issues()
+
+        self.assert_has(errors, "待办 FEATURE-001 存在多份活动方案")
+
     def test_plan_lifecycle_link_and_fields_are_enforced(self) -> None:
         self.replace("docs/已知问题与待做需求.md", "待实施", "实施中")
         errors, _ = self.issues()
@@ -407,14 +436,43 @@ C:\\Users\\example\\project
         errors, _ = self.issues()
         self.assert_has(errors, "必须由对应待办条目实际链接")
 
-    def test_non_implementing_item_must_not_have_active_plan(self) -> None:
-        self.add_valid_plan()
-        self.replace("docs/已知问题与待做需求.md", "实施中", "待实施")
+    def test_plan_must_be_linked_by_its_own_backlog_item(self) -> None:
+        self.add_valid_plan("待确认")
+        self.write(
+            "docs/已知问题与待做需求.md",
+            """\
+# 已知问题与待做需求
+
+## FEATURE-001：第一项
+
+- 状态：待确认
+
+## FEATURE-002：第二项
+
+- 状态：待确认
+- [错误代链](方案/FEATURE-001-示例能力.md)
+""",
+        )
 
         errors, _ = self.issues()
 
-        self.assert_has(errors, "对应待办 FEATURE-001 不是“实施中”")
-        self.assert_has(errors, "非实施中待办 FEATURE-001 不得有活动方案")
+        self.assert_has(errors, "必须由对应待办条目实际链接")
+
+    def test_waiting_or_paused_item_must_not_have_active_plan(self) -> None:
+        for status in ("待实施", "暂缓"):
+            with self.subTest(status=status):
+                self.add_valid_plan(status)
+
+                errors, _ = self.issues()
+
+                self.assert_has(
+                    errors,
+                    f"对应待办 FEATURE-001 的状态“{status}”不允许活动方案",
+                )
+                self.assert_has(
+                    errors,
+                    f"状态为“{status}”的待办 FEATURE-001 不得有活动方案",
+                )
 
     def test_registry_requires_valid_unique_ids_categories_and_t_doc(self) -> None:
         self.write(
@@ -487,6 +545,39 @@ C:\\Users\\example\\project
         )
         errors, _ = self.issues()
         self.assert_has(errors, "AGENTS.md: 活动导航不得直接链接归档正文")
+
+    def test_root_and_docs_index_duplicate_direct_links_are_warning(self) -> None:
+        self.write(
+            "README.md",
+            self.read("README.md")
+            + """\
+- [需求文档](docs/需求文档.md)
+- [设计文档](docs/设计文档.md)
+- [已知问题](docs/已知问题与待做需求.md)
+""",
+        )
+
+        errors, warnings = self.issues()
+
+        self.assertEqual([], errors)
+        self.assert_has(warnings, "与 docs/README.md 重复直接链接 3 份专题 Markdown")
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-X",
+                "utf8",
+                str(SCRIPT),
+                "--workspace-root",
+                str(self.root),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("[WARN]", result.stdout)
 
     def test_machine_only_syntax_and_absolute_paths_are_warnings(self) -> None:
         self.write(

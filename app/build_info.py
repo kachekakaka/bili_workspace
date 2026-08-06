@@ -24,7 +24,7 @@ def _source_files() -> list[Path]:
             for path in directory.rglob("*")
             if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
         )
-    for path in (ROOT / "start.bat", ROOT / "update.bat", ROOT / "verify.bat"):
+    for path in (ROOT / "start.bat", ROOT / "verify.bat"):
         if path.is_file():
             files.add(path)
     return sorted(files, key=lambda path: path.relative_to(ROOT).as_posix())

@@ -1,5 +1,7 @@
 # 运行配置目录
 
+本文件只说明 `config/` 的目录操作与秘密边界；字段名称、默认值和兼容规则以[字段契约](../docs/字段契约.md)为唯一当前真源。
+
 `config/` 保存配置和标签定义，不再承载 SQLite 或任务运行数据。Docker/NAS 模式下，容器映射的 `/data/config/bbdown` 还保存 Bilibili 登录凭据；Windows 便携运行时的凭据仍位于 `BBDown_portable/BBDown.data`。
 
 Git 只跟踪模板：
@@ -20,7 +22,7 @@ tags.json
 bbdown/BBDown.data（Docker/NAS）
 ```
 
-`start.bat`、`update.bat`、`verify.bat`、内部运行时准备脚本和 Docker 入口都会同步模板：
+`start.bat`、`verify.bat`、内部运行时准备脚本和 Docker 入口都会同步模板：
 
 - 文件不存在时复制模板；
 - 文件存在时保留原值；

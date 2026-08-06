@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "bili_workspace_version": "0.5.6",
+  "schema_version": 2,
+  "runtime_bundle_version": "0.5.6",
   "platform": "windows-x64",
   "python_version": "3.13.14",
   "packs": {

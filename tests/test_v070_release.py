@@ -36,49 +36,70 @@ def test_local_verifiers_cover_all_frontend_modules() -> None:
     assert "SoftwareTesting/doc_consistency/test_doc_consistency.py" not in source
 
 
-def test_v070_release_workflow_is_gated_idempotent_and_dispatches_docker() -> None:
-    workflow = text(".github/workflows/release-v070.yml")
+def test_v070_release_regression_now_enforces_no_formal_publication() -> None:
+    active_release = ROOT / ".github" / "workflows" / "release-v070.yml"
+    archived_release = ROOT / "archive" / "docs" / "workflows" / "release-v070.yml"
     docker = text(".github/workflows/docker-image.yml")
-    assert not (ROOT / ".github/workflows/release-v062.yml").exists()
+    decision = text("docs/adr/0002-source-push-does-not-publish.md")
+
+    assert not active_release.exists()
+    assert archived_release.is_file()
+    historical = archived_release.read_text(encoding="utf-8")
+    assert "git tag -a v0.7.0" in historical
+    assert "gh release create v0.7.0" in historical
+    assert "gh workflow run docker-image.yml" in historical
+
     for token in (
-        'workflows: ["CI", "V0.6.2 UI"]',
-        "head_branch == 'main'",
-        "head_sha",
-        "ci_status",
-        "ui_status",
-        "actions: write",
-        "git tag -a v0.7.0",
-        "gh release create v0.7.0",
-        "gh release view v0.7.0",
-        "not validated main",
-        "docs/releases/V0.7.0.md",
-        "actions/workflows/docker-image.yml/runs",
-        'display_title == "Build Docker v0.7.0"',
-        "gh workflow run docker-image.yml --ref main -f release_tag=v0.7.0",
-    ):
-        assert token in workflow
-    for token in (
-        "workflow_dispatch:",
-        "release_tag:",
-        "run-name: Build Docker",
-        "ref: ${{ inputs.release_tag || github.ref }}",
-        "type=raw,value=${{ inputs.release_tag }}",
+        "contents: read",
         "platforms: linux/amd64,linux/arm64",
+        "push: false",
+        "Build amd64/arm64 image without publishing",
     ):
         assert token in docker
+    for forbidden in (
+        "packages: write",
+        "docker/login-action",
+        "push: true",
+        "workflow_dispatch:",
+        "release_tag",
+        "type=ref,event=tag",
+        "ghcr.io/",
+    ):
+        assert forbidden not in docker
+
+    active_workflows = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    )
+    for forbidden in (
+        "git tag -a ",
+        "gh release create ",
+        "git push origin refs/tags/",
+        "docker/login-action",
+        "push: true",
+    ):
+        assert forbidden not in active_workflows
+    assert "停止未来的正式发布" in decision
 
 
-def test_v070_docs_state_completion_and_rollback_contract() -> None:
+def test_v070_historical_docs_are_archived_and_current_facts_are_centralized() -> None:
     docs = text("docs/README.md")
-    plans = text("archive/docs/plans/README.md")
-    acceptance = text("docs/V0.7功能与验收.md")
-    notes = text("docs/releases/V0.7.0.md")
-    release_process = text("docs/运维/发布与回滚流程.md")
+    requirements = text("docs/需求文档.md")
+    design = text("docs/设计文档.md")
+    fields = text("docs/字段契约.md")
+    archive_index = text("archive/docs/README.md")
+    acceptance = text("archive/docs/releases/V0.7功能与验收.md")
+    notes = text("archive/docs/releases/V0.7.0.md")
+    update_process = text("docs/运维/发布与回滚流程.md")
+
     assert "当前应用版本为 V0.7.0" in docs
-    assert "V0.7.0 前端结构整理方案" in plans
-    assert "已完成" in plans
-    assert "PR 1–8" in acceptance
-    assert "schema v4" in acceptance
-    assert "v0.6.2" in acceptance
+    assert "停止未来正式发布" in docs
+    assert "当前已交付" in requirements
+    assert "前端架构与页面生命周期" in design
+    assert "DATABASE_SCHEMA_VERSION" in fields
+    assert "V0.7.0 功能与验收" in archive_index
+    assert "历史快照" in acceptance
     assert "bili_workspace v0.7.0" in notes
-    assert "显式 dispatch" in release_process
+    assert "BUILD_LOCAL=true" in update_process
+    assert not (ROOT / "docs" / "V0.7功能与验收.md").exists()
+    assert not (ROOT / "docs" / "releases" / "V0.7.0.md").exists()

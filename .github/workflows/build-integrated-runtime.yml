@@ -9,7 +9,9 @@ on:
       - tools/build_integrated_runtime.py
       - scripts/windows/bootstrap-portable.ps1
       - scripts/windows/bootstrap-runtime.bat
-      - scripts/windows/prepare-runtime.bat
+      - scripts/windows/new-test-run.ps1
+      - tools/t_project_isolation.py
+      - tools/config_sync.py
       - start.bat
       - verify.bat
       - LICENSES/**
@@ -51,12 +53,21 @@ jobs:
       - name: Validate generated runtime packs
         shell: pwsh
         run: |
-          cmd /c scripts\windows\prepare-runtime.bat -Force
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:BILI_VERIFY_NO_PAUSE = "1"
           $env:BILI_VERIFY_REQUIRE_NODE = "1"
+          $env:BILI_TEST_ROOT = Join-Path $env:RUNNER_TEMP 'bili_workspace_test'
           cmd /c verify.bat
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload isolated validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-workspace-windows-validation-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bili_workspace_test/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload a recovery artifact
         uses: actions/upload-artifact@v4

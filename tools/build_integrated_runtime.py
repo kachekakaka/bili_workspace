@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION = "0.5.6"
+RUNTIME_BUNDLE_VERSION = "0.5.6"
 PYTHON_VERSION = "3.13.14"
 PYTHON_EMBED_NAME = f"python-{PYTHON_VERSION}-embed-amd64.zip"
 PYTHON_EMBED_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/{PYTHON_EMBED_NAME}"
@@ -37,7 +37,7 @@ FFMPEG_MEMBER = "imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe"
 CHUNK_SIZE = 1024 * 1024
 MAX_PACK_BYTES = 100 * 1024 * 1024
 FIXED_ZIP_TIME = (2026, 7, 18, 0, 0, 0)
-USER_AGENT = f"bili-workspace/{VERSION} integrated-runtime-builder"
+USER_AGENT = f"bili-workspace-runtime/{RUNTIME_BUNDLE_VERSION} integrated-runtime-builder"
 
 
 def sha256_file(path: Path) -> str:
@@ -217,7 +217,7 @@ def build_python_pack(cache: Path, build: Path, output: Path) -> Path:
     (python_root / "BILI_RUNTIME.txt").write_text(
         json.dumps(
             {
-                "bili_workspace_version": VERSION,
+                "runtime_bundle_version": RUNTIME_BUNDLE_VERSION,
                 "python_version": PYTHON_VERSION,
                 "python_embed_sha256": PYTHON_EMBED_SHA256,
             },
@@ -288,7 +288,7 @@ def build_media_pack(cache: Path, build: Path, output: Path) -> Path:
     (root / "BILI_RUNTIME.txt").write_text(
         json.dumps(
             {
-                "bili_workspace_version": VERSION,
+                "runtime_bundle_version": RUNTIME_BUNDLE_VERSION,
                 "bbdown_source": {"url": BBDOWN_URL, "sha256": BBDOWN_SHA256},
                 "ffmpeg_source": {
                     "url": FFMPEG_WHEEL_URL,
@@ -321,35 +321,10 @@ def build_media_pack(cache: Path, build: Path, output: Path) -> Path:
     return output
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Build repository-integrated Windows runtime packs"
-    )
-    parser.add_argument(
-        "--output", type=Path, default=ROOT / "vendor" / "windows"
-    )
-    parser.add_argument(
-        "--cache", type=Path, default=ROOT / ".tmp" / "runtime-builder-cache"
-    )
-    args = parser.parse_args(argv)
-
-    if os.name != "nt":
-        raise SystemExit("This builder must run on a Windows x64 host")
-
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="bili-runtime-build-") as temporary_name:
-        build = Path(temporary_name)
-        python_pack = build_python_pack(
-            args.cache.resolve(), build, output / "python-runtime.pack"
-        )
-        media_pack = build_media_pack(
-            args.cache.resolve(), build, output / "media-runtime.pack"
-        )
-
-    manifest = {
-        "schema_version": 1,
-        "bili_workspace_version": VERSION,
+def build_runtime_manifest(python_pack: Path, media_pack: Path) -> dict[str, object]:
+    return {
+        "schema_version": 2,
+        "runtime_bundle_version": RUNTIME_BUNDLE_VERSION,
         "platform": "windows-x64",
         "python_version": PYTHON_VERSION,
         "packs": {
@@ -376,6 +351,35 @@ def main(argv: list[str] | None = None) -> int:
             },
         },
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Build repository-integrated Windows runtime packs"
+    )
+    parser.add_argument(
+        "--output", type=Path, default=ROOT / "vendor" / "windows"
+    )
+    parser.add_argument(
+        "--cache", type=Path, default=ROOT / ".tmp" / "runtime-builder-cache"
+    )
+    args = parser.parse_args(argv)
+
+    if os.name != "nt":
+        raise SystemExit("This builder must run on a Windows x64 host")
+
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="bili-runtime-build-") as temporary_name:
+        build = Path(temporary_name)
+        python_pack = build_python_pack(
+            args.cache.resolve(), build, output / "python-runtime.pack"
+        )
+        media_pack = build_media_pack(
+            args.cache.resolve(), build, output / "media-runtime.pack"
+        )
+
+    manifest = build_runtime_manifest(python_pack, media_pack)
     manifest_path = output / "runtime-manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

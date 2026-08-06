@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$Force,
-    [switch]$Quiet
+    [switch]$Quiet,
+    [string]$VerificationRunRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,11 +11,110 @@ Set-StrictMode -Version Latest
 $Root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $ManifestPath = Join-Path $Root 'vendor\windows\runtime-manifest.json'
 $RuntimeRoot = Join-Path $Root '.runtime'
+$MediaRoot = $Root
 $PythonRoot = Join-Path $RuntimeRoot 'python'
 $StatePath = Join-Path $RuntimeRoot 'runtime-state.json'
 
 function Write-Status([string]$Message) {
     if (-not $Quiet) { Write-Host $Message }
+}
+
+function Assert-MarkerProperty([object]$Marker, [string]$Name, [object]$Expected, [string]$Label) {
+    $property = $Marker.PSObject.Properties[$Name]
+    if ($null -eq $property -or $property.Value -ne $Expected) {
+        throw "$Label 字段不匹配: $Name"
+    }
+}
+
+function Assert-NonEmptyMarkerProperty([object]$Marker, [string]$Name, [string]$Label) {
+    $property = $Marker.PSObject.Properties[$Name]
+    if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+        throw "$Label 缺少有效字段: $Name"
+    }
+}
+
+function Test-IsWithin([string]$Path, [string]$Parent) {
+    $candidate = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/')
+    $container = [System.IO.Path]::GetFullPath($Parent).TrimEnd([char[]]'\/')
+    if ($candidate.Equals($container, [System.StringComparison]::OrdinalIgnoreCase)) { return $true }
+    return $candidate.StartsWith(
+        $container + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Assert-NoReparsePoint([string]$Path, [string]$Label) {
+    $current = [System.IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "$Label 路径不得经过符号链接或重解析点: $current"
+            }
+        }
+        $parent = [System.IO.Directory]::GetParent($current)
+        if ($null -eq $parent) { break }
+        $current = $parent.FullName
+    }
+}
+
+function Assert-VerificationRunRoot([string]$Candidate) {
+    $runRoot = [System.IO.Path]::GetFullPath($Candidate)
+    if (-not (Test-Path -LiteralPath $runRoot -PathType Container)) {
+        throw "验证运行目录不存在: $runRoot"
+    }
+    Assert-NoReparsePoint $runRoot '验证运行目录'
+    $runMarkerPath = Join-Path $runRoot '.bili-workspace-test-run.json'
+    if (-not (Test-Path -LiteralPath $runMarkerPath -PathType Leaf)) {
+        throw "验证运行目录缺少所有权标记: $runMarkerPath"
+    }
+    Assert-NoReparsePoint $runMarkerPath '验证运行目录所有权标记'
+    try { $runMarker = Get-Content -LiteralPath $runMarkerPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "无法读取验证运行目录所有权标记: $runMarkerPath" }
+
+    $testRootProperty = $runMarker.PSObject.Properties['test_root']
+    if ($null -eq $testRootProperty) { throw '验证运行目录所有权标记缺少 test_root' }
+    $testRoot = [System.IO.Path]::GetFullPath([string]$testRootProperty.Value)
+    if ((Test-IsWithin $testRoot $Root) -or (Test-IsWithin $Root $testRoot)) {
+        throw "测试根目录与仓库不得相同或互相包含: $testRoot / $Root"
+    }
+    $rootMarkerPath = Join-Path $testRoot '.bili-workspace-test-root.json'
+    if (-not (Test-Path -LiteralPath $rootMarkerPath -PathType Leaf)) {
+        throw "测试根目录缺少所有权标记: $rootMarkerPath"
+    }
+    Assert-NoReparsePoint $rootMarkerPath '测试根目录所有权标记'
+    Assert-NoReparsePoint $testRoot '测试根目录'
+    try { $rootMarker = Get-Content -LiteralPath $rootMarkerPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "无法读取测试根目录所有权标记: $rootMarkerPath" }
+
+    Assert-MarkerProperty $rootMarker 'schema_version' 1 '测试根目录所有权标记'
+    Assert-MarkerProperty $rootMarker 'kind' 'bili-workspace-test-root' '测试根目录所有权标记'
+    Assert-MarkerProperty $rootMarker 'project_id' 'bili_workspace' '测试根目录所有权标记'
+    Assert-MarkerProperty $rootMarker 'workspace_root' $Root '测试根目录所有权标记'
+    Assert-MarkerProperty $rootMarker 'test_root' $testRoot '测试根目录所有权标记'
+    Assert-NonEmptyMarkerProperty $rootMarker 'created_at' '测试根目录所有权标记'
+    if (-not ([System.IO.Directory]::GetParent($runRoot).FullName.Equals($testRoot, [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw '验证运行目录必须是测试根目录的直接子目录'
+    }
+    Assert-MarkerProperty $runMarker 'schema_version' 1 '验证运行目录所有权标记'
+    Assert-MarkerProperty $runMarker 'kind' 'bili-workspace-test-run' '验证运行目录所有权标记'
+    Assert-MarkerProperty $runMarker 'project_id' 'bili_workspace' '验证运行目录所有权标记'
+    Assert-MarkerProperty $runMarker 'workspace_root' $Root '验证运行目录所有权标记'
+    Assert-MarkerProperty $runMarker 'test_root' $testRoot '验证运行目录所有权标记'
+    Assert-MarkerProperty $runMarker 'run_root' $runRoot '验证运行目录所有权标记'
+    Assert-MarkerProperty $runMarker 'run_id' ([System.IO.Path]::GetFileName($runRoot)) '验证运行目录所有权标记'
+    Assert-NonEmptyMarkerProperty $runMarker 'created_at' '验证运行目录所有权标记'
+    if ([System.IO.Path]::GetFileName($runRoot) -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$') {
+        throw '验证运行目录名称不是有效 run-id'
+    }
+    foreach ($directory in @('runtime', 'media')) {
+        $child = Join-Path $runRoot $directory
+        if (-not (Test-Path -LiteralPath $child -PathType Container)) {
+            throw "验证运行子目录缺失: $child"
+        }
+        Assert-NoReparsePoint $child '验证运行子目录'
+    }
+    return $runRoot
 }
 
 function Get-Sha256([string]$Path) {
@@ -52,6 +152,41 @@ function Assert-SafeRelativePath([string]$Name) {
         if ($part -eq '.') { throw "运行包包含不安全路径: $Name" }
     }
     return $parts
+}
+
+function Resolve-ManifestPack([object]$Pack, [string]$Name) {
+    $pathProperty = $Pack.PSObject.Properties['path']
+    $hashProperty = $Pack.PSObject.Properties['sha256']
+    $sizeProperty = $Pack.PSObject.Properties['size']
+    if ($null -eq $pathProperty -or $null -eq $hashProperty -or $null -eq $sizeProperty) {
+        throw "$Name 运行包清单缺少 path、sha256 或 size"
+    }
+    $parts = Assert-SafeRelativePath ([string]$pathProperty.Value)
+    if ($parts.Count -lt 3 -or $parts[0] -ne 'vendor' -or $parts[1] -ne 'windows') {
+        throw "$Name 运行包必须位于 vendor\windows"
+    }
+    $candidate = [System.IO.Path]::GetFullPath(
+        (Join-Path $Root ($parts -join [System.IO.Path]::DirectorySeparatorChar))
+    )
+    $vendorRoot = [System.IO.Path]::GetFullPath((Join-Path $Root 'vendor\windows'))
+    if (-not (Test-IsWithin $candidate $vendorRoot)) {
+        throw "$Name 运行包路径越过 vendor\windows"
+    }
+    $expectedHash = [string]$hashProperty.Value
+    if ($expectedHash -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "$Name 运行包 SHA-256 格式无效"
+    }
+    $declaredSize = [long]0
+    if (-not [long]::TryParse([string]$sizeProperty.Value, [ref]$declaredSize) -or $declaredSize -lt 1) {
+        throw "$Name 运行包 size 无效"
+    }
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $actualSize = (Get-Item -LiteralPath $candidate -Force).Length
+        if ($actualSize -ne $declaredSize) {
+            throw "$Name 运行包大小与清单不匹配"
+        }
+    }
+    return $candidate
 }
 
 function Set-PortablePythonModulePath([string]$PythonDirectory) {
@@ -181,28 +316,60 @@ function Expand-VerifiedPack([string]$PackPath, [string]$ExpectedSha256, [string
     }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($VerificationRunRoot)) {
+    $VerificationRunRoot = Assert-VerificationRunRoot $VerificationRunRoot
+    $RuntimeRoot = Join-Path $VerificationRunRoot 'runtime'
+    $MediaRoot = Join-Path $VerificationRunRoot 'media'
+    $PythonRoot = Join-Path $RuntimeRoot 'python'
+    $StatePath = Join-Path $RuntimeRoot 'runtime-state.json'
+}
+
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     throw "仓库缺少 vendor\windows\runtime-manifest.json。请先 git pull 获取完整集成运行时。"
 }
 
 $manifestText = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8
 $manifest = $manifestText | ConvertFrom-Json
-if ($manifest.schema_version -ne 1 -or $manifest.platform -ne 'windows-x64') {
+if ($manifest.platform -ne 'windows-x64') {
     throw "不支持的集成运行时清单"
 }
+$manifestProperties = @($manifest.PSObject.Properties.Name)
+if ($manifest.schema_version -eq 1) {
+    if ($manifestProperties -notcontains 'bili_workspace_version' -or [string]::IsNullOrWhiteSpace([string]$manifest.bili_workspace_version)) {
+        throw 'schema 1 集成运行时清单缺少 bili_workspace_version'
+    }
+    if ($manifestProperties -contains 'runtime_bundle_version') {
+        throw 'schema 1 集成运行时清单不得同时写入 runtime_bundle_version'
+    }
+    $runtimeBundleVersion = [string]$manifest.bili_workspace_version
+}
+elseif ($manifest.schema_version -eq 2) {
+    if ($manifestProperties -notcontains 'runtime_bundle_version' -or [string]::IsNullOrWhiteSpace([string]$manifest.runtime_bundle_version)) {
+        throw 'schema 2 集成运行时清单缺少 runtime_bundle_version'
+    }
+    if ($manifestProperties -contains 'bili_workspace_version') {
+        throw 'schema 2 集成运行时清单不得继续写入 bili_workspace_version'
+    }
+    $runtimeBundleVersion = [string]$manifest.runtime_bundle_version
+}
+else {
+    throw "不支持的集成运行时清单 schema: $($manifest.schema_version)"
+}
 $manifestSha = Get-Sha256 $ManifestPath
-$pythonPack = Join-Path $Root $manifest.packs.python.path
-$mediaPack = Join-Path $Root $manifest.packs.media.path
+$pythonPack = Resolve-ManifestPack $manifest.packs.python 'Python'
+$mediaPack = Resolve-ManifestPack $manifest.packs.media '媒体'
 
 $stateMatches = $false
 if (-not $Force -and (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
     try {
         $state = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
         $stateMatches = (
+            $state.schema_version -eq 2 -and
+            $state.runtime_bundle_version -eq $runtimeBundleVersion -and
             $state.manifest_sha256 -eq $manifestSha -and
             (Test-Path -LiteralPath (Join-Path $PythonRoot 'python.exe') -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $Root 'BBDown_portable\BBDown.exe') -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $Root 'BBDown_portable\ffmpeg\bin\ffmpeg.exe') -PathType Leaf)
+            (Test-Path -LiteralPath (Join-Path $MediaRoot 'BBDown_portable\BBDown.exe') -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $MediaRoot 'BBDown_portable\ffmpeg\bin\ffmpeg.exe') -PathType Leaf)
         )
     }
     catch { $stateMatches = $false }
@@ -220,7 +387,7 @@ if (-not $stateMatches) {
         foreach ($folder in @('BBDown_portable', 'LICENSES')) {
             $source = Join-Path $mediaTemp $folder
             if (Test-Path -LiteralPath $source) {
-                $destination = Join-Path $Root $folder
+                $destination = Join-Path $MediaRoot $folder
                 New-Item -ItemType Directory -Path $destination -Force | Out-Null
                 Get-ChildItem -LiteralPath $source -Force | ForEach-Object {
                     Copy-Item -LiteralPath $_.FullName -Destination $destination -Recurse -Force
@@ -235,8 +402,8 @@ if (-not $stateMatches) {
     }
 
     $stateObject = [ordered]@{
-        schema_version = 1
-        version = $manifest.bili_workspace_version
+        schema_version = 2
+        runtime_bundle_version = $runtimeBundleVersion
         manifest_sha256 = $manifestSha
         python_pack_sha256 = $manifest.packs.python.sha256
         media_pack_sha256 = $manifest.packs.media.sha256
@@ -252,8 +419,8 @@ Set-PortablePythonModulePath $PythonRoot
 if (-not $Quiet -or -not $stateMatches) {
     Write-Status '[3/3] 执行运行时冒烟测试...'
     $pythonExe = Join-Path $PythonRoot 'python.exe'
-    $bbdownExe = Join-Path $Root 'BBDown_portable\BBDown.exe'
-    $ffmpegExe = Join-Path $Root 'BBDown_portable\ffmpeg\bin\ffmpeg.exe'
+    $bbdownExe = Join-Path $MediaRoot 'BBDown_portable\BBDown.exe'
+    $ffmpegExe = Join-Path $MediaRoot 'BBDown_portable\ffmpeg\bin\ffmpeg.exe'
     & $pythonExe -c "import app,fastapi,httpx,pydantic,pytest,ruff,starlette,tools.config_sync,uvicorn; print('Portable Python OK')"
     if ($LASTEXITCODE -ne 0) { throw '内置 Python 运行时无法加载仓库模块或依赖' }
     & $bbdownExe --help *> $null

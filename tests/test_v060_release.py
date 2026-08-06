@@ -51,30 +51,48 @@ def test_release_versions_are_synchronized() -> None:
     assert "当前应用版本为 V0.7.0" in text("docs/README.md")
 
 
-def test_release_document_covers_all_delivery_paths() -> None:
-    release = text("docs/V0.7功能与验收.md")
+def test_current_docs_cover_all_delivery_and_recovery_paths() -> None:
+    requirements = text("docs/需求文档.md")
+    design = text("docs/设计文档.md")
+    operations = text("docs/运维/发布与回滚流程.md")
+    archived = text("archive/docs/releases/V0.7功能与验收.md")
+
     for token in (
-        "Windows 验收",
-        "干净 clone",
-        "原地升级",
-        "Docker / QNAP 验收",
-        "数据库 schema 继续为 v4",
-        "Python 3.11、3.12、3.13",
-        "1920×1080",
-        "390×844",
-        "v0.6.2",
-        "回滚",
+        "Windows 本机",
+        "QNAP/NAS Docker",
+        "数据库 schema 为 v4",
+        "五档固定视口",
+        "停止未来正式发布",
     ):
-        assert token in release
+        assert token in requirements + design
+    for token in (
+        "Windows 源码更新",
+        "Docker / QNAP 源码更新",
+        "BUILD_LOCAL=true",
+        "代码回滚",
+        "数据恢复",
+    ):
+        assert token in operations
+    assert "历史快照" in archived
+    assert "v0.6.2" in archived
 
 
-def test_ci_contains_release_validation_matrix() -> None:
+def test_ci_contains_product_validation_matrix() -> None:
     workflow = text(".github/workflows/ci.yml")
     assert 'python-version: ["3.11", "3.12", "3.13"]' in workflow
     assert "github.head_ref == 'release/v0.7.0'" in workflow
-    assert "windows-release:" in workflow
-    assert "docker-release:" in workflow
-    assert "bili-workspace:v0.7.0" in workflow
+    assert "product-validation:" in workflow
+    assert "windows-validation:" in workflow
+    assert "docker-validation:" in workflow
+    assert "bili-workspace:validation" in workflow
+    for obsolete in (
+        "release-validation:",
+        "windows-release:",
+        "docker-release:",
+        "Build release image",
+        "bili-workspace:v0.7.0",
+    ):
+        assert obsolete not in workflow
     assert "tests/test_v070_release.py" in workflow
     assert "BILI_RUN_PLAYWRIGHT" in workflow
     assert "BILI_VERIFY_REQUIRE_NODE" in workflow

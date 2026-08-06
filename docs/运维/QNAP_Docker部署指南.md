@@ -6,11 +6,11 @@
 
 - QNAP Container Station；
 - 可以在部署目录运行 Docker Compose 的终端；
-- NAS 可拉取 `ghcr.io/kachekakaka/bili_workspace:latest`，或具备本地构建条件；
+- NAS 具备从当前检出源码执行 Docker 本地构建的条件；
 - 三个可写的宿主机目录；
 - 运行容器账号的 PUID/PGID。
 
-镜像支持 `linux/amd64` 和 `linux/arm64`。默认拉取 GHCR 预构建镜像；仅在无法拉取或需要自行构建时启用本地构建。
+镜像构建支持 `linux/amd64` 和 `linux/arm64`。项目不再发布新的 GHCR 镜像，新部署默认从当前源码本地构建；既有 V0.7.0 镜像只作为冻结历史后备。
 
 ## 2. 创建持久化目录
 
@@ -70,8 +70,8 @@ CONFIG_DIR=/share/Container/bili-workspace/config
 USERDATA_DIR=/share/Container/bili-workspace/userdata
 MEDIA_DIR=/share/Multimedia/Bilibili
 
-BILI_IMAGE=ghcr.io/kachekakaka/bili_workspace:latest
-BUILD_LOCAL=false
+BILI_IMAGE=bili-workspace:local
+BUILD_LOCAL=true
 
 PUID=1000
 PGID=100
@@ -90,7 +90,7 @@ DOWNLOAD_CONCURRENCY=1
 TRANSCODE_THREADS=0
 ```
 
-`BIND_IP` 可使用 `0.0.0.0`、NAS 某个局域网 IP 或 `127.0.0.1`；`HTTP_PORT` 可使用 1–65535 中未被占用的端口。
+`PUID` 和 `PGID` 必须是非零数字，`0:0` 或任一零值都会被配置检查拒绝；即使绕过脚本直接调用 Compose，容器入口也会拒绝 root UID 或 GID。`BIND_IP` 可使用 `0.0.0.0`、NAS 某个局域网 IP 或 `127.0.0.1`；`HTTP_PORT` 可使用 1–65535 中未被占用的端口。
 
 ## 5. 校验、构建和启动
 
@@ -101,8 +101,8 @@ TRANSCODE_THREADS=0
 
 脚本会根据 `BUILD_LOCAL`：
 
-- `false`：拉取 `BILI_IMAGE`；
-- `true`：执行本地 `docker compose build --pull`。
+- `true`：从当前检出源码执行 `docker compose build --pull`，这是新部署默认值；
+- `false`：只拉取 `BILI_IMAGE`，仅用于用户明确选择的冻结历史镜像。
 
 常用命令：
 
@@ -203,7 +203,7 @@ git pull --ff-only origin main
 ./docker/build-and-start.sh
 ```
 
-代码更新会拉取或重新构建镜像，但不会删除三个宿主机映射目录。配置模板的新字段会在启动时补入实际配置。
+代码更新会重新构建本地镜像，但不会删除三个宿主机映射目录。配置模板的新字段会在启动时补入实际配置；既有 `docker/.env` 不会被覆盖，因此旧部署必须手动确认 `BUILD_LOCAL=true`。
 
 ## 12. 停止与恢复
 
@@ -229,7 +229,7 @@ docker compose --env-file docker/.env down
 
 - 三个目录是否存在且对 PUID/PGID 可写；
 - 端口是否被占用；
-- NAS 是否能拉取 GHCR 镜像，或本地构建所需网络是否可用；
+- 本地构建所需的基础镜像和依赖网络是否可用；
 - 域名是否在 `TRUSTED_HOSTS`；
 - 反向代理来源 IP 是否正确；
 - `CONFIG_DIR/bbdown` 中的程序是否可执行。

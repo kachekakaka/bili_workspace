@@ -8,7 +8,7 @@
 - 许可证：MIT；Windows 包全文见 `BBDown_portable/BBDown.LICENSE.txt`
 - 上游仓库：`https://github.com/nilaoda/BBDown`
 
-BBDown 官方仓库已经归档。V0.5 固定使用 v1.6.3，并在 Windows 发布包中校验现有二进制哈希；Docker 构建阶段会执行 `BBDown --help` 冒烟测试。
+BBDown 官方仓库已经归档。Windows 集成运行资产 `0.5.6` 固定使用 v1.6.3，并校验现有二进制哈希；该运行资产版本独立于应用版本 `0.7.0`。Docker 构建阶段会执行 `BBDown --help` 冒烟测试。
 
 ## FFmpeg / FFprobe
 

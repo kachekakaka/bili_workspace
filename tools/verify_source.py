@@ -46,12 +46,15 @@ REQUIRED = (
     "tests/test_configure_network.py",
     "tests/test_integrated_runtime.py",
     "tests/test_repository_layout.py",
+    "tests/test_t_project_isolation.py",
     "tools/build_integrated_runtime.py",
     "tools/check_markdown_links.py",
+    "tools/t_project_isolation.py",
     "scripts/README.md",
     "scripts/windows/bootstrap-portable.ps1",
     "scripts/windows/bootstrap-runtime.bat",
     "scripts/windows/prepare-runtime.bat",
+    "scripts/windows/new-test-run.ps1",
     "scripts/windows/configure-network.bat",
     "scripts/windows/bilibili-login.bat",
     "scripts/dev/verify-source.sh",
@@ -61,9 +64,8 @@ REQUIRED = (
     "docs/已知问题与待做需求.md",
     "docs/软件测试.md",
     "docs/字段契约.md",
-    "docs/需求落实清单.md",
-    "docs/V0.6功能与验收.md",
-    "docs/产品需求与架构基线.md",
+    "docs/adr/0001-current-facts-by-type.md",
+    "docs/adr/0002-source-push-does-not-publish.md",
     "docs/运维/README.md",
     "docs/运维/发布与回滚流程.md",
     "docs/运维/源文件与恢复清单.md",
@@ -75,15 +77,16 @@ REQUIRED = (
     "SoftwareTesting/doc_consistency/test_doc_consistency_rules.py",
     "SoftwareTesting/project/README.md",
     "archive/docs/README.md",
+    "archive/docs/workflows/README.md",
+    "archive/docs/workflows/release-v070.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/build-integrated-runtime.yml",
     ".github/workflows/docker-image.yml",
     "start.bat",
-    "update.bat",
     "verify.bat",
 )
 
-ALLOWED_ROOT_SCRIPTS = {"start.bat", "update.bat", "verify.bat"}
+ALLOWED_ROOT_SCRIPTS = {"start.bat", "verify.bat"}
 ROOT_SCRIPT_SUFFIXES = {".bat", ".cmd", ".ps1", ".sh"}
 
 ALLOWED_ROOT_FILES = {
@@ -98,7 +101,6 @@ ALLOWED_ROOT_FILES = {
     "THIRD_PARTY_NOTICES.md",
     "pyproject.toml",
     "start.bat",
-    "update.bat",
     "verify.bat",
 }
 OBSOLETE_RELATIVE = {
@@ -107,6 +109,7 @@ OBSOLETE_RELATIVE = {
     "login.bat",
     "run.bat",
     "setup.bat",
+    "update.bat",
     "verify-source.bat",
     "verify-source.sh",
     "requirements-dev.txt",
@@ -154,6 +157,10 @@ SECRET_RE = re.compile(
     r"(?<![A-Za-z0-9_])(?:SESSDATA|bili_jct|DedeUserID)\s*=\s*[A-Za-z0-9%._~-]{8,}"
 )
 ABSOLUTE_PATH_RE = re.compile(r"(?:[A-Za-z]:\\Users\\|/home/[^/]+/|/mnt/data/)")
+ABSOLUTE_PATH_SCAN_EXEMPT = {
+    "SoftwareTesting/doc_consistency/test_doc_consistency.py",
+    "tools/verify_source.py",
+}
 TEXT_SUFFIXES = {
     ".py",
     ".ps1",
@@ -205,15 +212,25 @@ def _runtime_packs(errors: list[str]) -> dict[str, str]:
         return {}
     try:
         data = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8"))
-        if data.get("schema_version") != 1 or data.get("platform") != "windows-x64":
+        if data.get("schema_version") != 2 or data.get("platform") != "windows-x64":
             raise ValueError("schema/platform 不受支持")
+        if data.get("runtime_bundle_version") != "0.5.6":
+            raise ValueError("runtime_bundle_version 不受支持")
+        if "bili_workspace_version" in data:
+            raise ValueError("schema 2 不得包含旧版 bili_workspace_version")
         packs = data["packs"]
         result: dict[str, str] = {}
         for name in ("python", "media"):
             row = packs[name]
             rel = str(row["path"]).replace("\\", "/")
             expected = str(row["sha256"]).lower()
-            if not rel.startswith("vendor/windows/") or len(expected) != 64:
+            declared_size = int(row["size"])
+            if (
+                not rel.startswith("vendor/windows/")
+                or ".." in Path(rel).parts
+                or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+                or declared_size < 1
+            ):
                 raise ValueError(f"{name} 运行包清单无效")
             path = ROOT / rel
             if not path.is_file() or path.is_symlink():
@@ -221,6 +238,9 @@ def _runtime_packs(errors: list[str]) -> dict[str, str]:
                 continue
             if path.stat().st_size >= MAX_REGULAR_GIT_FILE:
                 errors.append(f"集成运行包超过普通 Git 100 MiB 限制: {rel}")
+                continue
+            if path.stat().st_size != declared_size:
+                errors.append(f"集成运行包大小与清单不匹配: {rel}")
                 continue
             actual = sha256_file(path)
             if actual != expected:
@@ -297,7 +317,7 @@ def main() -> int:
             continue
         if SECRET_RE.search(text):
             errors.append(f"疑似包含真实 Bilibili 登录凭据: {rel}")
-        if rel != "tools/verify_source.py" and ABSOLUTE_PATH_RE.search(text):
+        if rel not in ABSOLUTE_PATH_SCAN_EXEMPT and ABSOLUTE_PATH_RE.search(text):
             errors.append(f"疑似包含构建机绝对路径: {rel}")
 
     if errors:

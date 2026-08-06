@@ -31,9 +31,16 @@ case "${PUBLIC_BASE_URL:-}" in
   https://*) : ;;
   *) echo "[ERROR] PUBLIC_BASE_URL must be blank or use https://" >&2; exit 1 ;;
 esac
-case "${PUID}:${PGID}" in
-  *[!0-9:]*|:|*:|:* ) echo "[ERROR] PUID and PGID must be numeric" >&2; exit 1 ;;
+case "$PUID" in
+  ''|*[!0-9]*) echo "[ERROR] PUID and PGID must be numeric" >&2; exit 1 ;;
 esac
+case "$PGID" in
+  ''|*[!0-9]*) echo "[ERROR] PUID and PGID must be numeric" >&2; exit 1 ;;
+esac
+if [ "$PUID" -eq 0 ] || [ "$PGID" -eq 0 ]; then
+  echo "[ERROR] PUID and PGID must both be non-zero; root execution is not supported" >&2
+  exit 1
+fi
 case "${HTTP_PORT:-3398}" in
   ''|*[!0-9]*) echo "[ERROR] HTTP_PORT must be numeric" >&2; exit 1 ;;
 esac

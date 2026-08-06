@@ -75,6 +75,7 @@ MACHINE_FILES = (
     "archive/SoftwareTesting/README.md",
 )
 ALLOWED_BACKLOG_STATUSES = {"待确认", "待实施", "实施中", "暂缓"}
+ALLOWED_PLAN_STATUSES = {"待确认", "实施中"}
 PLAN_FIELDS = ("测试层级", "验证影响域", "具体验证项")
 TEST_CATEGORIES = {"full", "affected_only", "explicit"}
 BACKLOG_HEADING_RE = re.compile(
@@ -429,13 +430,14 @@ def _check_suite_navigation(root: Path, errors: list[str]) -> None:
 def _parse_backlog(
     root: Path,
     errors: list[str],
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, str], dict[str, set[Path]]]:
     path = root / "docs" / "已知问题与待做需求.md"
     content = _read_text(path)
     if content is None:
-        return {}, ""
+        return {}, {}
     lines = _strip_fenced_code(content).splitlines()
     result: dict[str, str] = {}
+    plan_targets: dict[str, set[Path]] = {}
     seen_ids: set[str] = set()
     index = 0
     while index < len(lines):
@@ -456,11 +458,17 @@ def _parse_backlog(
 
         statuses: list[str] = []
         index += 1
+        section_start = index
         while index < len(lines) and not lines[index].startswith("## "):
             status_match = BACKLOG_STATUS_RE.match(lines[index])
             if status_match:
                 statuses.append(status_match.group("status"))
             index += 1
+        section = "\n".join(lines[section_start:index])
+        plan_targets.setdefault(item_id, set()).update(
+            target.resolve(strict=False)
+            for _, target, _ in _local_links(section, path)
+        )
         if len(statuses) != 1:
             errors.append(
                 f"docs/已知问题与待做需求.md: {item_id} 必须且只能有一个状态"
@@ -473,22 +481,17 @@ def _parse_backlog(
             )
             continue
         result[item_id] = status
-    return result, content
+    return result, plan_targets
 
 
 def _check_plans(
     root: Path,
     backlog: dict[str, str],
-    backlog_content: str,
+    backlog_plan_targets: dict[str, set[Path]],
     errors: list[str],
 ) -> None:
     plans_root = root / "docs" / "方案"
     by_id: dict[str, list[Path]] = {}
-    backlog_path = root / "docs" / "已知问题与待做需求.md"
-    backlog_targets = {
-        target.resolve(strict=False)
-        for _, target, _ in _local_links(backlog_content, backlog_path)
-    }
 
     if plans_root.exists() and not plans_root.is_dir():
         errors.append("docs/方案: 必须是目录")
@@ -526,12 +529,12 @@ def _check_plans(
                     "待办 ID 后必须包含方案名称"
                 )
             by_id.setdefault(item_id, []).append(path)
-            if backlog[item_id] != "实施中":
+            if backlog[item_id] not in ALLOWED_PLAN_STATUSES:
                 errors.append(
                     f"{path.relative_to(root).as_posix()}: "
-                    f"对应待办 {item_id} 不是“实施中”"
+                    f"对应待办 {item_id} 的状态“{backlog[item_id]}”不允许活动方案"
                 )
-            if path.resolve(strict=False) not in backlog_targets:
+            if path.resolve(strict=False) not in backlog_plan_targets.get(item_id, set()):
                 errors.append(
                     f"{path.relative_to(root).as_posix()}: "
                     "必须由对应待办条目实际链接"
@@ -562,8 +565,10 @@ def _check_plans(
             errors.append(
                 f"docs/方案/: 实施中待办 {item_id} 必须有且只有一份活动方案"
             )
-        if status != "实施中" and count:
-            errors.append(f"docs/方案/: 非实施中待办 {item_id} 不得有活动方案")
+        if status not in ALLOWED_PLAN_STATUSES and count:
+            errors.append(
+                f"docs/方案/: 状态为“{status}”的待办 {item_id} 不得有活动方案"
+            )
 
 
 def _parse_registry(
@@ -849,6 +854,29 @@ def _check_absolute_paths(root: Path, warnings: list[str]) -> None:
             )
 
 
+def _check_navigation_overlap(root: Path, warnings: list[str]) -> None:
+    readme = root / "README.md"
+    docs_index = root / "docs" / "README.md"
+    if not readme.is_file() or not docs_index.is_file():
+        return
+    docs_root = root / "docs"
+    shared = sorted(
+        target
+        for target in _direct_targets(readme) & _direct_targets(docs_index)
+        if target.is_file()
+        and target.suffix.lower() == ".md"
+        and _is_within(target, docs_root)
+        and target != docs_index.resolve(strict=False)
+    )
+    if len(shared) < 3:
+        return
+    paths = ", ".join(path.relative_to(root).as_posix() for path in shared)
+    warnings.append(
+        "README.md: 与 docs/README.md 重复直接链接 "
+        f"{len(shared)} 份专题 Markdown，复核根入口是否重复枚举: {paths}"
+    )
+
+
 def collect_doc_consistency(
     root: Path | None = None,
 ) -> tuple[list[str], list[str]]:
@@ -861,8 +889,8 @@ def collect_doc_consistency(
     _check_navigation(workspace, errors)
     _check_docs_reachability(workspace, errors)
     _check_suite_navigation(workspace, errors)
-    backlog, backlog_content = _parse_backlog(workspace, errors)
-    _check_plans(workspace, backlog, backlog_content, errors)
+    backlog, backlog_plan_targets = _parse_backlog(workspace, errors)
+    _check_plans(workspace, backlog, backlog_plan_targets, errors)
     entries = _parse_registry(workspace, errors)
     _check_suite_registry(workspace, entries, errors)
     _check_archive_area(workspace, "archive/docs", errors)
@@ -870,6 +898,7 @@ def collect_doc_consistency(
     _check_archive_navigation(workspace, errors)
     _check_machine_syntax(workspace, warnings)
     _check_absolute_paths(workspace, warnings)
+    _check_navigation_overlap(workspace, warnings)
     return errors, warnings
 
 

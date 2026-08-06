@@ -1,6 +1,6 @@
 # Windows 集成运行时
 
-V0.5.6 将 Windows x64 的运行环境以两个普通 Git 文件放进仓库：
+Windows x64 集成运行资产版本 `0.5.6` 以两个普通 Git 文件放进仓库；它是独立的运行资产版本，不等于当前应用版本 `0.7.0`：
 
 ```text
 python-runtime.pack  Python 3.13.14 + 锁定 Python 依赖
@@ -8,7 +8,7 @@ media-runtime.pack   BBDown 1.6.3 + FFmpeg
 runtime-manifest.json
 ```
 
-文件由 `.github/workflows/build-integrated-runtime.yml` 在 GitHub Windows Runner 中从固定官方来源构建，构建前校验上游 SHA-256，构建后执行严格 Windows 部署自检，并把最终包哈希写入清单。工作流只上传 Artifact，不 commit、push 或创建 PR；是否把新运行包纳入仓库由维护者另行确认。
+文件由 `.github/workflows/build-integrated-runtime.yml` 在 GitHub Windows Runner 中从固定官方来源构建，构建前校验上游 SHA-256，构建后在仓库外隔离目录执行严格 Windows 部署自检，并把最终包哈希写入清单。顶层清单使用 schema 2 的 `runtime_bundle_version`；准备器仍可读取 schema 1 的旧字段。工作流只上传 Artifact，不 commit、push 或创建 PR；是否把新运行包纳入仓库由维护者另行确认。
 
 两个 `.pack` 都是 ZIP 格式但使用独立扩展名，避免与用户下载 ZIP 混淆。每个文件均小于 GitHub 普通 Git 的 100 MiB 单文件限制，因此不要求 Git LFS。
 

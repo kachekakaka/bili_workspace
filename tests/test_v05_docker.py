@@ -32,11 +32,13 @@ def test_compose_separates_config_userdata_and_downloads():
     assert "cap_drop:" in compose and "- ALL" in compose
     assert "docker.sock" not in compose
     assert "privileged:" not in compose
+    assert 'user: "${PUID:-1000}:${PGID:-100}"' in compose
 
 
 def test_entrypoint_preserves_credentials_and_rejects_unwritable_volumes():
     entrypoint = _text("docker/entrypoint.sh")
     assert "BBDown.data" not in entrypoint
+    assert "Refusing to run with root UID or GID" in entrypoint
     assert "Directory is not writable" in entrypoint
     assert "copy_if_changed /opt/bbdown/BBDown" in entrypoint
     assert "${BILI_USERDATA_DIR:-/data/userdata}" in entrypoint
@@ -64,6 +66,9 @@ def test_qnap_helper_scripts_are_present_and_hardened():
     start = (ROOT / "docker" / "build-and-start.sh").read_text(encoding="utf-8")
     entry = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
     assert "TRUSTED_HOSTS must not contain *" in verify
+    assert "PUID and PGID must both be non-zero" in verify
+    assert '"$(id -u)" -eq 0' in entry
+    assert '"$(id -g)" -eq 0' in entry
     assert "docker compose --project-directory" in verify
     assert "build --pull" in start
     assert "docker/compose.yaml" in start
@@ -91,9 +96,10 @@ def test_current_persistence_documentation_matches_runtime_layout():
     current_docs = (
         "README.md",
         "docs/README.md",
+        "docs/需求文档.md",
+        "docs/设计文档.md",
+        "docs/字段契约.md",
         "docs/运维/QNAP_Docker部署指南.md",
-        "docs/需求落实清单.md",
-        "docs/产品需求与架构基线.md",
         "config/README.md",
         "userdata/README.md",
     )

@@ -2,12 +2,12 @@ name: bili-workspace
 
 services:
   app:
-    image: "${BILI_IMAGE:-ghcr.io/kachekakaka/bili_workspace:latest}"
+    image: "${BILI_IMAGE:-bili-workspace:local}"
     build:
       context: ..
       dockerfile: docker/Dockerfile
     restart: unless-stopped
-    user: "${PUID:-1000}:${PGID:-1000}"
+    user: "${PUID:-1000}:${PGID:-100}"
     ports:
       - "${BIND_IP:-0.0.0.0}:${HTTP_PORT:-3398}:3398"
     environment:

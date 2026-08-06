@@ -3,6 +3,11 @@ set -eu
 
 umask 077
 
+if [ "$(id -u)" -eq 0 ] || [ "$(id -g)" -eq 0 ]; then
+  echo "[fatal] Refusing to run with root UID or GID; set non-zero PUID and PGID." >&2
+  exit 77
+fi
+
 for directory in \
   "${BILI_CONFIG_DIR:-/data/config}" \
   "${BILI_USERDATA_DIR:-/data/userdata}" \

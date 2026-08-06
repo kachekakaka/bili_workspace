@@ -2,6 +2,13 @@
 
 本项目遵循语义化版本号。
 
+## 未发布
+
+- T-PROJECT 的 Windows 与 Linux/macOS 入口改用带双层所有权标记的仓库外 run-id，隔离配置、运行时、临时资产、pytest basetemp 和结果，并默认保留证据；
+- Docker 配置检查和容器入口共同拒绝 root UID/GID，Compose 默认用户与模板对齐为 `1000:100`；
+- Windows 运行资产 manifest 提升到 schema 2，使用独立的 `runtime_bundle_version=0.5.6`，兼容读取 schema 1，应用版本继续为 `0.7.0`；
+- 收口当前文档的版本历史职责、测试安全、运行资产字段、非 root 部署和 schema v4 恢复说明。
+
 ## 0.7.0 - 2026-07-21
 
 - 将前端切换为浏览器原生 `.mjs` ES Modules 和静态 import，不引入 npm、打包器或生产 Node 依赖；
