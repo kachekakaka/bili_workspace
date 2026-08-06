@@ -48,7 +48,9 @@ def test_release_versions_are_synchronized() -> None:
     assert "bili_workspace v0.7.0 源码自检完成" in text(
         "scripts/dev/verify-source.sh"
     )
-    assert "当前应用版本为 V0.7.0" in text("docs/README.md")
+    docs_index = text("docs/README.md")
+    assert "活动文档总入口" in docs_index
+    assert "CHANGELOG.md" in docs_index
 
 
 def test_current_docs_cover_all_delivery_and_recovery_paths() -> None:

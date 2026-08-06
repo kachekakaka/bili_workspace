@@ -28,7 +28,9 @@ def test_v060_plan_tracks_completed_release() -> None:
     assert "plans/V0.6.0_多用户搜索与会话方案.md" in archive_index
     assert "V0.6 账号权限与会话管理" in archive_index
     assert "V0.6 任务所有权与保留策略" in archive_index
-    assert "当前事实以本页列出的活动文档为准" in docs_index
+    assert "活动文档总入口" in docs_index
+    for entry in ("需求文档.md", "字段契约.md", "../archive/docs/README.md"):
+        assert entry in docs_index
     assert "每用户最多 10 个有效会话" in requirements
     assert "普通用户最多同时拥有 10 个" in requirements
     assert "手机和平板可触控控件不低于 44px" in requirements

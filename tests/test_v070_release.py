@@ -82,7 +82,8 @@ def test_v070_release_regression_now_enforces_no_formal_publication() -> None:
     assert "停止未来的正式发布" in decision
 
 
-def test_v070_historical_docs_are_archived_and_current_facts_are_centralized() -> None:
+def test_v070_historical_docs_are_archived_and_current_facts_are_routed() -> None:
+    readme = text("README.md")
     docs = text("docs/README.md")
     requirements = text("docs/需求文档.md")
     design = text("docs/设计文档.md")
@@ -92,8 +93,10 @@ def test_v070_historical_docs_are_archived_and_current_facts_are_centralized() -
     notes = text("archive/docs/releases/V0.7.0.md")
     update_process = text("docs/运维/发布与回滚流程.md")
 
-    assert "当前应用版本为 V0.7.0" in docs
-    assert "停止未来正式发布" in docs
+    assert "当前应用版本为 V0.7.0" in readme
+    assert "活动文档总入口" in docs
+    assert "CHANGELOG.md" in docs
+    assert "停止未来正式发布" in requirements
     assert "当前已交付" in requirements
     assert "前端架构与页面生命周期" in design
     assert "DATABASE_SCHEMA_VERSION" in fields

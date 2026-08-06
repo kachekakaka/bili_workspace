@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet('Create', 'Record')]
     [string]$Action = 'Create',
@@ -73,7 +73,7 @@ function Write-JsonAtomically([string]$Path, [object]$Value) {
 function Read-JsonObject([string]$Path, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Label 不存在: $Path" }
     try { return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch { throw "无法读取 $Label: $Path" }
+    catch { throw "无法读取 ${Label}: $Path" }
 }
 
 function Assert-Property([object]$Object, [string]$Name, [object]$Expected, [string]$Label) {

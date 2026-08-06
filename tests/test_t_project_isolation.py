@@ -108,6 +108,7 @@ def test_normative_entrypoints_keep_all_outputs_in_owned_run() -> None:
     assert "unset BILI_CONFIG_DIR BILI_USERDATA_DIR BILI_DATABASE_PATH" in source
     assert "rmdir /s /q" not in windows.lower()
     assert "rm -rf" not in source
+    assert 'set "PSModuleAnalysisCachePath=NUL"' in windows
     assert "VerificationRunRoot" in bootstrap
     assert ".bili-workspace-test-run.json" in bootstrap
 

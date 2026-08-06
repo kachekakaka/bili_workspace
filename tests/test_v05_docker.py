@@ -93,9 +93,7 @@ def test_docker_runtime_directories_are_explicit():
 
 
 def test_current_persistence_documentation_matches_runtime_layout():
-    current_docs = (
-        "README.md",
-        "docs/README.md",
+    persistence_detail_docs = (
         "docs/需求文档.md",
         "docs/设计文档.md",
         "docs/字段契约.md",
@@ -103,10 +101,22 @@ def test_current_persistence_documentation_matches_runtime_layout():
         "config/README.md",
         "userdata/README.md",
     )
-    for name in current_docs:
+    for name in persistence_detail_docs:
         content = _text(name)
         for target in ("/data/config", "/data/userdata", "/downloads"):
             assert target in content, f"{name} 缺少 {target}"
+
+    navigation_docs = {
+        "README.md": ("docs/README.md", "docs/运维/README.md"),
+        "docs/README.md": ("字段契约.md", "运维/README.md"),
+    }
+    for name, entries in navigation_docs.items():
+        content = _text(name)
+        for entry in entries:
+            assert entry in content, f"{name} 缺少专责文档入口 {entry}"
+
+    for name in (*navigation_docs, *persistence_detail_docs):
+        content = _text(name)
         for legacy in ("/data/media", "/data/cache", "/data/tmp"):
             assert legacy not in content, f"{name} 仍引用旧目录 {legacy}"
 
@@ -114,5 +124,4 @@ def test_current_persistence_documentation_matches_runtime_layout():
     for directory in ("config/", "userdata/", "downloads/"):
         assert directory in readme
     assert "docs/README.md" in readme
-    assert "userdata/README.md" in readme
     assert "!userdata/README.md" in _text(".gitignore")
