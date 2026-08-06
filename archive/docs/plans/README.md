@@ -8,7 +8,8 @@
 
 ## 已完成计划
 
-- [TEST-ENTRY-20260803 T-PROJECT 隔离、Docker 非 root、运行资产字段与项目文档一致性收口方案](TEST-ENTRY-20260803-T-PROJECT隔离规范与项目文档一致性收口.md)：已完成 Windows 严格隔离入口、Docker 非 root 边界、Windows 运行资产字段和直接文档约束收口；真实项目镜像、QNAP 私有交付、WSL 后备诊断和 Playwright 加固已移交 `DOCKER-QNAP-20260806`；
+- [DOCKER-QNAP-20260806 QNAP 镜像构建验证与私有交付方案](DOCKER-QNAP-20260806-QNAP镜像构建验证与私有交付方案.md)：已完成 `linux/amd64` 真实镜像、非 root 三挂载、健康与重建、离线 tar、复载和打包运维收口；真实 QNAP 部署按用户最终决定暂缓；
+- [TEST-ENTRY-20260803 T-PROJECT 隔离、Docker 非 root、运行资产字段与项目文档一致性收口方案](TEST-ENTRY-20260803-T-PROJECT隔离规范与项目文档一致性收口.md)：已完成 Windows 严格隔离入口、Docker 非 root 边界、Windows 运行资产字段和直接文档约束收口；移交的真实项目镜像与私有离线交付已由 `DOCKER-QNAP-20260806` 关闭；
 - [DOC-AUTH-20260806 新版标准骨架与授权边界迁移方案](DOC-AUTH-20260806-新版骨架与授权边界迁移.md)：已完成按实际副作用分类的长期授权、入口职责、方案关闭语义、测试清理边界和关联方案规范迁移；
 - [DOC-LIFECYCLE-20260804 文档生命周期与收尾模板收口方案](DOC-LIFECYCLE-20260804-文档生命周期与收尾模板收口.md)：已完成文档分类与退出条件、活动方案状态约束、项目级收尾模板和待办来源表述收口；
 - [UPDATE-ENTRY-20260803 update.bat 退役及入口接线方案](UPDATE-ENTRY-20260803-update.bat退役及入口接线方案.md)：已完成 `update.bat` 退役、手动更新承接与直接结构消费者同步，并通过普通验证；

@@ -57,6 +57,7 @@ def test_default_environment_files_do_not_contain_real_secrets():
     assert "PUBLIC_BASE_URL=" in docker_env
     assert "COOKIE_SECURE=false" in docker_env
     assert "ENABLE_HSTS=false" in docker_env
+    assert "PULL_IMAGE=true" in docker_env
     assert not (ROOT / ".env").is_file() or ".env" in _text(".gitignore")
     assert not (ROOT / "docker" / ".env").is_file() or "docker/.env" in _text(".gitignore")
 
@@ -71,6 +72,10 @@ def test_qnap_helper_scripts_are_present_and_hardened():
     assert '"$(id -g)" -eq 0' in entry
     assert "docker compose --project-directory" in verify
     assert "build --pull" in start
+    assert 'case "${PULL_IMAGE:-true}"' in start
+    assert 'docker image inspect "$image"' in start
+    assert "compose up -d --no-build" in start
+    assert "Imported image is not available locally" in start
     assert "docker/compose.yaml" in start
     assert "DOTNET_BUNDLE_EXTRACT_BASE_DIR" in entry
     assert 'exec "$@"' in entry
@@ -97,7 +102,7 @@ def test_current_persistence_documentation_matches_runtime_layout():
         "docs/需求文档.md",
         "docs/设计文档.md",
         "docs/字段契约.md",
-        "docs/运维/QNAP_Docker部署指南.md",
+        "docs/运维/Docker镜像打包与离线交付.md",
         "config/README.md",
         "userdata/README.md",
     )
@@ -125,3 +130,16 @@ def test_current_persistence_documentation_matches_runtime_layout():
         assert directory in readme
     assert "docs/README.md" in readme
     assert "!userdata/README.md" in _text(".gitignore")
+
+
+def test_docker_packaging_guide_covers_offline_image_import():
+    guide = _text("docs/运维/Docker镜像打包与离线交付.md")
+    for token in (
+        "Container Station",
+        "docker load",
+        "sha256sum",
+        "PULL_IMAGE=false",
+        "--no-build",
+    ):
+        assert token in guide
+    assert not (ROOT / "docs" / "运维" / "QNAP_Docker部署指南.md").exists()

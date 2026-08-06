@@ -41,6 +41,14 @@ if [ "$PUID" -eq 0 ] || [ "$PGID" -eq 0 ]; then
   echo "[ERROR] PUID and PGID must both be non-zero; root execution is not supported" >&2
   exit 1
 fi
+case "${BUILD_LOCAL:-}" in
+  1|true|TRUE|yes|YES|on|ON|0|false|FALSE|no|NO|off|OFF) : ;;
+  *) echo "[ERROR] BUILD_LOCAL must be true or false" >&2; exit 1 ;;
+esac
+case "${PULL_IMAGE:-}" in
+  1|true|TRUE|yes|YES|on|ON|0|false|FALSE|no|NO|off|OFF) : ;;
+  *) echo "[ERROR] PULL_IMAGE must be true or false" >&2; exit 1 ;;
+esac
 case "${HTTP_PORT:-3398}" in
   ''|*[!0-9]*) echo "[ERROR] HTTP_PORT must be numeric" >&2; exit 1 ;;
 esac

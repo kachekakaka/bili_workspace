@@ -7,7 +7,8 @@
 - T-PROJECT 的 Windows 与 Linux/macOS 入口改用带双层所有权标记的仓库外 run-id，隔离配置、运行时、临时资产、pytest basetemp 和结果，并默认保留证据；
 - Docker 配置检查和容器入口共同拒绝 root UID/GID，Compose 默认用户与模板对齐为 `1000:100`；
 - Windows 运行资产 manifest 提升到 schema 2，使用独立的 `runtime_bundle_version=0.5.6`，兼容读取 schema 1，应用版本继续为 `0.7.0`；
-- 收口当前文档的版本历史职责、测试安全、运行资产字段、非 root 部署和 schema v4 恢复说明。
+- 收口当前文档的版本历史职责、测试安全、运行资产字段、非 root 部署和 schema v4 恢复说明；
+- 完成 TS-453Bmini `linux/amd64` 镜像、三挂载、健康重建和离线 tar 复载验证，增加禁止隐式 pull/重建的本地导入模式，并将当前运维范围收敛为镜像打包与离线交付，真实 QNAP 部署暂缓。
 
 ## 0.7.0 - 2026-07-21
 

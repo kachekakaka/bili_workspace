@@ -26,9 +26,9 @@
 ## 构建与交付
 
 - Windows 运行入口为 `start.bat`，部署自检入口为 `verify.bat`；仓库集成 Portable Python、BBDown 和 FFmpeg 运行资产。
-- Docker 构建与启动入口为 `docker/build-and-start.sh`，新部署默认从当前检出源码构建本地镜像。
+- Docker 构建与启动入口为 `docker/build-and-start.sh`；当前运维范围保留镜像构建、验证与私有离线打包，真实 QNAP 部署方案暂缓。
 - 项目停止未来正式发布，不创建新的 tag、GitHub Release 或 GHCR 正式镜像；既有 V0.7.0 发布物仅作为冻结历史后备。
-- 部署、网络、备份、恢复、源码更新和回滚统一从[项目文档总入口](docs/README.md)进入；验证层级与测试选择从[测试治理总入口](SoftwareTesting/README.md)进入。
+- 镜像打包、网络、备份、恢复、源码更新和回滚统一从[项目文档总入口](docs/README.md)进入；验证层级与测试选择从[测试治理总入口](SoftwareTesting/README.md)进入。
 
 ## 最短运行入口
 
@@ -40,15 +40,8 @@ cd bili_workspace
 start.bat
 ```
 
-QNAP / Docker 首次部署先按[运维入口](docs/运维/README.md)完成目录与配置准备，再运行：
+Docker 镜像打包、校验和离线交付按[运维入口](docs/运维/README.md)执行。真实 QNAP 目录、账号、网络和上线方式暂不在当前入口中，后续形成新方案后再补充。
 
-```bash
-git clone https://github.com/kachekakaka/bili_workspace.git
-cd bili_workspace
-chmod +x docker/*.sh
-cp docker/.env.default docker/.env
-./docker/build-and-start.sh
-```
 
 ## 文档与测试
 

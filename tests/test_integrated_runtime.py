@@ -137,6 +137,7 @@ def test_docker_defaults_to_local_build_without_registry_publication() -> None:
     assert "packages: write" not in workflow
     assert "docker/login-action" not in workflow
     assert "BUILD_LOCAL=true" in env_default
+    assert "PULL_IMAGE=true" in env_default
     assert "BILI_IMAGE=bili-workspace:local" in env_default
     assert "compose.build.yaml" not in _text("docker/build-and-start.sh")
     assert "requirements/runtime.lock" in dockerfile

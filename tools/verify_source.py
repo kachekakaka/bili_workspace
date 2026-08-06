@@ -67,6 +67,7 @@ REQUIRED = (
     "docs/adr/0001-current-facts-by-type.md",
     "docs/adr/0002-source-push-does-not-publish.md",
     "docs/运维/README.md",
+    "docs/运维/Docker镜像打包与离线交付.md",
     "docs/运维/发布与回滚流程.md",
     "docs/运维/源文件与恢复清单.md",
     "SoftwareTesting/README.md",
