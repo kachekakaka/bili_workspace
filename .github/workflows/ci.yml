@@ -130,19 +130,34 @@ jobs:
           python -m pip check
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
-      - name: Resolve installed Playwright Chromium
+      - name: Resolve installed Playwright headless shell
         shell: bash
         run: |
           set -eu
           browser="$(
             python - <<'PY'
+          from pathlib import Path
+
           from playwright.sync_api import sync_playwright
 
           with sync_playwright() as playwright:
-              print(playwright.chromium.executable_path)
+              chromium = Path(playwright.chromium.executable_path)
+
+          browser_dir = chromium.parent.parent
+          prefix = "chromium-"
+          if not browser_dir.name.startswith(prefix):
+              raise SystemExit(f"unexpected Playwright Chromium path: {chromium}")
+          revision = browser_dir.name.removeprefix(prefix)
+          headless_shell = (
+              browser_dir.parent
+              / f"chromium_headless_shell-{revision}"
+              / "chrome-headless-shell-linux64"
+              / "chrome-headless-shell"
+          )
+          print(headless_shell)
           PY
           )"
-          test -f "$browser"
+          test -x "$browser"
           printf 'BILI_PLAYWRIGHT_CHROMIUM=%s\n' "$browser" >> "$GITHUB_ENV"
       - name: Run the T-PROJECT Playwright phase
         env:
