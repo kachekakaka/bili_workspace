@@ -11,11 +11,11 @@ def text(path: str) -> str:
 
 def test_v062_styles_are_retained_in_semantic_layers() -> None:
     index = text("web/index.html")
-    assert "/assets/styles/tokens.css?v=20260720-2" in index
-    assert "/assets/styles/pages.css?v=20260720-2" in index
+    assert "/assets/styles/tokens.css?v=20260809-1" in index
+    assert "/assets/styles/pages.css?v=20260809-1" in index
     assert "/assets/ui-v062.css" not in index
     assert "/assets/enhancements-ui-v062.js" not in index
-    assert "/assets/app/main.mjs?v=20260720-2" in index
+    assert "/assets/app/main.mjs?v=20260809-1" in index
 
 
 def test_v062_control_height_tokens_are_consistent() -> None:
@@ -24,9 +24,15 @@ def test_v062_control_height_tokens_are_consistent() -> None:
     assert "--control-height-sm: 32px" in tokens
     assert "--control-height-md: 40px" in tokens
     assert "--control-height-lg: 48px" in tokens
+    for token in ("--control-height-sm", "--control-height-md", "--control-height-lg"):
+        assert f"{token}:" not in pages
+    assert "v0.6.2 UI normalization overrides" not in pages
+    assert ".btn.primary:not(.small)" in pages
+    assert "min-height: var(--control-height-lg)" in pages
     assert ".input,\n.select" in pages
     assert "height: var(--control-height-md)" in pages
     assert "min-height: 44px" in pages
+    assert "  .btn.small,\n  .input," in pages
 
 
 def test_module_pages_replace_prompt_style_user_and_group_actions() -> None:

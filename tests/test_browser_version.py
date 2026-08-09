@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FRONTEND_VERSION = "20260720-2"
+FRONTEND_VERSION = "20260809-1"
 
 
 def _text(path: str) -> str:

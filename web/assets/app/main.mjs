@@ -20,7 +20,7 @@ import * as accountPage from './pages/account.mjs';
 import * as settingsPage from './pages/settings.mjs';
 import * as morePage from './pages/more.mjs';
 
-const LOADED_FRONTEND_VERSION = '20260720-2';
+const LOADED_FRONTEND_VERSION = '20260809-1';
 const ADMIN_NAV = Object.freeze([
   ['dashboard', '⌂', '概览'], ['download', '↓', '下载'], ['search', '⌕', '搜索'],
   ['library', '▶', '作品库'], ['groups', '▣', '分组'], ['tasks', '≡', '任务'],

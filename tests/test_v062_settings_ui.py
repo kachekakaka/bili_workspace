@@ -13,7 +13,7 @@ def test_settings_behavior_moves_into_the_module_page() -> None:
     index = text("web/index.html")
     assert "/assets/ui-v062-settings.css" not in index
     assert "/assets/enhancements-ui-v062-settings.js" not in index
-    assert "/assets/app/main.mjs?v=20260720-2" in index
+    assert "/assets/app/main.mjs?v=20260809-1" in index
 
 
 def test_settings_keep_basic_fields_visible_and_fold_advanced_fields() -> None:

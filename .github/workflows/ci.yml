@@ -111,7 +111,9 @@ jobs:
           tests/test_t_project_isolation.py
 
   playwright:
+    name: T-PROJECT browser phase
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -128,14 +130,34 @@ jobs:
           python -m pip check
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
-      - name: Test fixed viewports and V0.7 page lifecycles
+      - name: Resolve installed Playwright Chromium
+        shell: bash
+        run: |
+          set -eu
+          browser="$(
+            python - <<'PY'
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as playwright:
+              print(playwright.chromium.executable_path)
+          PY
+          )"
+          test -f "$browser"
+          printf 'BILI_PLAYWRIGHT_CHROMIUM=%s\n' "$browser" >> "$GITHUB_ENV"
+      - name: Run the T-PROJECT Playwright phase
         env:
-          BILI_RUN_PLAYWRIGHT: "1"
-        run: >-
-          python -m pytest -q -p no:cacheprovider --tb=short
-          tests/test_playwright_layout.py
-          tests/test_v062_ui_playwright.py
-          tests/test_v070_*_playwright.py
+          BILI_TEST_ROOT: ${{ runner.temp }}/bili_workspace_test
+          PYTHON: python
+        run: sh scripts/dev/run-playwright-phase.sh
+      - name: Upload isolated Playwright evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t-project-playwright-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bili_workspace_test/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   product-validation:
     if: >-
@@ -195,6 +217,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $env:BILI_VERIFY_NO_PAUSE = "1"
           $env:BILI_VERIFY_REQUIRE_NODE = "1"
+          $env:BILI_VERIFY_REQUIRE_PLAYWRIGHT = "1"
           $env:BILI_TEST_ROOT = Join-Path $env:RUNNER_TEMP 'bili_workspace_test'
           $verifyLog = Join-Path $env:RUNNER_TEMP 'windows-verify.log'
           cmd.exe /d /c verify.bat 2>&1 |

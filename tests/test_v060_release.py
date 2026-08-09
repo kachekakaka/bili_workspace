@@ -16,7 +16,7 @@ from app.constants import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_VERSION = "20260720-2"
+FRONTEND_VERSION = "20260809-1"
 
 
 def text(path: str) -> str:
@@ -69,7 +69,7 @@ def test_current_docs_cover_all_delivery_and_recovery_paths() -> None:
         assert token in requirements + design
     for token in (
         "Windows 源码更新",
-        "Docker / QNAP 源码更新",
+        "Docker 源码构建与更新",
         "BUILD_LOCAL=true",
         "代码回滚",
         "数据恢复",
@@ -81,6 +81,7 @@ def test_current_docs_cover_all_delivery_and_recovery_paths() -> None:
 
 def test_ci_contains_product_validation_matrix() -> None:
     workflow = text(".github/workflows/ci.yml")
+    browser_phase = text("scripts/dev/run-playwright-phase.sh")
     assert 'python-version: ["3.11", "3.12", "3.13"]' in workflow
     assert "github.head_ref == 'release/v0.7.0'" in workflow
     assert "product-validation:" in workflow
@@ -96,7 +97,7 @@ def test_ci_contains_product_validation_matrix() -> None:
     ):
         assert obsolete not in workflow
     assert "tests/test_v070_release.py" in workflow
-    assert "BILI_RUN_PLAYWRIGHT" in workflow
+    assert "BILI_RUN_PLAYWRIGHT" in browser_phase
     assert "BILI_VERIFY_REQUIRE_NODE" in workflow
 
 

@@ -17,10 +17,40 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _assert_pack_contract(pack: Path, runtime_bundle_version: str) -> None:
+    with zipfile.ZipFile(pack) as archive:
+        names = set(archive.namelist())
+        identity = json.loads(archive.read("BILI_RUNTIME.txt"))
+        assert identity["runtime_bundle_version"] == runtime_bundle_version
+
+        declared: set[str] = set()
+        rows = archive.read("runtime_manifest.sha256").decode("utf-8").splitlines()
+        for row in rows:
+            expected, name = row.split("  ", 1)
+            declared.add(name)
+            digest = hashlib.sha256()
+            with archive.open(name) as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            assert digest.hexdigest() == expected
+        assert declared == names - {"runtime_manifest.sha256"}
+
+
 def test_builder_pins_official_sources_and_regular_git_size_limit() -> None:
     source = _text("tools/build_integrated_runtime.py")
-    assert builder.RUNTIME_BUNDLE_VERSION == "0.5.6"
+    notices = _text("THIRD_PARTY_NOTICES.md")
+    assert builder.RUNTIME_BUNDLE_VERSION == "0.5.7"
     assert builder.PYTHON_VERSION == "3.13.14"
+    assert builder.PYTHON_MAJOR_MINOR == "3.13"
+    assert builder.PYTHON_ABI == "cp313"
     assert builder.PYTHON_EMBED_URL.startswith("https://www.python.org/ftp/python/")
     assert len(builder.PYTHON_EMBED_SHA256) == 64
     assert builder.BBDOWN_URL.startswith(
@@ -32,6 +62,10 @@ def test_builder_pins_official_sources_and_regular_git_size_limit() -> None:
     assert builder.MAX_PACK_BYTES == 100 * 1024 * 1024
     assert source.count('"runtime_bundle_version": RUNTIME_BUNDLE_VERSION') == 3
     assert '"bili_workspace_version":' not in source
+    assert builder.FFMPEG_WHEEL_NAME in notices
+    assert builder.FFMPEG_MEMBER in notices
+    assert "ffmpeg-n8.1-latest-win64-gpl-8.1" not in notices
+    assert "sources.ffmpeg_wheel" in notices
 
 
 @pytest.mark.parametrize(
@@ -73,10 +107,17 @@ def test_windows_entrypoints_use_repository_integrated_runtime() -> None:
     assert r"scripts\windows\prepare-runtime.bat" in start
     assert r"scripts\windows\bootstrap-runtime.bat" in verify
     assert r"scripts\windows\new-test-run.ps1" in verify
+    assert r"tools\playwright_runtime.py" in verify
+    assert "BILI_VERIFY_REQUIRE_PLAYWRIGHT" in verify
+    assert "BILI_RUN_PLAYWRIGHT=1" in verify
+    assert "playwright install" not in verify
     assert "-m tools.server_instance" in start
     assert 'set "BROWSER_URL=%OPEN_URL%?fresh=' in start
     assert "浏览器不会再自动打开旧服务" in start
     assert 'if /I "%BILI_VERIFY_NO_PAUSE%"=="1"' in verify
+    assert 'set "RESULT_RECORD_EXIT=%ERRORLEVEL%"' in verify
+    assert "exit /b %RESULT_RECORD_EXIT%" in verify
+    assert verify.count("if errorlevel 1 goto :result_record_failed") == 2
     assert "bootstrap-portable.ps1" in bootstrap_cmd
     assert ".venv" not in prepare
     assert "runtime_manifest.sha256" in bootstrap_ps
@@ -116,6 +157,8 @@ def test_runtime_builder_workflow_uploads_artifact_without_repository_writes() -
     assert "scripts/windows/bootstrap-runtime.bat" in workflow
     assert "scripts/windows/prepare-runtime.bat" not in workflow
     assert "BILI_VERIFY_REQUIRE_NODE" in workflow
+    assert "BILI_VERIFY_REQUIRE_PLAYWRIGHT" in workflow
+    assert "tools/playwright_runtime.py" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "git commit" not in workflow
     assert "git push" not in workflow
@@ -141,6 +184,13 @@ def test_docker_defaults_to_local_build_without_registry_publication() -> None:
     assert "BILI_IMAGE=bili-workspace:local" in env_default
     assert "compose.build.yaml" not in _text("docker/build-and-start.sh")
     assert "requirements/runtime.lock" in dockerfile
+    for docker_input, workflow_path in (
+        ("COPY .env.default", "- .env.default"),
+        ("COPY THIRD_PARTY_NOTICES.md", "- THIRD_PARTY_NOTICES.md"),
+        ("COPY LICENSES", "- LICENSES/**"),
+    ):
+        assert docker_input in dockerfile
+        assert workflow_path in workflow
 
 
 def test_runtime_manifest_shape_when_generated(tmp_path: Path) -> None:
@@ -153,7 +203,7 @@ def test_runtime_manifest_shape_when_generated(tmp_path: Path) -> None:
     path.write_text(json.dumps(manifest), encoding="utf-8")
     generated = json.loads(path.read_text())
     assert generated["schema_version"] == 2
-    assert generated["runtime_bundle_version"] == "0.5.6"
+    assert generated["runtime_bundle_version"] == builder.RUNTIME_BUNDLE_VERSION
     assert "bili_workspace_version" not in generated
     assert generated["packs"]["python"]["path"].endswith(".pack")
     assert generated["packs"]["python"]["sha256"] == hashlib.sha256(
@@ -165,19 +215,11 @@ def test_checked_runtime_manifest_is_decoupled_from_application_version() -> Non
     manifest = json.loads(_text("vendor/windows/runtime-manifest.json"))
     assert __version__ == "0.7.0"
     assert manifest["schema_version"] == 2
-    assert manifest["runtime_bundle_version"] == "0.5.6"
+    assert manifest["runtime_bundle_version"] == builder.RUNTIME_BUNDLE_VERSION
     assert "bili_workspace_version" not in manifest
-    assert manifest["packs"]["python"] == {
-        "path": "vendor/windows/python-runtime.pack",
-        "sha256": (
-            "0b20c48727a144520f8fd1676a2252079fe14c4483df669c5490ba54d36f1313"
-        ),
-        "size": 29284760,
-    }
-    assert manifest["packs"]["media"] == {
-        "path": "vendor/windows/media-runtime.pack",
-        "sha256": (
-            "1b8ac6956c7e08110b477c8a132709a10c0d0c75360c14954397c11b3c836632"
-        ),
-        "size": 39154660,
-    }
+    for name in ("python", "media"):
+        row = manifest["packs"][name]
+        pack = ROOT / row["path"]
+        assert pack.stat().st_size == row["size"]
+        assert _sha256(pack) == row["sha256"]
+        _assert_pack_contract(pack, builder.RUNTIME_BUNDLE_VERSION)

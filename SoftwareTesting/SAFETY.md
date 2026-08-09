@@ -18,10 +18,17 @@ Linux/macOS：${TMPDIR:-/tmp}/bili_workspace_test
 ## 真实数据与进程
 
 - 禁止读取、修改或复制真实配置、数据库、Cookie、Token、媒体、账号资料和其他用户数据。
-- 项目完整自检只同步启动本次命令直接拥有的 Python、BBDown、FFmpeg 和 Node 子进程，不启动应用服务、浏览器或容器。
+- 项目完整自检只同步启动本次命令直接拥有的 Python、BBDown、FFmpeg、Node 和无头测试浏览器子进程，不启动应用服务、用户浏览器或容器。
 - 只管理本次启动且记录了所有权的进程，禁止按进程名称批量结束。
 - fixture、缓存、日志和输出必须位于隔离临时目录或已确认的运行目录，不能写入真实持久化目录。
 - 需要真实网络、外部费用或特殊环境的项目必须登记为 `explicit`，并另行取得授权。
+
+## 无头浏览器边界
+
+- Playwright 是 T-PROJECT full 的必需阶段，只能复用已经存在的 Playwright Chromium、Chrome、Edge 或 Chromium；T-PROJECT 不安装、不下载也不更新浏览器。
+- `BILI_PLAYWRIGHT_CHROMIUM` 只允许指向既有普通可执行文件。浏览器启动必须使用本次 run-id 下的新 profile、缓存和临时目录，禁止复用系统用户 profile、现有登录会话或已打开的浏览器实例。
+- 浏览器测试只允许访问测试直接拥有的回环 HTTP 服务和本地静态资源；不得访问真实 Bilibili、真实部署地址或其他外部网络。
+- runner 只能通过自己持有的 Playwright 句柄关闭本次浏览器进程。缺少或无法启动兼容浏览器时，严格入口记录 `blocked`；不得通过按名称结束现有浏览器或临时下载来继续。
 
 ## 敏感信息
 

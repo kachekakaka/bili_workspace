@@ -158,4 +158,4 @@ PULL_IMAGE=false
 
 ## 8. 已验证基线
 
-2026-08-06 的 TS-453Bmini `linux/amd64` 构建、非 root 三挂载、健康与重建、离线 tar 和复载证据保存在[已完成方案](../../archive/docs/plans/DOCKER-QNAP-20260806-QNAP镜像构建验证与私有交付方案.md)。后续新包应生成新的验证记录和校验和，不能沿用旧结果。
+2026-08-06 的 TS-453Bmini `linux/amd64` 构建、非 root 三挂载、健康与重建、离线 tar 和复载记录由[文档归档索引](../../archive/docs/README.md)中的“QNAP 镜像构建验证与私有交付方案”承接。后续新包应生成新的验证记录和校验和，不能沿用旧结果。
