@@ -6,7 +6,7 @@
 - 全量测试必须运行 Registry 中全部 `full` 项、本轮受影响的 `affected_only` 项和用户明确加入的 `explicit` 项。
 - 正式认证必须先完成必要的全量测试，再核对同一候选 SHA 的 CI、UI、Windows 和 Docker 门禁；认证不自动授权 tag、Release、push 或发布。
 
-构建义务不自动提升验证层级。当前项目的全量测试至少包含 `T-DOC` 和 `T-PROJECT`；两项分别执行，`T-PROJECT` 不重复运行文档门禁。
+构建义务不自动提升验证层级。当前项目的全量测试至少包含 `T-DOC` 和 `T-PROJECT`；两项分别执行，`T-PROJECT` 不重复运行文档门禁。T-PROJECT full 内部必须完成源码、Python、Node、Playwright 和集成运行资产阶段，CI 为并行执行保留的浏览器作业仍属于 T-PROJECT，不形成新的 Registry 项。
 
 ## 结果语义
 
@@ -16,7 +16,7 @@
 - `inconclusive`：执行被中断、运行器异常，或必需项被跳过而证据不完整。
 - `not_run`：没有执行。
 
-退出码为零但存在必需项跳过时，结果仍为 `inconclusive`，不能补成 `passed`。输入、测试契约或候选身份变化后重新判断受影响范围。
+退出码为零但存在必需项或 T-PROJECT 必需阶段跳过时，结果仍为 `inconclusive`，不能补成 `passed`。严格入口缺少 Node、Playwright 包或可用浏览器且尚未进入检查阶段时为 `blocked`。输入、测试契约或候选身份变化后重新判断受影响范围。
 
 ## 任务交接
 

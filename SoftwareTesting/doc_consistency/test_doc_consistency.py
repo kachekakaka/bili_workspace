@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import sys
 import unicodedata
 from collections import Counter, deque
 from pathlib import Path
@@ -19,6 +18,7 @@ IGNORED_PARTS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".runtime",
     ".venv",
     "__pycache__",
     "build",
@@ -26,6 +26,15 @@ IGNORED_PARTS = {
     "node_modules",
     "venv",
 }
+PROJECT_SKILL_ROOTS = (
+    (".agents", "skills"),
+    (".cursor", "skills"),
+    (".claude", "skills"),
+    (".codex", "skills"),
+    (".opencode", "skills"),
+    (".opencode", "skill"),
+    (".github", "skills"),
+)
 REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
@@ -101,7 +110,14 @@ def _ignored(path: Path, root: Path) -> bool:
         relative = path.relative_to(root)
     except ValueError:
         return True
-    return any(part in IGNORED_PARTS for part in relative.parts)
+    parts = relative.parts
+    if any(part in IGNORED_PARTS for part in parts):
+        return True
+    return any(
+        parts[index : index + len(skill_root)] == skill_root
+        for skill_root in PROJECT_SKILL_ROOTS
+        for index in range(len(parts) - len(skill_root) + 1)
+    )
 
 
 def _is_archive(path: Path, root: Path) -> bool:
@@ -793,25 +809,19 @@ def _check_archive_area(root: Path, relative: str, errors: list[str]) -> None:
 
 
 def _check_archive_navigation(root: Path, errors: list[str]) -> None:
-    navigation_files = (
-        "AGENTS.md",
-        "README.md",
-        "docs/README.md",
-        "SoftwareTesting/README.md",
-    )
     allowed = {
         (root / "archive/docs/README.md").resolve(strict=False),
         (root / "archive/SoftwareTesting/README.md").resolve(strict=False),
     }
-    for relative in navigation_files:
-        path = root / relative
+    for path in _active_markdown(root):
+        relative = path.relative_to(root).as_posix()
         content = _read_text(path)
         if content is None:
             continue
         for raw, target, _ in _local_links(content, path):
             if _is_archive(target, root) and target not in allowed:
                 errors.append(
-                    f"{relative}: 活动导航不得直接链接归档正文: {raw}"
+                    f"{relative}: 活动 Markdown 不得直接链接归档正文: {raw}"
                 )
 
 

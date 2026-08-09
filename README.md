@@ -25,7 +25,7 @@
 
 ## 构建与交付
 
-- Windows 运行入口为 `start.bat`，部署自检入口为 `verify.bat`；仓库集成 Portable Python、BBDown 和 FFmpeg 运行资产。
+- Windows 运行入口为 `start.bat`，部署自检入口为 `verify.bat`；普通部署自检允许缺少开发阶段并把结果记为 `inconclusive`，严格 T-PROJECT full 的调用方式由[测试治理总入口](SoftwareTesting/README.md)承接。仓库集成 Portable Python、BBDown 和 FFmpeg 运行资产。
 - Docker 构建与启动入口为 `docker/build-and-start.sh`；当前运维范围保留镜像构建、验证与私有离线打包，真实 QNAP 部署方案暂缓。
 - 项目停止未来正式发布，不创建新的 tag、GitHub Release 或 GHCR 正式镜像；既有 V0.7.0 发布物仅作为冻结历史后备。
 - 镜像打包、网络、备份、恢复、源码更新和回滚统一从[项目文档总入口](docs/README.md)进入；验证层级与测试选择从[测试治理总入口](SoftwareTesting/README.md)进入。

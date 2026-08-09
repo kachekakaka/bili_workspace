@@ -47,7 +47,12 @@ def static_site():
 @pytest.fixture(scope="module")
 def browser() -> Browser:
     with sync_playwright() as playwright:
-        instance = playwright.chromium.launch(headless=True, args=["--no-sandbox"])
+        executable_path = os.getenv("BILI_PLAYWRIGHT_CHROMIUM") or None
+        instance = playwright.chromium.launch(
+            executable_path=executable_path,
+            headless=True,
+            args=["--no-sandbox"],
+        )
         yield instance
         instance.close()
 
@@ -261,4 +266,32 @@ def test_large_group_select_uses_searchable_option_list(browser: Browser) -> Non
         assert page.locator("#v062SelectOptions [data-v062-option]").count() == 1
         page.click('[data-v062-option="group-9"]')
         assert page.locator("#downloadGroup").input_value() == "group-9"
+        page.close()
+
+
+def test_control_heights_follow_desktop_and_touch_contracts(browser: Browser) -> None:
+    def height(locator) -> float:
+        return locator.evaluate(
+            "element => Number.parseFloat(getComputedStyle(element).height)"
+        )
+
+    with static_site() as base_url:
+        page = new_page(browser, base_url, "users")
+        page.wait_for_selector("#createUserButton")
+        page.click("#createUserButton")
+        page.wait_for_selector("#createUsername")
+
+        primary = page.locator("#createUserButton")
+        compact = page.locator("[data-user-edit]").first
+        ordinary = page.locator("#createUsername")
+        assert height(compact) == pytest.approx(32)
+        assert height(ordinary) == pytest.approx(40)
+        assert height(primary) == pytest.approx(48)
+
+        page.set_viewport_size({"width": 390, "height": 844})
+        mobile_compact = page.locator(".user-card-list [data-user-edit]").first
+        assert mobile_compact.is_visible()
+        assert height(mobile_compact) >= 44
+        assert height(ordinary) >= 44
+        assert height(primary) >= 44
         page.close()

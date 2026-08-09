@@ -12,6 +12,9 @@ on:
       - docker/Dockerfile
       - docker/compose.yaml
       - requirements/runtime.lock
+      - .env.default
+      - THIRD_PARTY_NOTICES.md
+      - LICENSES/**
       - .github/workflows/docker-image.yml
 
 permissions:

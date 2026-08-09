@@ -8,17 +8,18 @@
 - 许可证：MIT；Windows 包全文见 `BBDown_portable/BBDown.LICENSE.txt`
 - 上游仓库：`https://github.com/nilaoda/BBDown`
 
-BBDown 官方仓库已经归档。Windows 集成运行资产 `0.5.6` 固定使用 v1.6.3，并校验现有二进制哈希；该运行资产版本独立于应用版本 `0.7.0`。Docker 构建阶段会执行 `BBDown --help` 冒烟测试。
+BBDown 官方仓库已经归档。当前 Windows 集成运行资产固定使用 v1.6.3，并校验现有二进制哈希；运行资产身份见 `vendor/windows/runtime-manifest.json`，独立于应用版本 `0.7.0`。Docker 构建阶段会执行 `BBDown --help` 冒烟测试。
 
 ## FFmpeg / FFprobe
 
 - Windows 文件：`BBDown_portable/ffmpeg/bin/ffmpeg.exe`
-- Windows 原始目录标识：`ffmpeg-n8.1-latest-win64-gpl-8.1`
+- Windows 构建来源：`imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl`
+- Windows wheel 成员：`imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe`
 - Windows 许可证文本：`BBDown_portable/ffmpeg/LICENSE.txt`
 - Docker：使用 Debian Bookworm 软件源安装 `ffmpeg`，同时提供 `ffprobe`
 - 上游网站：`https://ffmpeg.org/`
 
-Windows 随包二进制不做修改，其哈希记录在 `BBDown_portable/checksums.sha256` 和发布清单中。
+Windows 构建器从固定 wheel 原样提取该成员。wheel URL 与 SHA-256 记录在顶层 `runtime-manifest.json` 的 `sources.ffmpeg_wheel` 和包内 `BILI_RUNTIME.txt`，提取后二进制哈希记录在包内 `BBDown_portable/checksums.sha256`，完整媒体包哈希由顶层清单承接。
 
 ## QRCode.js
 

@@ -1,17 +1,17 @@
 {
   "schema_version": 2,
-  "runtime_bundle_version": "0.5.6",
+  "runtime_bundle_version": "0.5.7",
   "platform": "windows-x64",
   "python_version": "3.13.14",
   "packs": {
     "python": {
       "path": "vendor/windows/python-runtime.pack",
-      "sha256": "0b20c48727a144520f8fd1676a2252079fe14c4483df669c5490ba54d36f1313",
-      "size": 29284760
+      "sha256": "14d86f9af404a4e249e42f1cf0848052ce09875295a44becb1a9365a7f0652ce",
+      "size": 66009509
     },
     "media": {
       "path": "vendor/windows/media-runtime.pack",
-      "sha256": "1b8ac6956c7e08110b477c8a132709a10c0d0c75360c14954397c11b3c836632",
+      "sha256": "0b8bb0e7125922faa684e2edb015b5e0d8e81c2d3151ff78dbe46083fe66c24d",
       "size": 39154660
     }
   },

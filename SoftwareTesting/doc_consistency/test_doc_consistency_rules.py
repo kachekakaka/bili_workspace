@@ -535,16 +535,65 @@ C:\\Users\\example\\project
             "当前承接真源必须链接一个项目内活动 Markdown",
         )
 
-    def test_active_navigation_may_link_archive_index_but_not_body(self) -> None:
+    def test_active_markdown_may_link_archive_index_but_not_body(self) -> None:
         self.add_valid_archive()
         self.assert_clean()
 
         self.write(
-            "AGENTS.md",
-            self.read("AGENTS.md") + "- [旧设计](archive/docs/旧设计.md)\n",
+            "docs/需求文档.md",
+            self.read("docs/需求文档.md")
+            + "- [归档索引](../archive/docs/README.md)\n"
+            + "- [旧设计](../archive/docs/旧设计.md)\n",
         )
         errors, _ = self.issues()
-        self.assert_has(errors, "AGENTS.md: 活动导航不得直接链接归档正文")
+        self.assert_has(
+            errors,
+            "docs/需求文档.md: 活动 Markdown 不得直接链接归档正文",
+        )
+
+    def test_project_skill_assets_are_excluded_without_ignoring_other_skill_files(
+        self,
+    ) -> None:
+        skill_roots = (
+            ".agents/skills",
+            ".cursor/skills",
+            ".claude/skills",
+            ".codex/skills",
+            ".opencode/skills",
+            ".opencode/skill",
+            ".github/skills",
+            "nested/.codex/skills",
+        )
+        for skill_root in skill_roots:
+            self.write(
+                f"{skill_root}/example/SKILL.md",
+                "# 项目 Agent Skill\n\n[内部资源](missing.md)\n",
+            )
+        self.write(
+            ".codex/skills/example/CONTEXT.md",
+            "# Skill 上下文\n\n[内部资源](missing.md)\n",
+        )
+        self.assert_clean()
+
+        self.write("tools/SKILL.md", "# 普通文档\n\n[失效链接](missing.md)\n")
+        errors, _ = self.issues()
+        self.assert_has(errors, "tools/SKILL.md: 链接目标不存在")
+
+    def test_generated_runtime_markdown_is_excluded_without_ignoring_project_licenses(
+        self,
+    ) -> None:
+        self.write(
+            ".runtime/python/Lib/site-packages/example/LICENSE.md",
+            "# 依赖许可证\n\n[内部资源](missing.md)\n",
+        )
+        self.assert_clean()
+
+        self.write(
+            "licenses/LICENSE.md",
+            "# 项目许可证说明\n\n[失效链接](missing.md)\n",
+        )
+        errors, _ = self.issues()
+        self.assert_has(errors, "licenses/LICENSE.md: 链接目标不存在")
 
     def test_root_and_docs_index_duplicate_direct_links_are_warning(self) -> None:
         self.write(

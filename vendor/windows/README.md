@@ -1,6 +1,6 @@
 # Windows 集成运行时
 
-Windows x64 集成运行资产版本 `0.5.6` 以两个普通 Git 文件放进仓库；它是独立的运行资产版本，不等于当前应用版本 `0.7.0`：
+Windows x64 集成运行资产以顶层 `runtime-manifest.json` 的 `runtime_bundle_version` 为身份，以两个普通 Git 文件放进仓库；该身份独立于应用版本：
 
 ```text
 python-runtime.pack  Python 3.13.14 + 锁定 Python 依赖

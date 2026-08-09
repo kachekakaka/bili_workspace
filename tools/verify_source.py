@@ -6,6 +6,11 @@ import re
 import subprocess
 from pathlib import Path
 
+try:
+    from tools.build_integrated_runtime import RUNTIME_BUNDLE_VERSION
+except ModuleNotFoundError:
+    from build_integrated_runtime import RUNTIME_BUNDLE_VERSION
+
 ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_MANIFEST = ROOT / "vendor" / "windows" / "runtime-manifest.json"
 MAX_REGULAR_GIT_FILE = 100 * 1024 * 1024
@@ -46,9 +51,11 @@ REQUIRED = (
     "tests/test_configure_network.py",
     "tests/test_integrated_runtime.py",
     "tests/test_repository_layout.py",
+    "tests/test_playwright_runtime.py",
     "tests/test_t_project_isolation.py",
     "tools/build_integrated_runtime.py",
     "tools/check_markdown_links.py",
+    "tools/playwright_runtime.py",
     "tools/t_project_isolation.py",
     "scripts/README.md",
     "scripts/windows/bootstrap-portable.ps1",
@@ -57,6 +64,7 @@ REQUIRED = (
     "scripts/windows/new-test-run.ps1",
     "scripts/windows/configure-network.bat",
     "scripts/windows/bilibili-login.bat",
+    "scripts/dev/run-playwright-phase.sh",
     "scripts/dev/verify-source.sh",
     "docs/README.md",
     "docs/需求文档.md",
@@ -215,7 +223,7 @@ def _runtime_packs(errors: list[str]) -> dict[str, str]:
         data = json.loads(RUNTIME_MANIFEST.read_text(encoding="utf-8"))
         if data.get("schema_version") != 2 or data.get("platform") != "windows-x64":
             raise ValueError("schema/platform 不受支持")
-        if data.get("runtime_bundle_version") != "0.5.6":
+        if data.get("runtime_bundle_version") != RUNTIME_BUNDLE_VERSION:
             raise ValueError("runtime_bundle_version 不受支持")
         if "bili_workspace_version" in data:
             raise ValueError("schema 2 不得包含旧版 bili_workspace_version")

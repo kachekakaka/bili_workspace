@@ -19,20 +19,32 @@ def test_v070_release_identity_and_build_fingerprint() -> None:
     assert ".mjs" in _SOURCE_SUFFIXES
     metadata = build_metadata()
     assert metadata["version"] == "0.7.0"
-    assert metadata["frontend_version"] == "20260720-2"
+    assert metadata["frontend_version"] == "20260809-1"
     assert len(metadata["build_id"]) == 12
 
 
 def test_local_verifiers_cover_all_frontend_modules() -> None:
     windows = text("verify.bat")
     source = text("scripts/dev/verify-source.sh")
+    browser_phase = text("scripts/dev/run-playwright-phase.sh")
     assert "for /r \"web\" %%F in (*.mjs)" in windows
     assert "node --test" in windows
     assert "BILI_VERIFY_REQUIRE_NODE" in windows
+    assert "BILI_VERIFY_REQUIRE_PLAYWRIGHT" in windows
+    assert "BILI_RUN_PLAYWRIGHT=1" in windows
+    assert "tools\\playwright_runtime.py" in windows
+    assert "playwright install" not in windows
     assert "SoftwareTesting\\doc_consistency\\test_doc_consistency.py" not in windows
     assert "-name '*.mjs'" in source
     assert "node --test tests/frontend/*.test.mjs" in source
     assert "T-PROJECT 完整源码自检要求 Node.js" in source
+    assert "BILI_RUN_PLAYWRIGHT=1" in source
+    assert "-B -X utf8 tools/playwright_runtime.py" in source
+    assert "playwright install" not in source
+    assert "-m playwright" in browser_phase
+    assert "tools/t_project_isolation.py create" in browser_phase
+    assert "tools/t_project_isolation.py record" in browser_phase
+    assert not (ROOT / ".github" / "workflows" / "ui-v062.yml").exists()
     assert "SoftwareTesting/doc_consistency/test_doc_consistency.py" not in source
 
 
@@ -54,6 +66,9 @@ def test_v070_release_regression_now_enforces_no_formal_publication() -> None:
         "platforms: linux/amd64,linux/arm64",
         "push: false",
         "Build amd64/arm64 image without publishing",
+        "- .env.default",
+        "- THIRD_PARTY_NOTICES.md",
+        "- LICENSES/**",
     ):
         assert token in docker
     for forbidden in (

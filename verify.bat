@@ -5,6 +5,10 @@ set "PSModuleAnalysisCachePath=NUL"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "NODE_CHECK_SKIPPED=0"
+set "PLAYWRIGHT_CHECK_SKIPPED=0"
+set "BILI_RUN_PLAYWRIGHT="
+set "T_PROJECT_FULL=0"
+if /I "%BILI_VERIFY_REQUIRE_NODE%"=="1" if /I "%BILI_VERIFY_REQUIRE_PLAYWRIGHT%"=="1" set "T_PROJECT_FULL=1"
 set "FAIL_STATUS=failed"
 set "FAIL_MESSAGE=验证命令失败。"
 cd /d "%~dp0"
@@ -68,6 +72,34 @@ call "%~dp0scripts\windows\bootstrap-runtime.bat" -Quiet -VerificationRunRoot "%
 if errorlevel 1 (
   type "%RESULTS_DIR%\bootstrap-runtime.log"
   goto :failed
+)
+
+set "FAIL_MESSAGE=Playwright 浏览器运行器异常。"
+"%PY%" -B -X utf8 tools\playwright_runtime.py --workspace-root "%~dp0." --run-root "%VERIFY_RUN%" --probe > "%RESULTS_DIR%\playwright-browser.path" 2> "%RESULTS_DIR%\playwright-runtime.log"
+set "PLAYWRIGHT_RUNTIME_EXIT=%ERRORLEVEL%"
+if not "%PLAYWRIGHT_RUNTIME_EXIT%"=="0" (
+  if "%PLAYWRIGHT_RUNTIME_EXIT%"=="3" (
+    if /I "%BILI_VERIFY_REQUIRE_PLAYWRIGHT%"=="1" (
+      type "%RESULTS_DIR%\playwright-runtime.log"
+      set "FAIL_STATUS=blocked"
+      set "FAIL_MESSAGE=严格验证要求 Playwright Python 包和兼容浏览器，但浏览器阶段前置不可用。"
+      goto :failed
+    )
+    set "PLAYWRIGHT_CHECK_SKIPPED=1"
+    echo [提示] Playwright Python 包或兼容浏览器不可用；跳过浏览器阶段，部署自检结果将记为 inconclusive。
+  ) else (
+    type "%RESULTS_DIR%\playwright-runtime.log"
+    set "FAIL_STATUS=inconclusive"
+    goto :failed
+  )
+) else (
+  set /p BILI_PLAYWRIGHT_CHROMIUM=<"%RESULTS_DIR%\playwright-browser.path"
+  if not defined BILI_PLAYWRIGHT_CHROMIUM (
+    set "FAIL_STATUS=inconclusive"
+    set "FAIL_MESSAGE=浏览器运行器未返回可用路径。"
+    goto :failed
+  )
+  set "BILI_RUN_PLAYWRIGHT=1"
 )
 
 set "FAIL_MESSAGE=隔离配置同步失败。"
@@ -145,17 +177,19 @@ if "%NODE_CHECK_SKIPPED%"=="0" (
   )
 )
 
-if "%NODE_CHECK_SKIPPED%"=="1" (
-  call :record_result passed 0 "部署自检通过；Node.js 开发检查未执行。"
+if "%T_PROJECT_FULL%%NODE_CHECK_SKIPPED%%PLAYWRIGHT_CHECK_SKIPPED%"=="100" (
+  call :record_result passed 0 "部署自检全部通过，T-PROJECT 必需阶段均已执行。"
+  if errorlevel 1 goto :result_record_failed
 ) else (
-  call :record_result passed 0 "部署自检全部通过。"
+  call :record_result inconclusive 0 "部署自检通过；未以严格入口完成 T-PROJECT full。"
+  if errorlevel 1 goto :result_record_failed
 )
 echo.
-if "%NODE_CHECK_SKIPPED%"=="1" (
-  echo ===== v0.7.0 Windows 部署自检通过 =====
-  echo 前端开发检查未执行；这不影响应用部署运行。
-) else (
+if "%T_PROJECT_FULL%%NODE_CHECK_SKIPPED%%PLAYWRIGHT_CHECK_SKIPPED%"=="100" (
   echo ===== v0.7.0 Windows 部署自检全部通过 =====
+) else (
+  echo ===== v0.7.0 Windows 部署自检通过 =====
+  echo 未以严格入口完成 T-PROJECT full，结果为 inconclusive。
 )
 echo 可直接运行 start.bat。
 echo 运行资产已保留在：%VERIFY_RUN%
@@ -165,10 +199,20 @@ exit /b 0
 
 :record_result
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows\new-test-run.ps1" -Action Record -RunRoot "%VERIFY_RUN%" -Status "%~1" -ExitCode %~2 -Message "%~3" > "%RESULTS_DIR%\result-record.log" 2>&1
-if errorlevel 1 (
+set "RESULT_RECORD_EXIT=%ERRORLEVEL%"
+if not "%RESULT_RECORD_EXIT%"=="0" (
   echo [警告] 无法写入 T-PROJECT 最终结果，请检查：%RESULTS_DIR%\result-record.log
 )
-exit /b 0
+exit /b %RESULT_RECORD_EXIT%
+
+:result_record_failed
+echo.
+echo ===== 无法写入 T-PROJECT 最终结果 =====
+echo 自检结果不可判定，请检查：%RESULTS_DIR%\result-record.log
+echo 运行资产已保留在：%VERIFY_RUN%
+if /I "%BILI_VERIFY_NO_PAUSE%"=="1" exit /b 1
+pause
+exit /b 1
 
 :setup_failed
 echo.

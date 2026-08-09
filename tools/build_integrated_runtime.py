@@ -15,8 +15,10 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNTIME_BUNDLE_VERSION = "0.5.6"
+RUNTIME_BUNDLE_VERSION = "0.5.7"
 PYTHON_VERSION = "3.13.14"
+PYTHON_MAJOR_MINOR = ".".join(PYTHON_VERSION.split(".")[:2])
+PYTHON_ABI = "cp" + "".join(PYTHON_VERSION.split(".")[:2])
 PYTHON_EMBED_NAME = f"python-{PYTHON_VERSION}-embed-amd64.zip"
 PYTHON_EMBED_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/{PYTHON_EMBED_NAME}"
 PYTHON_EMBED_SHA256 = "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907"
@@ -206,6 +208,14 @@ def build_python_pack(cache: Path, build: Path, output: Path) -> Path:
             "--disable-pip-version-check",
             "--only-binary=:all:",
             "--no-compile",
+            "--platform",
+            "win_amd64",
+            "--implementation",
+            "cp",
+            "--python-version",
+            PYTHON_MAJOR_MINOR,
+            "--abi",
+            PYTHON_ABI,
             "--target",
             str(site_packages),
             "-r",

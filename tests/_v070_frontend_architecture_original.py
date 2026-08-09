@@ -180,6 +180,8 @@ def test_semantic_css_layers_preserve_required_contracts() -> None:
     pages = _text("web/assets/styles/pages.css")
     for token in ("--control-height-sm", "--control-height-md", "--control-height-lg"):
         assert token in tokens
+        assert f"{token}:" not in pages
+    assert "min-height: var(--control-height-lg)" in pages
     for token in (".app-root", ".sidebar", ".modal-root", ".mobile-nav"):
         assert token in base
     for token in (
@@ -197,7 +199,22 @@ def test_v070_does_not_create_versioned_overlay_files() -> None:
 
 def test_node_and_playwright_gates_are_in_ci() -> None:
     workflow = _text(".github/workflows/ci.yml")
+    browser_phase = _text("scripts/dev/run-playwright-phase.sh")
+    playwright_job = workflow.split("\n  playwright:\n", 1)[1].split(
+        "\n  product-validation:\n", 1
+    )[0]
     assert "-name '*.mjs'" in workflow
     assert "node --test tests/frontend/*.test.mjs" in workflow
     assert "tests/test_v070_frontend_architecture.py" in workflow
-    assert "tests/test_v070_*_playwright.py" in workflow
+    assert "T-PROJECT browser phase" in workflow
+    assert "sh scripts/dev/run-playwright-phase.sh" in workflow
+    assert "Upload isolated Playwright evidence" in workflow
+    assert "chromium_headless_shell-" in playwright_job
+    assert "chrome-headless-shell-linux64" in playwright_job
+    assert 'test -x "$browser"' in playwright_job
+    assert "python -m pytest" not in playwright_job
+    assert "-m playwright" in browser_phase
+    assert "tools/t_project_isolation.py create" in browser_phase
+    assert "tools/t_project_isolation.py record" in browser_phase
+    assert "tests/test_v070_*_playwright.py" not in workflow
+    assert not (ROOT / ".github/workflows/ui-v062.yml").exists()

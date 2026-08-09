@@ -8,6 +8,8 @@
 
 ## 已完成计划
 
+- [DOC-CONSISTENCY-20260809 运行资产、测试治理与界面契约一致性收口方案](DOC-CONSISTENCY-20260809-运行资产测试治理与界面契约收口.md)：已完成 Windows 0.5.7 运行资产身份、T-PROJECT 结果与浏览器隔离、界面高度和 CSS 分层、Docker 构建触发输入、第三方来源说明及 T-DOC 运行时排除边界收口；
+- [DOC-GOV-20260809 文档生命周期与 T-PROJECT 浏览器测试收口方案](DOC-GOV-20260809-文档生命周期与T-PROJECT浏览器测试收口.md)：已完成活动文档归档入口、项目级 Skill 资产排除、T-PROJECT Playwright 必需阶段、Windows 集成运行包补齐和 strict full 验证收口；
 - [DOCKER-QNAP-20260806 QNAP 镜像构建验证与私有交付方案](DOCKER-QNAP-20260806-QNAP镜像构建验证与私有交付方案.md)：已完成 `linux/amd64` 真实镜像、非 root 三挂载、健康与重建、离线 tar、复载和打包运维收口；真实 QNAP 部署按用户最终决定暂缓；
 - [TEST-ENTRY-20260803 T-PROJECT 隔离、Docker 非 root、运行资产字段与项目文档一致性收口方案](TEST-ENTRY-20260803-T-PROJECT隔离规范与项目文档一致性收口.md)：已完成 Windows 严格隔离入口、Docker 非 root 边界、Windows 运行资产字段和直接文档约束收口；移交的真实项目镜像与私有离线交付已由 `DOCKER-QNAP-20260806` 关闭；
 - [DOC-AUTH-20260806 新版标准骨架与授权边界迁移方案](DOC-AUTH-20260806-新版骨架与授权边界迁移.md)：已完成按实际副作用分类的长期授权、入口职责、方案关闭语义、测试清理边界和关联方案规范迁移；

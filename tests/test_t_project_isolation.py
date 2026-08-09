@@ -94,23 +94,46 @@ def test_create_run_rejects_symlink_root(tmp_path: Path) -> None:
 def test_normative_entrypoints_keep_all_outputs_in_owned_run() -> None:
     windows = _text("verify.bat")
     source = _text("scripts/dev/verify-source.sh")
+    browser_phase = _text("scripts/dev/run-playwright-phase.sh")
     bootstrap = _text("scripts/windows/bootstrap-portable.ps1")
-    for content in (windows, source):
+    for content in (windows, source, browser_phase):
         assert "BILI_VERIFY_RUN_ROOT" in content
         assert "BILI_VERIFY_ROOT_ENV_PATH" in content
         assert "PYTHONPYCACHEPREFIX" in content
         assert "--basetemp" in content
+        assert "BILI_RUN_PLAYWRIGHT" in content
+        assert "BILI_PLAYWRIGHT_CHROMIUM" in content
+        assert "playwright_runtime.py" in content
+        assert "--probe" in content
+        assert "playwright install" not in content
     assert "results" in content
     assert "prepare-runtime.bat" not in windows
     assert 'set "BILI_DATABASE_PATH=%VERIFY_RUN%' not in windows
     assert "export BILI_DATABASE_PATH=" not in source
     assert 'set "BILI_DATABASE_PATH="' in windows
+    assert "BILI_VERIFY_REQUIRE_PLAYWRIGHT" in windows
+    assert "PLAYWRIGHT_CHECK_SKIPPED" in windows
+    assert "T_PROJECT_FULL" in windows
+    assert "inconclusive" in windows
     assert "unset BILI_CONFIG_DIR BILI_USERDATA_DIR BILI_DATABASE_PATH" in source
+    assert "-B -X utf8 tools/playwright_runtime.py" in source
+    assert "-B -X utf8 tools/playwright_runtime.py" in browser_phase
+    assert "-m playwright" in browser_phase
+    assert "tools/t_project_isolation.py record" in browser_phase
+    assert "result-record.log" in browser_phase
     assert "rmdir /s /q" not in windows.lower()
     assert "rm -rf" not in source
     assert 'set "PSModuleAnalysisCachePath=NUL"' in windows
     assert "VerificationRunRoot" in bootstrap
     assert ".bili-workspace-test-run.json" in bootstrap
+
+    record_section = windows.rsplit("\n:record_result\n", 1)[1].split(
+        ":result_record_failed", 1
+    )[0]
+    assert 'set "RESULT_RECORD_EXIT=%ERRORLEVEL%"' in record_section
+    assert "exit /b %RESULT_RECORD_EXIT%" in record_section
+    assert "exit /b 0" not in record_section
+    assert windows.count("if errorlevel 1 goto :result_record_failed") == 2
 
 
 def test_config_sync_verification_override_stays_in_owned_run(
