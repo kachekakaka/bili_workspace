@@ -15,7 +15,7 @@ from app.catalog_overrides import router as catalog_router
 from app.constants import MAX_REQUEST_BODY_BYTES
 from app.deletion_store import DeletionStore
 from app.enhancement_api import compat_router, router as enhancement_router
-from app.paths import ROOT
+from app.paths import web_dir
 from app.refinement_api import router as refinement_router
 from app.state import AppState
 from app.tag_store import TagStore
@@ -24,7 +24,7 @@ from app.task_ownership_api import (
 )
 from app.task_ownership_api import router as task_ownership_router
 
-WEB_DIR = ROOT / "web"
+WEB_DIR = web_dir()
 _PUBLIC_API = {
     "/api/auth/status",
     "/api/auth/setup",
@@ -92,22 +92,39 @@ def create_app(state: AppState | None = None) -> FastAPI:
         raw = value.strip()
         if not raw:
             return False
+        port: str | None = None
         if raw.startswith("["):
             end = raw.find("]")
             if end < 0:
                 return False
             hostname = raw[1:end]
             remainder = raw[end + 1 :]
-            if remainder and (
-                not remainder.startswith(":") or not remainder[1:].isdigit()
-            ):
-                return False
+            if remainder:
+                if (
+                    not remainder.startswith(":")
+                    or not remainder[1:].isascii()
+                    or not remainder[1:].isdigit()
+                ):
+                    return False
+                port = remainder[1:]
         else:
             hostname = raw
             if raw.count(":") == 1:
-                candidate, port = raw.rsplit(":", 1)
-                if port.isdigit():
-                    hostname = candidate
+                candidate, candidate_port = raw.rsplit(":", 1)
+                if (
+                    not candidate
+                    or not candidate_port.isascii()
+                    or not candidate_port.isdigit()
+                ):
+                    return False
+                hostname = candidate
+                port = candidate_port
+        if port is not None:
+            try:
+                if not 1 <= int(port) <= 65535:
+                    return False
+            except ValueError:
+                return False
         hostname = hostname.rstrip(".").lower()
         trusted = {
             item.strip("[]").rstrip(".").lower()

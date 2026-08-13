@@ -7,14 +7,19 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from app.config_files import ensure_env_from_default, load_env_file
-from app.paths import ROOT
+from app.paths import ROOT, defaults_dir
 
 
 def _bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} 必须是布尔值")
 
 
 def _int(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -77,8 +82,15 @@ def _valid_bind_host(value: str) -> bool:
         return False
     if host.lower() == "localhost":
         return True
+    if host.startswith("[") or host.endswith("]"):
+        if not (host.startswith("[") and host.endswith("]")):
+            return False
+        try:
+            return ipaddress.ip_address(host[1:-1]).version == 6
+        except ValueError:
+            return False
     try:
-        ipaddress.ip_address(host.strip("[]"))
+        ipaddress.ip_address(host)
         return True
     except ValueError:
         normalized = host.rstrip(".")
@@ -87,27 +99,92 @@ def _valid_bind_host(value: str) -> bool:
         labels = normalized.split(".")
         return all(
             1 <= len(label) <= 63
+            and label[0].isascii()
             and label[0].isalnum()
+            and label[-1].isascii()
             and label[-1].isalnum()
-            and all(char.isalnum() or char == "-" for char in label)
+            and all(char.isascii() and (char.isalnum() or char == "-") for char in label)
             for label in labels
         )
 
 
+def _normalize_bind_host(value: str) -> str:
+    host = value.strip()
+    try:
+        if host.startswith("[") and host.endswith("]"):
+            return str(ipaddress.ip_address(host[1:-1]))
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return host.rstrip(".").lower()
+
+
+def _valid_trusted_host(value: str) -> bool:
+    host = value.strip()
+    if not host or any(char.isspace() for char in host) or "*" in host:
+        return False
+    if host.startswith("[") or host.endswith("]"):
+        if not (host.startswith("[") and host.endswith("]")):
+            return False
+        try:
+            return ipaddress.ip_address(host[1:-1]).version == 6
+        except ValueError:
+            return False
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        normalized = host.rstrip(".")
+        labels = normalized.split(".")
+        return bool(normalized) and len(normalized) <= 253 and all(
+            1 <= len(label) <= 63
+            and label[0].isascii()
+            and label[0].isalnum()
+            and label[-1].isascii()
+            and label[-1].isalnum()
+            and all(char.isascii() and (char.isalnum() or char == "-") for char in label)
+            for label in labels
+        )
+
+
+def _normalize_trusted_host(value: str) -> str:
+    host = value.strip()
+    if host.startswith("[") and host.endswith("]"):
+        return f"[{ipaddress.ip_address(host[1:-1]).compressed}]"
+    try:
+        address = ipaddress.ip_address(host)
+        return f"[{address.compressed}]" if address.version == 6 else str(address)
+    except ValueError:
+        return host.rstrip(".").lower()
+
+
 def _prepare_env_files() -> None:
     """Materialize tracked defaults while preserving user-owned runtime files."""
-    # A system service or Docker Compose may already provide BILI_APP_MODE. In
-    # that case the process environment is authoritative and no project-root
-    # .env is required inside the immutable image.
-    if "BILI_APP_MODE" not in os.environ:
-        ensure_env_from_default(ROOT / ".env.default", ROOT / ".env")
-        load_env_file(ROOT / ".env")
-
+    launcher_managed = os.getenv("BILI_LAUNCHER_CHILD", "").strip() == "1"
     preliminary_mode = os.getenv("BILI_APP_MODE", "auto").strip().lower() or "auto"
     containerized = preliminary_mode in {"nas", "docker"}
-    default_config_dir = Path("/data/config") if containerized else ROOT / "config"
+    if launcher_managed:
+        required = (
+            "BILI_CONFIG_DIR",
+            "BILI_USERDATA_DIR",
+            "BILI_MEDIA_DIR",
+            "BILI_BBDOWN_TOOLS_DIR",
+            "BILI_BBDOWN_DATA_DIR",
+        )
+        missing = [name for name in required if not os.getenv(name, "").strip()]
+        if missing:
+            raise ValueError("启动器子进程缺少显式路径: " + ", ".join(missing))
+        default_config_dir = Path(os.environ["BILI_CONFIG_DIR"])
+    elif containerized:
+        default_config_dir = Path("/data/config")
+    else:
+        raw_config_dir = os.getenv("BILI_CONFIG_DIR", "").strip()
+        if not raw_config_dir:
+            raise ValueError("Windows/本机运行必须由启动器或显式环境选择仓库外数据根")
+        default_config_dir = Path(raw_config_dir).expanduser()
     config_dir = _path("BILI_CONFIG_DIR", default_config_dir)
-    runtime_default = ROOT / "config" / "runtime.env.default"
+    if not containerized and (config_dir == ROOT.resolve() or ROOT.resolve() in config_dir.parents):
+        raise ValueError("Windows/本机配置目录必须位于源码仓库外")
+    runtime_default = defaults_dir() / "runtime.env.default"
     runtime_actual = config_dir / "runtime.env"
     ensure_env_from_default(runtime_default, runtime_actual)
     # Explicit environment values (Compose/service manager) always win.
@@ -136,6 +213,8 @@ class RuntimeSettings:
     min_free_bytes: int
     download_concurrency: int
     transcode_threads: int
+    bbdown_data_dir: Path | None = None
+    launcher_managed: bool = False
 
     @property
     def server_mode(self) -> bool:
@@ -146,18 +225,28 @@ class RuntimeSettings:
         """Root for persistent library, task and account data."""
         return self.database_path.parent
 
+    @property
+    def bbdown_credentials_dir(self) -> Path:
+        return (self.bbdown_data_dir or self.bbdown_dir).resolve()
+
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
         _prepare_env_files()
 
+        launcher_managed = os.getenv("BILI_LAUNCHER_CHILD", "").strip() == "1"
         requested_mode = os.getenv("BILI_APP_MODE", "auto").strip().lower() or "auto"
         if requested_mode not in {"auto", "local", "server", "nas", "docker"}:
             raise ValueError("BILI_APP_MODE 只支持 auto/local/server/nas/docker")
 
         default_host = "0.0.0.0" if requested_mode in {"server", "nas", "docker"} else "127.0.0.1"
-        host = os.getenv("BILI_HOST", default_host).strip() or default_host
-        if not _valid_bind_host(host):
+        raw_host = os.getenv("BILI_HOST", default_host).strip() or default_host
+        if not _valid_bind_host(raw_host):
             raise ValueError("BILI_HOST 必须是有效 IP 地址或主机名")
+        host = _normalize_bind_host(raw_host)
+        if launcher_managed and requested_mode == "local" and not _is_loopback_host(host):
+            raise ValueError("启动器本机模式必须监听回环地址")
+        if launcher_managed and requested_mode == "server" and _is_loopback_host(host):
+            raise ValueError("启动器局域网服务器模式不能只监听回环地址")
         if requested_mode == "auto":
             mode = "local" if _is_loopback_host(host) else "server"
         elif requested_mode == "local" and not _is_loopback_host(host):
@@ -168,30 +257,55 @@ class RuntimeSettings:
 
         server = mode != "local"
         containerized = mode in {"nas", "docker"}
-        data_root = Path("/data") if containerized else ROOT
+        data_root = Path("/data") if containerized else Path(os.environ["BILI_CONFIG_DIR"]).resolve().parent
         config_dir = _path("BILI_CONFIG_DIR", data_root / "config")
         runtime_root = config_dir.parent
         userdata_dir = _rooted_path("BILI_USERDATA_DIR", data_root / "userdata", runtime_root)
-        media_default = Path("/downloads") if containerized else ROOT / "downloads"
+        media_default = Path("/downloads") if containerized else data_root / "downloads"
         media_dir = _rooted_path("BILI_MEDIA_DIR", media_default, runtime_root)
         cache_dir = _rooted_path("BILI_CACHE_DIR", userdata_dir / "cache", runtime_root)
         temp_dir = _rooted_path("BILI_TEMP_DIR", userdata_dir / "tmp", runtime_root)
         database_path = _rooted_path(
             "BILI_DATABASE_PATH", userdata_dir / "bili_workspace.db", runtime_root
         )
-        default_bbdown = config_dir / "bbdown" if containerized else ROOT / "BBDown_portable"
-        bbdown_dir = _rooted_path("BILI_BBDOWN_DIR", default_bbdown, runtime_root)
+        default_bbdown = config_dir / "bbdown"
+        if launcher_managed:
+            bbdown_dir = _path("BILI_BBDOWN_TOOLS_DIR", default_bbdown)
+            bbdown_data_dir = _path("BILI_BBDOWN_DATA_DIR", config_dir / "bbdown")
+        else:
+            bbdown_dir = _rooted_path("BILI_BBDOWN_DIR", default_bbdown, runtime_root)
+            bbdown_data_dir = _rooted_path(
+                "BILI_BBDOWN_DATA_DIR", bbdown_dir, runtime_root
+            )
         port = _int("BILI_PORT", 3398, 1, 65535)
 
         public = os.getenv("BILI_PUBLIC_BASE_URL", "").strip().rstrip("/")
+        public_scheme = ""
+        public_host = ""
         if public:
-            parsed = urlparse(public)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            try:
+                parsed = urlparse(public)
+                parsed_host = parsed.hostname
+                parsed_port = parsed.port
+            except ValueError as exc:
+                raise ValueError("BILI_PUBLIC_BASE_URL 无效") from exc
+            public_scheme = parsed.scheme.lower()
+            if (
+                public_scheme not in {"http", "https"}
+                or not parsed_host
+                or parsed.netloc.endswith(":")
+            ):
                 raise ValueError("BILI_PUBLIC_BASE_URL 必须是完整的 http/https 地址")
             if parsed.username or parsed.password:
                 raise ValueError("BILI_PUBLIC_BASE_URL 不能包含用户名或密码")
             if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
                 raise ValueError("BILI_PUBLIC_BASE_URL 仅支持独立域名，不支持子路径、查询参数或片段")
+            if not _valid_trusted_host(parsed_host):
+                raise ValueError("BILI_PUBLIC_BASE_URL 域名无效")
+            normalized_public_host = _normalize_trusted_host(parsed_host)
+            public_host = normalized_public_host.strip("[]").lower()
+            port_suffix = f":{parsed_port}" if parsed_port is not None else ""
+            public = f"{public_scheme}://{normalized_public_host}{port_suffix}"
 
         default_hosts = ["127.0.0.1", "localhost", "[::1]", "testserver"]
         bind_host = host.strip("[]")
@@ -201,27 +315,44 @@ class RuntimeSettings:
             pass
         if bind_host not in {"", "0.0.0.0", "::"} and bind_host not in default_hosts:
             default_hosts.append(bind_host)
-        public_host = str(urlparse(public).hostname or "") if public else ""
         if public_host and public_host not in default_hosts:
             default_hosts.append(public_host)
 
-        trusted_hosts = tuple(item for item in _csv("BILI_TRUSTED_HOSTS", ",".join(default_hosts)) if item != "*")
-        if not trusted_hosts:
-            raise ValueError("BILI_TRUSTED_HOSTS 必须包含明确域名，禁止只使用通配符")
-        trusted_proxies = _csv("BILI_TRUSTED_PROXY_IPS", "127.0.0.1")
-        if not trusted_proxies or any(item == "*" for item in trusted_proxies):
+        raw_trusted_hosts = _csv("BILI_TRUSTED_HOSTS", ",".join(default_hosts))
+        if not raw_trusted_hosts or any(not _valid_trusted_host(item) for item in raw_trusted_hosts):
+            raise ValueError("BILI_TRUSTED_HOSTS 必须包含有效明确域名或 IP，禁止通配符")
+        trusted_hosts = tuple(
+            dict.fromkeys(_normalize_trusted_host(item) for item in raw_trusted_hosts)
+        )
+        raw_trusted_proxies = _csv("BILI_TRUSTED_PROXY_IPS", "127.0.0.1")
+        if not raw_trusted_proxies or any("*" in item for item in raw_trusted_proxies):
             raise ValueError("BILI_TRUSTED_PROXY_IPS 必须列出可信代理地址，禁止使用通配符")
+        trusted_proxy_list: list[str] = []
+        for proxy in raw_trusted_proxies:
+            try:
+                proxy_network = ipaddress.ip_network(proxy, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"BILI_TRUSTED_PROXY_IPS 包含无效地址：{proxy}") from exc
+            if proxy_network.prefixlen == 0:
+                raise ValueError("BILI_TRUSTED_PROXY_IPS 禁止覆盖全部地址")
+            normalized_proxy = str(proxy_network)
+            if normalized_proxy not in trusted_proxy_list:
+                trusted_proxy_list.append(normalized_proxy)
+        trusted_proxies = tuple(trusted_proxy_list)
 
         allow_ip_hosts = _bool("BILI_ALLOW_IP_HOSTS", server)
+        if launcher_managed and mode == "local" and allow_ip_hosts:
+            raise ValueError("本机模式不能启用 BILI_ALLOW_IP_HOSTS")
         # V0.6 requires an authenticated website account in every run mode.
         auth_required = True
-        cookie_secure = _bool("BILI_COOKIE_SECURE", bool(public.startswith("https://")))
-        hsts_enabled = _bool("BILI_HSTS", cookie_secure and bool(public.startswith("https://")))
-        if public_host and public_host not in trusted_hosts:
+        cookie_secure = _bool("BILI_COOKIE_SECURE", public_scheme == "https")
+        hsts_enabled = _bool("BILI_HSTS", cookie_secure and public_scheme == "https")
+        trusted_host_keys = {item.strip("[]").rstrip(".").lower() for item in trusted_hosts}
+        if public_host and public_host not in trusted_host_keys:
             raise ValueError("BILI_TRUSTED_HOSTS 必须包含 PUBLIC_BASE_URL 的域名")
-        if public.startswith("https://") and not cookie_secure:
+        if public_scheme == "https" and not cookie_secure:
             raise ValueError("HTTPS 公网地址必须开启 BILI_COOKIE_SECURE")
-        if hsts_enabled and (not cookie_secure or not public.startswith("https://")):
+        if hsts_enabled and (not cookie_secure or public_scheme != "https"):
             raise ValueError("BILI_HSTS 只能在 HTTPS 和安全 Cookie 已启用时开启")
 
         ttl = _int("BILI_EXPORT_TTL_SEC", 24 * 3600, 300, 7 * 24 * 3600)
@@ -235,6 +366,7 @@ class RuntimeSettings:
             cache_dir,
             temp_dir,
             database_path.parent,
+            bbdown_data_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -259,4 +391,6 @@ class RuntimeSettings:
             min_free_bytes=int(min_free_gib * 1024**3),
             download_concurrency=download_concurrency,
             transcode_threads=transcode_threads,
+            bbdown_data_dir=bbdown_data_dir,
+            launcher_managed=launcher_managed,
         )

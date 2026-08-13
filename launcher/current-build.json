@@ -1,0 +1,15 @@
+{
+  "build_id": "bb73fbe40cab",
+  "built_at_utc": "2026-08-13T08:21:13.999220Z",
+  "exe_self_check_ran": true,
+  "executable": "dist/bili-workspace-launcher-0.7.0.exe",
+  "platform": "windows/amd64",
+  "pyinstaller_version": "6.22.0",
+  "pyside6_version": "6.11.1",
+  "python_version": "3.11.1",
+  "resource_manifest_sha256": "a74452b94d1e6ea62a5d837a0b8d6d999a69e2a1cdb95e187b0ba2b68a5974ba",
+  "schema_version": 1,
+  "sha256": "4a878e973f92f32947fc6e28ad356a8c4214dad781eff35b4cd2b78fa63430ba",
+  "size_bytes": 83403582,
+  "version": "0.7.0"
+}

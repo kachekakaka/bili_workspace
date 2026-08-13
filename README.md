@@ -9,7 +9,7 @@
 - 搜索、画质预览、批量下载和媒体库管理；搜索只请求当前页，并最多预加载下一页一页；
 - 任务进度与日志、暂停/继续/取消/重试，以及分组、标签、在线播放和当前设备导出；
 - 一个管理员和多个普通用户，任务、日志、实时事件及设备导出按所有者隔离；
-- 支持 Windows 本机、源码环境和 QNAP/NAS Docker 部署。
+- 支持 Windows 单文件启动器和 QNAP/NAS Docker 部署。
 
 当前应用版本为 V0.7.0，数据库 schema 为 v4。完整行为与支持边界以[项目文档总入口](docs/README.md)中的需求、设计和字段契约为准。
 
@@ -17,15 +17,16 @@
 
 - `app/`：Python 后端；
 - `web/`：浏览器前端；
-- `config/`：配置和标签，实际值不进入 Git；
-- `userdata/`：SQLite、任务、索引、日志、缓存和临时状态；
-- `downloads/`：永久媒体文件；
+- `launcher/`：Windows amd64 单文件启动器源码、固定依赖与许可材料；
+- `app/defaults/`：Windows 启动器与 Docker 共用的只读配置模板；
 - `docs/`：当前项目文档；
 - `SoftwareTesting/`：测试治理与活动测试入口。
 
+运行数据不在仓库内。用户选择的数据根固定包含 `config/`、`userdata/`、`downloads/`；其中配置、数据库、凭据、日志、缓存和媒体都由数据根持有。
+
 ## 构建与交付
 
-- Windows 运行入口为 `start.bat`，部署自检入口为 `verify.bat`；普通部署自检允许缺少开发阶段并把结果记为 `inconclusive`，严格 T-PROJECT full 的调用方式由[测试治理总入口](SoftwareTesting/README.md)承接。仓库集成 Portable Python、BBDown 和 FFmpeg 运行资产。
+- Windows 运行入口为仓库跟踪的 `dist/bili-workspace-launcher-0.7.0.exe`。它自带 Python 3.11、BBDown 和 FFmpeg，首次启动必须选择仓库外数据根；本机模式与显式局域网服务器模式的监听及安全配置都由该 EXE 管理。
 - Docker 构建与启动入口为 `docker/build-and-start.sh`；当前运维范围保留镜像构建、验证与私有离线打包，真实 QNAP 部署方案暂缓。
 - 项目停止未来正式发布，不创建新的 tag、GitHub Release 或 GHCR 正式镜像；既有 V0.7.0 发布物仅作为冻结历史后备。
 - 镜像打包、网络、备份、恢复、源码更新和回滚统一从[项目文档总入口](docs/README.md)进入；验证层级与测试选择从[测试治理总入口](SoftwareTesting/README.md)进入。
@@ -34,10 +35,10 @@
 
 Windows：
 
-```bat
+```powershell
 git clone https://github.com/kachekakaka/bili_workspace.git
 cd bili_workspace
-start.bat
+.\dist\bili-workspace-launcher-0.7.0.exe
 ```
 
 Docker 镜像打包、校验和离线交付按[运维入口](docs/运维/README.md)执行。真实 QNAP 目录、账号、网络和上线方式暂不在当前入口中，后续形成新方案后再补充。

@@ -10,14 +10,14 @@ def _text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_root_only_contains_primary_windows_entrypoints() -> None:
+def test_root_contains_no_legacy_windows_entrypoints() -> None:
     script_suffixes = {".bat", ".cmd", ".ps1", ".sh"}
     scripts = {
         path.name
         for path in ROOT.iterdir()
         if path.is_file() and path.suffix.lower() in script_suffixes
     }
-    assert scripts == {"start.bat", "verify.bat"}
+    assert scripts == set()
 
 
 def test_helpers_and_dependency_locks_are_grouped() -> None:
@@ -25,12 +25,8 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
         "requirements/dev.lock",
         "requirements/runtime.lock",
         "scripts/README.md",
-        "scripts/windows/bootstrap-portable.ps1",
-        "scripts/windows/bootstrap-runtime.bat",
-        "scripts/windows/prepare-runtime.bat",
         "scripts/windows/new-test-run.ps1",
-        "scripts/windows/configure-network.bat",
-        "scripts/windows/bilibili-login.bat",
+        "scripts/windows/build-launcher.bat",
         "scripts/dev/verify-source.sh",
     )
     for name in expected:
@@ -56,6 +52,29 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
         "tools/verify_package.py",
         "tests/test_bootstrap_windows_runtime.py",
         "tests/test_release_tools.py",
+        ".env.default",
+        ".github/workflows/build-integrated-runtime.yml",
+        "BBDown_portable",
+        "vendor/windows",
+        "config/config.json.default",
+        "config/runtime.env.default",
+        "config/tags.json.default",
+        "config/README.md",
+        "downloads/.gitkeep",
+        "userdata/.gitkeep",
+        "userdata/README.md",
+        "scripts/windows/bootstrap-portable.ps1",
+        "scripts/windows/bootstrap-runtime.bat",
+        "scripts/windows/prepare-runtime.bat",
+        "scripts/windows/configure-network.bat",
+        "scripts/windows/bilibili-login.bat",
+        "tools/build_integrated_runtime.py",
+        "tools/configure_network.py",
+        "tools/server_instance.py",
+        "tools/start_info.py",
+        "tests/test_configure_network.py",
+        "tests/test_integrated_runtime.py",
+        "tests/test_server_instance.py",
         "docs/源码仓库与发布包.md",
         "docs/GitHub仓库网页搭建与协作分工指南.md",
     )
@@ -63,19 +82,12 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
         assert not (ROOT / name).exists(), name
 
 
-def test_entrypoints_use_internal_runtime_preparation() -> None:
-    start = _text("start.bat")
-    verify = _text("verify.bat")
-    prepare = _text("scripts/windows/prepare-runtime.bat")
+def test_launcher_build_and_test_helpers_are_the_only_windows_scripts() -> None:
+    build = _text("scripts/windows/build-launcher.bat")
 
-    assert r"scripts\windows\prepare-runtime.bat" in start
-    assert r"scripts\windows\bootstrap-runtime.bat" in verify
-    assert r"scripts\windows\new-test-run.ps1" in verify
-    assert r"vendor\windows\runtime-manifest.json" in prepare
-    assert r".runtime\python\python.exe" in prepare
-    assert ".venv" not in prepare
-    assert "pip install" not in prepare
-    assert "bootstrap_windows_runtime" not in prepare
+    assert r".venv\Scripts\python.exe" in build
+    assert "-m tools.build_launcher" in build
+    assert "--run-exe-self-check" in build
     assert ".bili-workspace-test-run.json" in _text(
         "scripts/windows/new-test-run.ps1"
     )
@@ -98,24 +110,22 @@ def test_historical_release_reports_are_archived() -> None:
 
 def test_docker_context_excludes_windows_runtime_and_helper_assets() -> None:
     dockerignore = _text(".dockerignore")
-    for pattern in ("vendor", "scripts", "*.bat", "requirements/dev.lock"):
+    for pattern in ("scripts", "*.bat", "requirements/dev.lock"):
         assert pattern in dockerignore
 
 
 def test_tracked_root_layout_stays_small_and_intentional() -> None:
     allowed_files = {
         ".dockerignore",
-        ".env.default",
         ".gitattributes",
         ".gitignore",
         "AGENTS.md",
         "CHANGELOG.md",
+        "CONTEXT.md",
         "README.md",
         "SECURITY.md",
         "THIRD_PARTY_NOTICES.md",
         "pyproject.toml",
-        "start.bat",
-        "verify.bat",
     }
     result = subprocess.run(
         [
@@ -126,13 +136,16 @@ def test_tracked_root_layout_stays_small_and_intentional() -> None:
             "--cached",
             "--others",
             "--exclude-standard",
+            "--deleted",
         ],
         check=True,
         capture_output=True,
         text=True,
     )
     tracked_root_files = {
-        line for line in result.stdout.splitlines() if line and "/" not in line
+        line
+        for line in result.stdout.splitlines()
+        if line and "/" not in line and (ROOT / line).exists()
     }
     assert tracked_root_files == allowed_files
 

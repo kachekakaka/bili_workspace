@@ -3,8 +3,8 @@
 - Registry ID：`T-PROJECT`
 - 执行类别：`full`
 - 工作目录：仓库根目录
-- 输入：当前候选源码、仓库集成运行资产、既有兼容浏览器和隔离测试数据
-- 唯一职责：执行项目现有源码边界、Python、Ruff、pytest、Node、Playwright 以及集成运行资产自检入口
+- 输入：当前候选源码、既有兼容浏览器和隔离测试数据
+- 唯一职责：执行项目现有源码边界、Python、Ruff、pytest、Node 和 Playwright 自检入口
 
 ## 受管路径与阶段
 
@@ -13,21 +13,9 @@
 | 源码与 Python | `app/`、`tests/`、`tools/`、`docker/` | 源码结构、compileall、Ruff 和 `pyproject.toml` 定义的 pytest 根 |
 | Node | `web/**/*.js`、`web/**/*.mjs`、`tests/frontend/*.test.mjs` | 全部脚本语法和依赖无关 Node tests |
 | Playwright | `tests/` 中的 `playwright` marker | T-PROJECT full 必需阶段；runner 在前置满足后设置 `BILI_RUN_PLAYWRIGHT=1` |
-| 集成运行资产 | Windows Portable Python、BBDown、FFmpeg | 仓库外解压、清单校验和本次拥有的冒烟进程 |
+Playwright 不单独登记。`.github/workflows/ci.yml` 通过内部 `scripts/dev/run-playwright-phase.sh` 执行唯一 CI 浏览器阶段；Windows EXE、内置资源与启动器 GUI 的验证由 T-LAUNCHER 承接。
 
-Playwright 不单独登记。`.github/workflows/ci.yml` 通过内部 `scripts/dev/run-playwright-phase.sh` 执行唯一 CI 浏览器阶段；Windows 集成运行时工作流调用严格 `verify.bat`。二者都只是 T-PROJECT 的自动化消费者。
-
-## Windows 规范命令
-
-```bat
-set "BILI_VERIFY_REQUIRE_NODE=1"
-set "BILI_VERIFY_REQUIRE_PLAYWRIGHT=1"
-verify.bat
-```
-
-直接运行 `verify.bat` 仍可作为部署自检：如果 Node 或 Playwright 前置缺失，它会完成其他可用阶段并以零退出码结束，但 `results/result.json` 必须为 `inconclusive`。只有上述严格命令完成全部必需阶段后才允许记录 `passed`。
-
-## Linux/macOS 源码环境规范命令
+## 源码环境规范命令
 
 ```bash
 sh scripts/dev/verify-source.sh
@@ -35,7 +23,7 @@ sh scripts/dev/verify-source.sh
 
 源码入口始终要求 Node、Playwright Python 包和一个既有兼容浏览器。可以用 `BILI_PLAYWRIGHT_CHROMIUM` 指向既有 Chromium、Chrome 或 Edge；未设置时 runner 只探测已经存在的候选，不执行安装或下载。
 
-两个入口都会先在仓库外测试根创建带所有权标记的独立 run-id，将运行资产、浏览器 profile、缓存和临时输出重定向到该目录，并默认保留。Windows 使用隔离解压的仓库集成 Python、BBDown 和 FFmpeg；源码环境需要项目锁定的开发依赖。日志和 `results/result.json` 位于命令最后显示的绝对路径中。
+入口会先在仓库外测试根创建带所有权标记的独立 run-id，将配置、浏览器 profile、缓存和临时输出重定向到该目录，并默认保留。源码环境需要项目锁定的开发依赖；日志和 `results/result.json` 位于命令最后显示的绝对路径中。
 
 T-PROJECT 不执行 T-DOC，完整测试应按协议另行运行文档门禁。缺少运行时、Node、Playwright 包或可用浏览器且尚未进入检查阶段时为 `blocked`；必需阶段被跳过为 `inconclusive`；进入检查阶段后的断言、静态检查或行为失败为 `failed`；中断或运行器异常为 `inconclusive`。测试根可通过 `BILI_TEST_ROOT` 覆盖，但必须满足[测试安全](../SAFETY.md)中的外部路径与所有权规则。
 

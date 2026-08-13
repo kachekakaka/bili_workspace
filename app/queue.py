@@ -238,6 +238,7 @@ class TaskQueue:
         min_free_bytes: int = 0,
         worker_count: int = 1,
         worker_name: str = "bbdown-worker",
+        bbdown_data_dir: Path | None = None,
     ):
         self.config_store = config_store
         self.index = index
@@ -250,6 +251,7 @@ class TaskQueue:
         self.min_free_bytes = max(0, int(min_free_bytes))
         self.worker_count = min(3, max(1, int(worker_count)))
         self.worker_name = str(worker_name or "bbdown-worker")
+        self.bbdown_data_dir = Path(bbdown_data_dir).resolve() if bbdown_data_dir else None
         self._lock = threading.RLock()
         self._cv = threading.Condition(self._lock)
         self._pending: deque[str] = deque()
@@ -318,7 +320,7 @@ class TaskQueue:
         if self.metadata_fetcher is None:
             return {}
         try:
-            data = self.metadata_fetcher(target, cfg.bbdown_path())
+            data = self.metadata_fetcher(target, self.bbdown_data_dir or cfg.bbdown_path())
             return dict(data or {}) if isinstance(data, dict) else {}
         except Exception:
             return {}
@@ -344,6 +346,7 @@ class TaskQueue:
             cfg,
             timeout=min(120.0, float(cfg.download_timeout_sec)),
             runner=self.runner,
+            credential_dir=self.bbdown_data_dir,
         )
         if result.timed_out:
             raise QualityError("清晰度预览超时，请检查网络或登录状态")
@@ -993,6 +996,7 @@ class TaskQueue:
                 cfg,
                 timeout=min(120.0, float(cfg.download_timeout_sec)),
                 runner=self.runner,
+                credential_dir=self.bbdown_data_dir,
             )
             if cancel_event.is_set():
                 self._finish(task, "cancelled", error="任务已取消")
@@ -1035,6 +1039,7 @@ class TaskQueue:
                 on_progress=lambda event: self._set_progress(task, event),
                 dfn_priority=decision.dfn_priority,
                 runner=self.runner,
+                credential_dir=self.bbdown_data_dir,
             )
             for track in selected_parser.flush():
                 self._record_selected_track(task, track, cancel_event)
@@ -1168,4 +1173,3 @@ class TaskQueue:
                 status = "cancelled" if cancel_event.is_set() else "failed"
                 message = "任务已取消" if status == "cancelled" else str(exc)
             self._finish(task, status, error=message)
-

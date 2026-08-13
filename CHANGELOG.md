@@ -4,6 +4,9 @@
 
 ## 未发布
 
+- 新增 Windows amd64 单文件启动器，离线内置 Python 3.11、BBDown 1.6.3 与 FFmpeg 7.1.1，并保留本机/局域网监听和失败关闭的安全配置；
+- Windows 配置、SQLite、日志、缓存、凭据与媒体统一放入用户选择的仓库外数据根，控制状态跟随 EXE；退役 `start.bat`、`verify.bat`、Portable Python packs 和旧专用工作流；
+- 启动器提供固定 `linux/amd64` Docker 导出事务，仓库与 CI 统一使用 Python 3.11，仓库只跟踪一份当前 EXE 和对应构建记录；
 - 收口活动运维文档的重复验证命令和归档正文直链，扩展 T-DOC 对全部活动 Markdown、归档入口与项目级 Agent Skill 工具资产的机械边界；
 - 将 Playwright 固定为 T-PROJECT full 的必需阶段，复用既有浏览器并保持仓库外隔离；缺少阶段的非严格部署自检记为 `inconclusive`，严格入口缺少浏览器时记为 `blocked`；
 - 将 CI 浏览器阶段收口为一个带 run-id、隔离环境和结果文件的 T-PROJECT 消费者，最终结果写入失败不再返回成功；

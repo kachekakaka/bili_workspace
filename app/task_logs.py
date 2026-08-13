@@ -10,6 +10,7 @@ from app.constants import MAX_LOG_FILE_BYTES
 from app.path_safety import resolve_under
 from app.paths import ROOT
 from app.progress import clean_terminal_text
+from app.userdata import legacy_path_migration_enabled
 
 _TASK_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 _LOCK = threading.RLock()
@@ -72,7 +73,12 @@ def task_log_path(download_dir: Path, task_id: str) -> Path:
     download_root = Path(download_dir).resolve()
     legacy = resolve_under(download_root, f".bili_logs/{safe_id}.log")
     target = resolve_under(_configured_log_root(download_root), f"{safe_id}.log")
-    if target != legacy and not target.exists() and legacy.exists():
+    if (
+        legacy_path_migration_enabled()
+        and target != legacy
+        and not target.exists()
+        and legacy.exists()
+    ):
         if legacy.is_symlink() or not legacy.is_file():
             raise ValueError("旧版任务日志类型异常")
         target.parent.mkdir(parents=True, exist_ok=True)

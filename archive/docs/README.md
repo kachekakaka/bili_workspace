@@ -9,6 +9,7 @@
 | [V0.5.6 发布与验证说明](releases/V0.5.6_发布与验证说明.md) | V0.5.6 发布与验证历史报告 | [当前更新与回滚流程](../../docs/运维/发布与回滚流程.md) |
 | [V0.5.x 功能与验收清单](v0.5/V0.5功能与验收.md) | V0.5.x 功能和验收历史基线 | [当前需求文档](../../docs/需求文档.md) |
 | [已完成计划索引](plans/README.md) | 已完成开发计划的历史索引和当时使用规则 | [当前待办入口](../../docs/已知问题与待做需求.md) |
+| [Windows 单文件启动器与仓库外数据根方案](plans/WIN-LAUNCHER-20260812-Windows单文件启动器与仓库外数据根方案.md) | Windows amd64 单文件启动器、仓库外数据根、局域网安全配置、离线工具与旧便携运行链退役的实施和验证记录 | [当前设计文档](../../docs/设计文档.md) |
 | [运行资产、测试治理与界面契约一致性收口方案](plans/DOC-CONSISTENCY-20260809-运行资产测试治理与界面契约收口.md) | Windows 0.5.7 运行资产、T-PROJECT 证据与浏览器隔离、界面高度、Docker 触发输入、第三方来源和 T-DOC 边界的实施与验证记录 | [当前项目文档入口](../../docs/README.md) |
 | [文档生命周期与 T-PROJECT 浏览器测试收口方案](plans/DOC-GOV-20260809-文档生命周期与T-PROJECT浏览器测试收口.md) | 活动归档入口、Skill 资产排除、T-PROJECT Playwright 必需阶段、Windows 集成运行包补齐与 strict full 关闭记录 | [当前测试治理入口](../../SoftwareTesting/README.md) |
 | [QNAP 镜像构建验证与私有交付方案](plans/DOCKER-QNAP-20260806-QNAP镜像构建验证与私有交付方案.md) | `linux/amd64` 镜像、非 root 三挂载、健康重建、离线 tar 与打包运维收口记录 | [当前 Docker 镜像打包手册](../../docs/运维/Docker镜像打包与离线交付.md) |

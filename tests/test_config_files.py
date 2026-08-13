@@ -51,6 +51,21 @@ def test_invalid_existing_json_is_not_overwritten(tmp_path: Path):
     assert actual.read_text(encoding="utf-8") == "{broken"
 
 
+def test_invalid_backup_target_is_not_followed_or_overwritten(tmp_path: Path):
+    default = tmp_path / "config.json.default"
+    actual = tmp_path / "config.json"
+    backup = actual.with_suffix(".json.bak")
+    default.write_text('{"port": 3398, "new": true}', encoding="utf-8")
+    actual.write_text('{"port": 3389}', encoding="utf-8")
+    backup.mkdir()
+
+    with pytest.raises(ValueError, match="备份目标"):
+        ensure_json_from_default(default, actual)
+
+    assert json.loads(actual.read_text(encoding="utf-8")) == {"port": 3389}
+    assert backup.is_dir()
+
+
 def test_env_default_appends_new_keys_without_overwriting(tmp_path: Path):
     default = tmp_path / ".env.default"
     actual = tmp_path / ".env"
@@ -92,9 +107,8 @@ def test_legacy_json_is_copied_once_and_existing_target_wins(tmp_path: Path):
 def test_tracked_default_names_map_to_untracked_runtime_names():
     root = Path(__file__).resolve().parent.parent
     pairs = (
-        (root / ".env.default", root / ".env"),
-        (root / "config" / "config.json.default", root / "config" / "config.json"),
-        (root / "config" / "runtime.env.default", root / "config" / "runtime.env"),
+        (root / "app" / "defaults" / "config.json.default", root / "config" / "config.json"),
+        (root / "app" / "defaults" / "runtime.env.default", root / "config" / "runtime.env"),
         (root / "docker" / ".env.default", root / "docker" / ".env"),
     )
     ignored = (root / ".gitignore").read_text(encoding="utf-8")

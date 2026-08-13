@@ -65,11 +65,11 @@ class AppState:
         startup_overrides: dict[str, object] = {}
         explicit_host = os.getenv("BILI_HOST", "").strip()
         explicit_port = os.getenv("BILI_PORT", "").strip()
-        if explicit_host:
+        if explicit_host or runtime.launcher_managed:
             startup_overrides["host"] = runtime.host
-        if explicit_port:
+        if explicit_port or runtime.launcher_managed:
             startup_overrides["port"] = runtime.port
-        if runtime.server_mode:
+        if runtime.server_mode or runtime.launcher_managed:
             startup_overrides.update(
                 {
                     "download_dir": str(runtime.media_dir),
@@ -86,7 +86,7 @@ class AppState:
 
         # A non-loopback host in config automatically becomes authenticated
         # server mode, allowing phone/LAN access without an unsafe local bind.
-        if store.server_mode and not runtime.server_mode:
+        if store.server_mode and not runtime.server_mode and not runtime.launcher_managed:
             bind_host = cfg.host.strip().strip("[]").rstrip(".")
             trusted_hosts = runtime.trusted_hosts
             if (
@@ -127,10 +127,11 @@ class AppState:
                 runtime.temp_dir,
             ):
                 directory.mkdir(parents=True, exist_ok=True)
-        elif not runtime.server_mode:
+        elif not runtime.server_mode and not runtime.launcher_managed:
             runtime = replace(runtime, media_dir=cfg.download_path())
 
-        migrate_legacy_database(runtime)
+        if runtime.mode in {"docker", "nas"}:
+            migrate_legacy_database(runtime)
         userdata_root = runtime.database_path.parent.resolve()
         index_root = userdata_root / "indexes"
 
@@ -185,6 +186,7 @@ class AppState:
             worker_count=runtime.download_concurrency,
             worker_name="library-worker",
             default_owner_user_id=default_owner,
+            bbdown_data_dir=runtime.bbdown_credentials_dir,
         )
 
         def persist_device_task(task_id: str, payload: dict | None) -> None:
@@ -205,11 +207,12 @@ class AppState:
             worker_name="export-worker",
             default_owner_user_id=default_owner,
             namespace_by_owner=True,
+            bbdown_data_dir=runtime.bbdown_credentials_dir,
         )
 
-        checker = cookie_checker or CookieChecker(lambda: store.get().bbdown_path())
+        checker = cookie_checker or CookieChecker(lambda: runtime.bbdown_credentials_dir)
         cover_cache = CoverCache(runtime.cache_dir / "covers")
-        qr = QrLoginManager(lambda: store.get().bbdown_path())
+        qr = QrLoginManager(lambda: runtime.bbdown_credentials_dir)
         return cls(
             runtime=runtime,
             config_store=store,
@@ -242,7 +245,7 @@ class AppState:
             "auth_required": self.runtime.auth_required,
             "public_base_url": self.runtime.public_base_url,
             "bbdown_ready": exe is not None,
-            "bbdown_file": _label(exe) if exe else "BBDown_portable/BBDown.exe",
+            "bbdown_file": _label(exe) if exe else "未找到 BBDown 工具",
             "ffmpeg_ready": ffmpeg is not None,
             "ffmpeg_file": _label(ffmpeg),
             "download_dir": cfg.download_dir,

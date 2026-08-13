@@ -80,6 +80,8 @@ def find_ffmpeg(bbdown_dir: Path) -> Path | None:
         for path in sorted(bbdown_dir.glob(pattern)):
             if _regular_file(path):
                 return path
+    if os.getenv("BILI_LAUNCHER_CHILD", "").strip() == "1":
+        return None
     found = shutil.which("ffmpeg")
     return Path(found).resolve() if found else None
 
@@ -324,9 +326,10 @@ def run_bbdown_info(
     *,
     timeout: float | None = 60.0,
     runner=None,
+    credential_dir: Path | None = None,
 ) -> BbdownResult:
     argv = build_info_argv(url, cfg)
-    bbdown_dir = cfg.bbdown_path()
+    bbdown_dir = Path(credential_dir or cfg.bbdown_path()).resolve()
     if runner is not None and not getattr(runner, "supports_info", False):
         # Legacy test/provider runners only implement the download invocation.
         synthetic = (
@@ -381,11 +384,12 @@ def run_bbdown(
     on_progress: Callable[[ProgressEvent], None] | None = None,
     dfn_priority: str | None = None,
     runner=None,
+    credential_dir: Path | None = None,
 ) -> BbdownResult:
     target_dir = Path(work_dir or cfg.download_path()).resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     argv = build_argv(url, cfg, work_dir=target_dir, dfn_priority=dfn_priority)
-    bbdown_dir = cfg.bbdown_path()
+    bbdown_dir = Path(credential_dir or cfg.bbdown_path()).resolve()
 
     if cancel_event is not None and cancel_event.is_set():
         return BbdownResult(-1, "", "任务已取消", argv, cancelled=True)

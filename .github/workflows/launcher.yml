@@ -1,0 +1,144 @@
+name: Windows launcher validation
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - "web/**"
+      - "docker/Dockerfile"
+      - "docker/entrypoint.sh"
+      - "docker/healthcheck.py"
+      - "launcher/**"
+      - "requirements/**"
+      - "tools/build_launcher.py"
+      - "tools/build_ffmpeg_windows.py"
+      - "tools/prepare_launcher_resources.py"
+      - "scripts/windows/build-launcher.bat"
+      - ".github/workflows/launcher.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "web/**"
+      - "docker/Dockerfile"
+      - "docker/entrypoint.sh"
+      - "docker/healthcheck.py"
+      - "launcher/**"
+      - "requirements/**"
+      - "tools/build_launcher.py"
+      - "tools/build_ffmpeg_windows.py"
+      - "tools/prepare_launcher_resources.py"
+      - "scripts/windows/build-launcher.bat"
+      - ".github/workflows/launcher.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ffmpeg:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download and verify fixed FFmpeg source inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/launcher-download-cache
+          base='https://ffmpeg.org'
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output build/launcher-download-cache/ffmpeg-7.1.1.tar.xz \
+            "$base/releases/ffmpeg-7.1.1.tar.xz"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output build/launcher-download-cache/ffmpeg-7.1.1.tar.xz.asc \
+            "$base/releases/ffmpeg-7.1.1.tar.xz.asc"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output build/launcher-download-cache/ffmpeg-devel.asc \
+            "$base/ffmpeg-devel.asc"
+          printf '%s  %s\n' \
+            '733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1' \
+            'build/launcher-download-cache/ffmpeg-7.1.1.tar.xz' \
+            'a52e92620b266ea341191a01b42a191e01c15a9f56e99b173582181781f5bc75' \
+            'build/launcher-download-cache/ffmpeg-7.1.1.tar.xz.asc' \
+            '397b3becedcd5a98769967ff1ff8501ddc89f8368b8f766e4701377d7dbaabe5' \
+            'build/launcher-download-cache/ffmpeg-devel.asc' \
+            | sha256sum --check --strict
+
+      - name: Build fixed Windows amd64 FFmpeg
+        run: python -B -X utf8 -m tools.build_ffmpeg_windows
+
+      - name: Upload FFmpeg build inputs and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-workspace-ffmpeg-windows-amd64
+          path: |
+            build/launcher-download-cache/ffmpeg-7.1.1.tar.xz
+            build/launcher-download-cache/ffmpeg-7.1.1.tar.xz.asc
+            build/launcher-download-cache/ffmpeg-devel.asc
+            build/launcher-ffmpeg-windows-amd64
+          if-no-files-found: error
+          retention-days: 5
+
+  launcher:
+    needs: ffmpeg
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements/runtime.lock
+            launcher/requirements.txt
+            launcher/requirements-dev.txt
+
+      - name: Download fixed FFmpeg build inputs and evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: bili-workspace-ffmpeg-windows-amd64
+          path: build
+
+      - name: Install fixed launcher dependencies
+        run: python -m pip install --disable-pip-version-check -r launcher/requirements-dev.txt
+
+      - name: Launcher logic and GUI smoke
+        run: python -B -X utf8 -m pytest -q launcher/tests
+
+      - name: Launcher lint
+        run: >-
+          python -B -X utf8 -m ruff check launcher
+          tools/build_ffmpeg_windows.py
+          tools/prepare_launcher_resources.py
+          tools/build_launcher.py
+
+      - name: Build and self-check Windows amd64 candidate
+        run: >-
+          python -B -X utf8 -m tools.build_launcher
+          --dist-dir build/ci-launcher-dist
+          --work-dir build/ci-launcher-pyinstaller
+          --resource-dir build/ci-launcher-resources
+          --record build/ci-launcher-build.json
+          --run-exe-self-check
+          --keep-build
+
+      - name: Upload short-lived validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bili-workspace-launcher-validation
+          path: |
+            build/ci-launcher-dist/bili-workspace-launcher-0.7.0.exe
+            build/ci-launcher-build.json
+          if-no-files-found: error
+          retention-days: 5

@@ -54,14 +54,13 @@ trap finish EXIT
 trap 'exit 130' HUP INT TERM
 
 export BILI_VERIFY_RUN_ROOT="$RUN_ROOT"
-export BILI_VERIFY_ROOT_ENV_PATH="$RUN_ROOT/config/root.env"
 export BILI_APP_MODE=local
 export BILI_CONFIG_DIR="$RUN_ROOT/config"
 export BILI_USERDATA_DIR="$RUN_ROOT/userdata"
 export BILI_MEDIA_DIR="$RUN_ROOT/downloads"
 export BILI_CACHE_DIR="$RUN_ROOT/userdata/cache"
 export BILI_TEMP_DIR="$RUN_ROOT/tmp"
-export BILI_BBDOWN_DIR="$RUN_ROOT/media/BBDown_portable"
+export BILI_BBDOWN_DIR="$RUN_ROOT/config/bbdown"
 export HOME="$RUN_ROOT/home"
 export XDG_CACHE_HOME="$RUN_ROOT/userdata/cache"
 export PYTHONPYCACHEPREFIX="$RUN_ROOT/pycache"

@@ -178,7 +178,9 @@ def test_frontend_search_and_library_are_integrated_without_overlay_competition(
 
 
 def test_default_tag_palette_uses_distinct_colors():
-    payload = json.loads((ROOT / "config" / "tags.json.default").read_text(encoding="utf-8"))
+    payload = json.loads(
+        (ROOT / "app" / "defaults" / "tags.json.default").read_text(encoding="utf-8")
+    )
     colors = {item["name"]: item["color"] for item in payload["tags"]}
     assert colors["夯"] == "#d4a017"
     assert len(set(colors.values())) == len(colors)

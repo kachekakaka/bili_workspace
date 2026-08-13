@@ -22,10 +22,7 @@ userdata/**
 downloads
 downloads/**
 
-# Windows-only runtime and helper assets are not used by the Linux image
-BBDown_portable
-vendor
-vendor/**
+# Windows-only helper assets are not used by the Linux image
 scripts
 scripts/**
 *.bat

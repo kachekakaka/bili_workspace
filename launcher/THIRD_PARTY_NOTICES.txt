@@ -1,0 +1,56 @@
+bili_workspace Windows 启动器第三方许可告知
+============================================
+
+本文件是分发清单，不替代适用许可证全文或法律判断。实际候选内的
+THIRD_PARTY_LICENSES/installed/manifest.json 记录本次构建收集到的许可证文件、版本、
+大小和 SHA-256；不得只分发本告知而删除该目录。
+
+运行时主要组件
+--------------
+
+- Python 3.11 — Python Software Foundation License
+  https://docs.python.org/3/license.html
+- PySide6 / Qt for Python 6.11.1（含 Shiboken6）— LGPLv3 / GPLv3，
+  或构建者另行持有的适用 Qt 商业许可
+  https://doc.qt.io/qtforpython-6/licenses.html
+  https://www.qt.io/development/open-source-lgpl-obligations
+  本开源候选固定采用 LGPLv3 路径；构建器会从 Qt for Python 官方源码仓库的
+  v6.11.1 标签取得并校验 LGPLv3、GPLv3 与 Qt GPL exception 全文。
+- FastAPI 0.128.2 — MIT License
+- Uvicorn 0.48.0 — BSD 3-Clause License
+- Starlette 0.50.0 — BSD 3-Clause License
+- Pydantic 2.13.4 / pydantic-core 2.46.4 — MIT License
+- 其余 Python 运行依赖 — 版本和许可证文件见
+  THIRD_PARTY_LICENSES/installed/manifest.json
+
+构建工具
+--------
+
+- PyInstaller 6.22.0 — GPL-2.0-or-later，并带允许分发生成应用的例外。
+  PyInstaller 官方说明允许分发其生成的独立程序，但这不替代运行依赖自身
+  的许可证义务：https://pyinstaller.org/en/stable/license.html
+
+内置离线工具
+------------
+
+- BBDown 1.6.3 — MIT License。许可证全文随 Windows 工具保存。
+  https://github.com/nilaoda/BBDown
+- FFmpeg 7.1.1 — 从 FFmpeg 官方签名源码固定自建 Windows amd64 可执行文件，
+  按 LGPL-2.1-or-later 分发。构建显式禁用 GPL、version3、nonfree、网络和
+  外部库自动探测；官方源码归档、签名、公钥、构建配方、工具链清单、配置、
+  PE 导入清单与许可证全文随候选提供。
+  https://ffmpeg.org/legal.html
+
+Qt / PySide6 的 LGPL 路径
+------------------------
+
+本项目不静态链接 Qt；PyInstaller 单文件在运行时把 Qt DLL 展开后动态加载。
+采用 LGPL 路径分发时，接收者必须能取得相应源码、获知其权利，并能用修改后的
+Qt/PySide6 库重新构建和运行组合程序。具体源码位置、重建步骤和无反向工程限制
+说明见 THIRD_PARTY_LICENSES/RELINKING.md。若实际候选无法证明这些材料完整，
+构建门禁必须停止，不得把该候选作为可分发结果。
+
+FFmpeg 的正式构建证据以 THIRD_PARTY_LICENSES/FFmpeg.SOURCE.json 随候选保存，
+并由资源清单记录身份。完整官方源码归档位于 THIRD_PARTY_SOURCES，构建器会将
+源码、签名、公钥指纹、当前配方、实际 FFmpeg 二进制、版本配置、许可模式和
+随附许可证逐项核对；证据不完整时，即使 EXE 能运行也不能视为可分发候选。

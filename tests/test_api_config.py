@@ -28,7 +28,7 @@ def test_executable_directory_is_not_web_editable(client, tmp_env):
     assert client.state_ref.config_store.get().bbdown_path() == tmp_env.bbdown_dir.resolve()
 
 
-def test_download_dir_change_blocked_while_active(tmp_env):
+def test_download_dir_change_blocked_while_active(tmp_env, external_runtime_environment):
     import threading
     from fastapi.testclient import TestClient
 

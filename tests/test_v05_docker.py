@@ -11,7 +11,11 @@ def _text(name: str) -> str:
 
 def test_dockerfile_bundles_runtime_and_fixed_bbdown_release():
     dockerfile = _text("docker/Dockerfile")
-    assert "python:3.13-slim-bookworm" in dockerfile
+    assert (
+        "python:3.11-slim-bookworm@sha256:"
+        "77923445c077d8eb971b14b2b114a1d9cd4a87edb4c75654820ca4832ee8cb15"
+        in dockerfile
+    )
     assert "BBDOWN_VERSION=1.6.3" in dockerfile
     assert "BBDown_${BBDOWN_VERSION}_${BBDOWN_RELEASE_DATE}_linux-${asset_arch}.zip" in dockerfile
     assert "apt-get install" in dockerfile and "ffmpeg" in dockerfile
@@ -47,7 +51,7 @@ def test_entrypoint_preserves_credentials_and_rejects_unwritable_volumes():
 
 
 def test_default_environment_files_do_not_contain_real_secrets():
-    local_env = _text(".env.default")
+    local_env = _text("app/defaults/runtime.env.default")
     docker_env = _text("docker/.env.default")
     combined = local_env + "\n" + docker_env
     assert "BOOTSTRAP_TOKEN=" in docker_env
@@ -103,8 +107,6 @@ def test_current_persistence_documentation_matches_runtime_layout():
         "docs/设计文档.md",
         "docs/字段契约.md",
         "docs/运维/Docker镜像打包与离线交付.md",
-        "config/README.md",
-        "userdata/README.md",
     )
     for name in persistence_detail_docs:
         content = _text(name)
@@ -129,7 +131,7 @@ def test_current_persistence_documentation_matches_runtime_layout():
     for directory in ("config/", "userdata/", "downloads/"):
         assert directory in readme
     assert "docs/README.md" in readme
-    assert "!userdata/README.md" in _text(".gitignore")
+    assert "userdata/*" in _text(".gitignore")
 
 
 def test_docker_packaging_guide_covers_offline_image_import():

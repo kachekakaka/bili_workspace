@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 import hashlib
+import os
 from pathlib import Path
 import re
 
 from app.constants import APP_VERSION
-from app.paths import ROOT
+from app.paths import ROOT, web_dir
 
 _FRONTEND_VERSION_RE = re.compile(
     r'data-frontend-version=["\']([^"\']+)["\']', re.IGNORECASE
@@ -16,7 +17,7 @@ _SOURCE_SUFFIXES = {".bat", ".css", ".html", ".js", ".mjs", ".ps1", ".py"}
 
 def _source_files() -> list[Path]:
     files: set[Path] = set()
-    for directory in (ROOT / "app", ROOT / "web", ROOT / "scripts" / "windows"):
+    for directory in (ROOT / "app", ROOT / "web"):
         if not directory.is_dir():
             continue
         files.update(
@@ -24,9 +25,6 @@ def _source_files() -> list[Path]:
             for path in directory.rglob("*")
             if path.is_file() and path.suffix.lower() in _SOURCE_SUFFIXES
         )
-    for path in (ROOT / "start.bat", ROOT / "verify.bat"):
-        if path.is_file():
-            files.add(path)
     return sorted(files, key=lambda path: path.relative_to(ROOT).as_posix())
 
 
@@ -34,7 +32,10 @@ def _source_files() -> list[Path]:
 def frontend_version() -> str:
     """Return the cache batch declared by the current HTML document."""
     try:
-        text = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        override = os.getenv("BILI_FRONTEND_VERSION", "").strip()
+        if override:
+            return override
+        text = (web_dir() / "index.html").read_text(encoding="utf-8")
     except OSError:
         return "unknown"
     match = _FRONTEND_VERSION_RE.search(text)
@@ -44,6 +45,11 @@ def frontend_version() -> str:
 @lru_cache(maxsize=1)
 def build_id() -> str:
     """Fingerprint the source actually used by this running process."""
+    override = os.getenv("BILI_BUILD_ID", "").strip().lower()
+    if override:
+        if not re.fullmatch(r"[0-9a-f]{12,64}", override):
+            raise ValueError("BILI_BUILD_ID 必须是 12-64 位小写十六进制摘要")
+        return override
     digest = hashlib.sha256()
     for path in _source_files():
         relative = path.relative_to(ROOT).as_posix().encode("utf-8")

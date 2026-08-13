@@ -29,9 +29,27 @@ class StaticCookieChecker:
 
 
 @pytest.fixture
+def external_runtime_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Provide an explicit repository-external runtime root when a test needs one."""
+    data_root = tmp_path / "runtime-data"
+    values = {
+        "BILI_APP_MODE": "local",
+        "BILI_CONFIG_DIR": str(data_root / "config"),
+        "BILI_USERDATA_DIR": str(data_root / "userdata"),
+        "BILI_MEDIA_DIR": str(data_root / "downloads"),
+        "BILI_CACHE_DIR": str(data_root / "userdata" / "cache"),
+        "BILI_TEMP_DIR": str(data_root / "userdata" / "tmp"),
+        "BILI_BBDOWN_DIR": str(data_root / "config" / "bbdown"),
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+    return data_root
+
+
+@pytest.fixture
 def tmp_env(tmp_path: Path):
     download_dir = tmp_path / "downloads"
-    bbdown_dir = tmp_path / "BBDown_portable"
+    bbdown_dir = tmp_path / "bbdown"
     bbdown_dir.mkdir()
     download_dir.mkdir()
     (bbdown_dir / "BBDown.exe").write_bytes(b"fake")
@@ -124,7 +142,7 @@ def wait_terminal(queue, task_id: str, timeout: float = 5.0):
 
 
 @pytest.fixture
-def client(tmp_env):
+def client(tmp_env, external_runtime_environment):
     state = AppState.create(
         config_path=tmp_env.config_path,
         initial_config=tmp_env.initial,
@@ -141,7 +159,7 @@ def client(tmp_env):
 
 
 @pytest.fixture
-def fail_client(tmp_env):
+def fail_client(tmp_env, external_runtime_environment):
     state = AppState.create(
         config_path=tmp_env.config_path,
         initial_config=tmp_env.initial,

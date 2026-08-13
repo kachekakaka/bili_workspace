@@ -16,17 +16,13 @@ concurrency:
 jobs:
   python:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
@@ -44,13 +40,13 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q -p no:cacheprovider --tb=short 2>&1 | tee "pytest-${{ matrix.python-version }}.log"
+          python -m pytest -q -p no:cacheprovider --tb=short 2>&1 | tee pytest-3.11.log
       - name: Upload failed pytest log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: pytest-${{ matrix.python-version }}-${{ github.run_attempt }}
-          path: pytest-${{ matrix.python-version }}.log
+          name: pytest-3.11-${{ github.run_attempt }}
+          path: pytest-3.11.log
           if-no-files-found: ignore
           retention-days: 7
 
@@ -77,7 +73,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
@@ -104,8 +100,6 @@ jobs:
       - name: Check Windows call chain and Docker configuration
         run: >-
           python -m pytest -q -p no:cacheprovider
-          tests/test_integrated_runtime.py
-          tests/test_configure_network.py
           tests/test_v05_docker.py
           tests/test_repository_layout.py
           tests/test_t_project_isolation.py
@@ -120,7 +114,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
@@ -189,7 +183,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
@@ -223,33 +217,31 @@ jobs:
       github.head_ref == 'feature/ui-v0.6.2'
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
     steps:
-      - name: Clean checkout
+      - name: Checkout
         uses: actions/checkout@v4
-      - name: Test clean clone in a T-PROJECT isolated run
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          $env:BILI_VERIFY_NO_PAUSE = "1"
-          $env:BILI_VERIFY_REQUIRE_NODE = "1"
-          $env:BILI_VERIFY_REQUIRE_PLAYWRIGHT = "1"
-          $env:BILI_TEST_ROOT = Join-Path $env:RUNNER_TEMP 'bili_workspace_test'
-          $verifyLog = Join-Path $env:RUNNER_TEMP 'windows-verify.log'
-          cmd.exe /d /c verify.bat 2>&1 |
-            Tee-Object -FilePath $verifyLog
-          $code = $LASTEXITCODE
-          if ($code -ne 0) { exit $code }
-      - name: Upload Windows validation logs
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
-          name: windows-validation-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/windows-verify.log
-            ${{ runner.temp }}/bili_workspace_test/**
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 7
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements/dev.lock
+            launcher/requirements.txt
+            launcher/requirements-dev.txt
+      - name: Install unified development and launcher dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/dev.lock -r launcher/requirements-dev.txt
+          python -m pip check
+      - name: Verify source tree with Python 3.11
+        run: python -B -X utf8 tools/verify_source.py
+      - name: Run Windows launcher tests
+        run: python -B -X utf8 -m pytest -q launcher/tests
 
   docker-validation:
     if: >-
@@ -267,7 +259,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: requirements/dev.lock
       - name: Install dependencies

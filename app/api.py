@@ -661,7 +661,10 @@ def get_config(request: Request):
     config["temp_dir"] = str(state.runtime.temp_dir)
     config["cache_dir"] = str(state.runtime.cache_dir)
     config["export_ttl_sec"] = state.runtime.export_ttl_sec
-    return ok(config, protected_fields=["host", "bbdown_dir", "download_dir"] if state.runtime.server_mode else ["host", "bbdown_dir"])
+    protected_fields = ["host", "bbdown_dir"]
+    if state.runtime.server_mode or state.runtime.launcher_managed:
+        protected_fields.extend(["port", "download_dir"])
+    return ok(config, protected_fields=protected_fields)
 
 
 @router.put("/config")
@@ -670,6 +673,10 @@ def put_config(request: Request, body: ConfigUpdate):
     patch = body.as_patch()
     if not patch:
         return err("没有可更新的字段")
+    if state.runtime.launcher_managed and any(
+        key in patch for key in ("port", "download_dir")
+    ):
+        return err("启动器模式的端口和数据目录只能在 Windows 启动器中管理", 409)
     if state.runtime.server_mode and any(key in patch for key in ("port", "download_dir")):
         return err("NAS 模式的端口和目录由 Docker 环境变量及目录映射管理", 409)
     if "download_dir" in patch and state.queue.active_count() > 0:
@@ -691,13 +698,12 @@ def api_search(
     fresh: bool = Query(default=False),
 ):
     state = _state(request)
-    cfg = state.config_store.get()
     try:
         data = search_videos(
             q,
             order=order,
             page=page,
-            bbdown_dir=cfg.bbdown_path(),
+            bbdown_dir=state.runtime.bbdown_credentials_dir,
             fresh=fresh,
         )
         data = _decorate_search_catalog(request, data)
@@ -1135,7 +1141,7 @@ def api_delete_media(request: Request, media_id: str, delete_files: bool = False
 @router.post("/library/{media_id}/compatible")
 def api_compatible(request: Request, media_id: str, body: CompatibleRequest):
     state = _state(request)
-    ffmpeg = find_ffmpeg(state.config_store.get().bbdown_path())
+    ffmpeg = find_ffmpeg(state.runtime.bbdown_dir)
     if not ffmpeg:
         return err("未找到 FFmpeg", 503)
     try:

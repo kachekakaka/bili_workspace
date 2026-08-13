@@ -9,13 +9,13 @@
 规则夹具命令：
 
 ```powershell
-.\.runtime\python\python.exe -B -X utf8 -m unittest discover -s SoftwareTesting\doc_consistency -p "test_doc_consistency_rules.py"
+.\.venv\Scripts\python.exe -B -X utf8 -m unittest discover -s SoftwareTesting\doc_consistency -p "test_doc_consistency_rules.py"
 ```
 
 目标项目命令：
 
 ```powershell
-.\.runtime\python\python.exe -B -X utf8 SoftwareTesting\doc_consistency\test_doc_consistency.py --workspace-root .
+.\.venv\Scripts\python.exe -B -X utf8 SoftwareTesting\doc_consistency\test_doc_consistency.py --workspace-root .
 ```
 
 缺少 Python 或无法读取工作树时为 `blocked`；门禁报告机械错误时为 `failed`；运行器中断或异常导致证据不可解释时为 `inconclusive`。命令只读项目内容，规则夹具仅创建并自动清理系统临时目录。

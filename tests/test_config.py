@@ -61,7 +61,7 @@ def test_source_config_allows_missing_third_party_tools(tmp_env):
 def test_invalid_bind_hostname_in_json_is_rejected(tmp_path):
     from app.config import ConfigStore
 
-    bbdown = tmp_path / "BBDown_portable"
+    bbdown = tmp_path / "bbdown"
     bbdown.mkdir()
     with pytest.raises(ValueError, match="host"):
         ConfigStore(

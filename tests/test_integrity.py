@@ -51,7 +51,7 @@ def test_tool_manifest_accepts_linux_binary_names(tmp_path):
 
 def test_windows_batch_files_use_crlf():
     root = Path(__file__).resolve().parents[1]
-    paths = sorted(root.glob("*.bat")) + sorted((root / "BBDown_portable").glob("*.bat"))
+    paths = sorted((root / "scripts" / "windows").glob("*.bat"))
     assert paths, "未找到 Windows 批处理文件"
     for path in paths:
         data = path.read_bytes()

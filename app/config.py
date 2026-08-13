@@ -15,13 +15,13 @@ from app.config_files import ensure_json_from_default
 from app.grouping import DEFAULT_GROUP, normalize_group
 from app.io_utils import atomic_write_json
 from app.quality import DEFAULT_MIN_HEIGHT, validate_min_height
-from app.paths import ROOT, resolve_path
+from app.paths import defaults_dir, resolve_path
 
 DEFAULTS = {
     "host": "127.0.0.1",
     "port": 3398,
     "download_dir": "downloads",
-    "bbdown_dir": "BBDown_portable",
+    "bbdown_dir": "bbdown",
     "poll_hint_ms": 1500,
     "download_timeout_sec": 3600,
     "dfn_priority": "",
@@ -50,7 +50,7 @@ class AppConfig:
     host: str = "127.0.0.1"
     port: int = 3398
     download_dir: str = "downloads"
-    bbdown_dir: str = "BBDown_portable"
+    bbdown_dir: str = "bbdown"
     poll_hint_ms: int = 1500
     download_timeout_sec: int = 3600
     dfn_priority: str = ""
@@ -88,8 +88,15 @@ def _valid_bind_host(value: str) -> bool:
         return False
     if host.lower() == "localhost":
         return True
+    if host.startswith("[") or host.endswith("]"):
+        if not (host.startswith("[") and host.endswith("]")):
+            return False
+        try:
+            return ipaddress.ip_address(host[1:-1]).version == 6
+        except ValueError:
+            return False
     try:
-        ipaddress.ip_address(host.strip("[]"))
+        ipaddress.ip_address(host)
         return True
     except ValueError:
         normalized = host.rstrip(".")
@@ -98,11 +105,23 @@ def _valid_bind_host(value: str) -> bool:
         labels = normalized.split(".")
         return all(
             1 <= len(label) <= 63
+            and label[0].isascii()
             and label[0].isalnum()
+            and label[-1].isascii()
             and label[-1].isalnum()
-            and all(char.isalnum() or char == "-" for char in label)
+            and all(char.isascii() and (char.isalnum() or char == "-") for char in label)
             for label in labels
         )
+
+
+def _normalize_bind_host(value: str) -> str:
+    host = value.strip()
+    try:
+        if host.startswith("[") and host.endswith("]"):
+            return str(ipaddress.ip_address(host[1:-1]))
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        return host.rstrip(".").lower()
 
 
 def _regular(path: Path) -> bool:
@@ -138,8 +157,10 @@ class ConfigStore:
         default_path: Path | None = None,
         server_mode: bool | None = None,
     ):
-        self.path = path or (ROOT / "config" / "config.json")
-        self.default_path = default_path or (ROOT / "config" / "config.json.default")
+        if path is None:
+            raise ValueError("ConfigStore 必须显式指定仓库外配置文件路径")
+        self.path = Path(path).resolve()
+        self.default_path = default_path or (defaults_dir() / "config.json.default")
         self.server_mode = (
             os.getenv("BILI_APP_MODE", "local").strip().lower() in {"server", "nas", "docker"}
             if server_mode is None
@@ -151,9 +172,9 @@ class ConfigStore:
         self._boot_port: int | None = None
 
         if initial is not None:
-            data = self._normalize({**initial, **self._startup_overrides})
-            self._validate(data)
+            data = self._normalize(dict(initial))
             self._data = data
+            self._validate(self._effective_data())
         else:
             try:
                 ensure_json_from_default(self.default_path, self.path)
@@ -182,13 +203,13 @@ class ConfigStore:
                 raw = json.loads(candidate.read_text(encoding="utf-8"))
                 if not isinstance(raw, dict):
                     raise ValueError("顶层必须是 JSON 对象")
-                data = self._normalize({**raw, **self._startup_overrides})
-                self._validate(data)
+                data = self._normalize(raw)
+                self._validate(self._effective_data(data))
                 if index == 1:
                     warnings.warn(f"主配置损坏，已从备份恢复: {candidate}", RuntimeWarning)
                     atomic_write_json(self.path, data, backup=False)
                 elif data != raw:
-                    # Persist type normalization and trusted startup overrides.
+                    # Persist only normalized stored values; startup overrides stay in memory.
                     atomic_write_json(self.path, data, backup=True)
                 return data
             except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
@@ -198,14 +219,22 @@ class ConfigStore:
 
     def mark_boot(self) -> None:
         with self._lock:
-            self._boot_host = str(self._data["host"])
-            self._boot_port = int(self._data["port"])
+            effective = self._effective_data()
+            self._boot_host = str(effective["host"])
+            self._boot_port = int(effective["port"])
+
+    def _effective_data(self, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._normalize({**(data if data is not None else self._data), **self._startup_overrides})
 
     def get(self) -> AppConfig:
         with self._lock:
-            return AppConfig(**self._app_data(self._data))
+            return AppConfig(**self._app_data(self._effective_data()))
 
     def as_dict(self) -> dict[str, Any]:
+        with self._lock:
+            return deepcopy(self._effective_data())
+
+    def persisted_dict(self) -> dict[str, Any]:
         with self._lock:
             return deepcopy(self._data)
 
@@ -216,14 +245,18 @@ class ConfigStore:
     def update(self, patch: dict[str, Any]) -> tuple[AppConfig, bool]:
         """Apply a web-safe patch. Returns (config, restart_required)."""
         with self._lock:
-            forbidden = sorted(set(patch) - WEB_EDITABLE_FIELDS)
+            forbidden = sorted(
+                (set(patch) - WEB_EDITABLE_FIELDS)
+                | (set(patch) & set(self._startup_overrides))
+            )
             if forbidden:
                 raise ValueError(f"配置项不可通过网页修改: {', '.join(forbidden)}")
             merged = dict(self._data)
             merged.update(patch)
             normalized = self._normalize(merged)
-            self._validate(normalized)
-            restart = int(normalized["port"]) != self._boot_port
+            effective = self._effective_data(normalized)
+            self._validate(effective)
+            restart = int(effective["port"]) != self._boot_port
             self._data = normalized
             self.save()
             return self.get(), restart
@@ -231,14 +264,11 @@ class ConfigStore:
     def apply_startup_overrides(self, patch: dict[str, Any]) -> AppConfig:
         """Apply trusted process/environment settings before serving requests."""
         with self._lock:
-            merged = dict(self._data)
+            merged = dict(self._startup_overrides)
             merged.update(patch)
-            normalized = self._normalize(merged)
-            self._validate(normalized)
-            changed = normalized != self._data
-            self._data = normalized
-            if changed:
-                self.save()
+            effective = self._normalize({**self._data, **merged})
+            self._validate(effective)
+            self._startup_overrides = merged
             self.mark_boot()
             return self.get()
 
@@ -252,9 +282,10 @@ class ConfigStore:
         data["poll_hint_ms"] = int(data["poll_hint_ms"])
         data["download_timeout_sec"] = int(data["download_timeout_sec"])
         data["default_min_height"] = int(data.get("default_min_height", DEFAULT_MIN_HEIGHT))
-        data["host"] = str(data["host"]).strip() or "127.0.0.1"
+        raw_host = str(data["host"]).strip() or "127.0.0.1"
+        data["host"] = _normalize_bind_host(raw_host) if _valid_bind_host(raw_host) else raw_host
         data["download_dir"] = str(data["download_dir"]).strip() or "downloads"
-        data["bbdown_dir"] = str(data["bbdown_dir"]).strip() or "BBDown_portable"
+        data["bbdown_dir"] = str(data["bbdown_dir"]).strip() or "bbdown"
         data["dfn_priority"] = str(data.get("dfn_priority") or "").strip()
         data["encoding_priority"] = str(data.get("encoding_priority") or "").strip()
         data["default_group"] = normalize_group(

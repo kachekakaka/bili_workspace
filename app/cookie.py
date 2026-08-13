@@ -23,7 +23,7 @@ class CookieStatus:
     has_sessdata: bool
     online_verified: bool
     message: str
-    file_label: str = "BBDown_portable/BBDown.data"
+    file_label: str = "config/bbdown/BBDown.data"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -50,7 +50,7 @@ def _offline_status(bbdown_dir: Path) -> tuple[Path, str, CookieStatus | None]:
             file_present=False,
             has_sessdata=False,
             online_verified=False,
-            message="未找到登录文件；请在网站账号页扫码登录，命令行备用入口见 scripts/windows/bilibili-login.bat",
+            message="未找到登录文件；请在网站账号页扫码登录",
         )
     raw = read_cookie_string(bbdown_dir)
     marker = "SESS" + "DATA="

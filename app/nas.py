@@ -35,6 +35,7 @@ from app.constants import (
 )
 from app.grouping import DEFAULT_GROUP, normalize_group
 from app.index_store import IndexStore, UnsafeIndexPathError
+from app.io_utils import _is_reparse_point, _path_exists, atomic_write_text
 from app.path_safety import UnsafePathError, relative_posix, resolve_under
 from app.runtime import RuntimeSettings
 
@@ -46,6 +47,24 @@ _DEFAULT_ADMIN_USERNAME = "admin"
 _DEFAULT_ADMIN_PASSWORD = "123456"
 _DEFAULT_ADMIN_DISPLAY_NAME = "管理员"
 _SYSTEM_DEFAULT_ADMIN = "system-default-admin"
+
+
+def _compatible_video_encode_args(runtime: RuntimeSettings) -> list[str]:
+    """Select the H.264 encoder available in the current delivery boundary."""
+    if runtime.launcher_managed:
+        return [
+            "-vf",
+            "format=nv12",
+            "-c:v",
+            "h264_mf",
+            "-rate_control",
+            "quality",
+            "-quality",
+            "80",
+            "-hw_encoding",
+            "0",
+        ]
+    return ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
 
 _SCHEMA = """
 PRAGMA foreign_keys=ON;
@@ -256,15 +275,44 @@ class NasStore:
             if old_version == DATABASE_SCHEMA_VERSION:
                 return old_version, True, None
             backup_dir = self.path.parent / "backups"
+            if _path_exists(backup_dir) and (
+                backup_dir.is_symlink()
+                or _is_reparse_point(backup_dir)
+                or not backup_dir.is_dir()
+            ):
+                raise RuntimeError("SQLite 迁移备份目录类型无效")
             backup_dir.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d-%H%M%S")
+            stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
             backup_path = backup_dir / f"bili_workspace-v{old_version}-{stamp}.db"
-            target = sqlite3.connect(backup_path)
+            target: sqlite3.Connection | None = None
+            created = False
             try:
+                backup_path.open("xb").close()
+                created = True
+                target = sqlite3.connect(backup_path)
                 source.backup(target)
                 target.execute("PRAGMA wal_checkpoint(FULL)")
+            except Exception as exc:
+                if target is not None:
+                    target.close()
+                    target = None
+                if created:
+                    if (
+                        not backup_path.is_file()
+                        or backup_path.is_symlink()
+                        or _is_reparse_point(backup_path)
+                    ):
+                        raise RuntimeError(
+                            "SQLite 迁移备份文件类型异常，拒绝清理"
+                        ) from exc
+                    backup_path.unlink()
+                raise
             finally:
-                target.close()
+                if target is not None:
+                    try:
+                        target.close()
+                    except sqlite3.Error:
+                        pass
             try:
                 backup_path.chmod(0o600)
             except OSError:
@@ -275,11 +323,15 @@ class NasStore:
 
     def _prune_migration_backups(self) -> None:
         backup_dir = self.path.parent / "backups"
-        backups = sorted(
-            backup_dir.glob("bili_workspace-v*.db"),
-            key=lambda item: item.stat().st_mtime,
-            reverse=True,
-        )
+        candidates = list(backup_dir.glob("bili_workspace-v*.db"))
+        if any(
+            not candidate.is_file()
+            or candidate.is_symlink()
+            or _is_reparse_point(candidate)
+            for candidate in candidates
+        ):
+            raise RuntimeError("SQLite 迁移备份目录包含异常文件类型")
+        backups = sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True)
         for stale in backups[3:]:
             stale.unlink(missing_ok=True)
 
@@ -483,7 +535,11 @@ class NasStore:
         configured = os.getenv("BILI_BOOTSTRAP_TOKEN", "").strip()
         self._bootstrap_token = configured or secrets.token_urlsafe(24)
         if not configured:
-            self.bootstrap_path.write_text(self._bootstrap_token + "\n", encoding="utf-8")
+            atomic_write_text(
+                self.bootstrap_path,
+                self._bootstrap_token + "\n",
+                backup=False,
+            )
             try:
                 self.bootstrap_path.chmod(0o600)
             except OSError:
@@ -1643,12 +1699,7 @@ class NasStore:
                     "0:v:0",
                     "-map",
                     "0:a?",
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    "20",
+                    *_compatible_video_encode_args(self.runtime),
                     "-c:a",
                     "aac",
                     "-b:a",
@@ -1656,7 +1707,10 @@ class NasStore:
                     "-movflags",
                     "+faststart",
                 ]
-                if self.runtime.transcode_threads > 0:
+                if (
+                    self.runtime.transcode_threads > 0
+                    and not self.runtime.launcher_managed
+                ):
                     command += ["-threads", str(self.runtime.transcode_threads)]
                 command.append(str(output))
                 completed = subprocess.run(

@@ -1,9 +1,12 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.13-slim-bookworm
+FROM python:3.11-slim-bookworm@sha256:77923445c077d8eb971b14b2b114a1d9cd4a87edb4c75654820ca4832ee8cb15
 
 ARG TARGETARCH
 ARG BBDOWN_VERSION=1.6.3
 ARG BBDOWN_RELEASE_DATE=20240814
+# 两个摘要来自 BBDown 1.6.3 官方固定发布资产，禁止跨架构复用。
+ARG BBDOWN_AMD64_SHA256="ec233b7d8d40b1cc4447dac05be343f53a757dc605743a8808abaa8e97e5d10e"
+ARG BBDOWN_ARM64_SHA256="f58e0a18df1a589375428a0af27ea61f5ce96ffaf67d115f335d5f9bee9a34dc"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -41,15 +44,18 @@ RUN python -m pip install --no-cache-dir -r /app/requirements-runtime.lock
 RUN set -eux; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
     case "$arch" in \
-      amd64|x86_64) asset_arch='x64' ;; \
-      arm64|aarch64) asset_arch='arm64' ;; \
+      amd64|x86_64) asset_arch='x64'; expected_sha256="$BBDOWN_AMD64_SHA256" ;; \
+      arm64|aarch64) asset_arch='arm64'; expected_sha256="$BBDOWN_ARM64_SHA256" ;; \
       *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
+    test "${#expected_sha256}" -eq 64 || { echo "Missing fixed Linux ${asset_arch} BBDown SHA-256" >&2; exit 1; }; \
+    case "$expected_sha256" in *[!0-9a-f]*) echo 'Invalid BBDown SHA-256' >&2; exit 1 ;; esac; \
     archive="BBDown_${BBDOWN_VERSION}_${BBDOWN_RELEASE_DATE}_linux-${asset_arch}.zip"; \
     url="https://github.com/nilaoda/BBDown/releases/download/${BBDOWN_VERSION}/${archive}"; \
     mkdir -p /opt/bbdown /tmp/bbdown; \
     curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 \
       --output "/tmp/${archive}" "$url"; \
+    printf '%s  %s\n' "$expected_sha256" "/tmp/${archive}" | sha256sum -c -; \
     unzip -q "/tmp/${archive}" -d /tmp/bbdown; \
     bbdown_bin="$(find /tmp/bbdown -type f -name BBDown -print -quit)"; \
     test -n "$bbdown_bin"; \
@@ -63,8 +69,6 @@ RUN set -eux; \
 
 COPY app /app/app
 COPY web /app/web
-COPY config /app/config
-COPY .env.default /app/.env.default
 COPY THIRD_PARTY_NOTICES.md /app/THIRD_PARTY_NOTICES.md
 COPY LICENSES /app/LICENSES
 COPY docker/entrypoint.sh /usr/local/bin/bili-workspace-entrypoint

@@ -30,6 +30,18 @@ def test_server_mode_forces_authentication(monkeypatch, tmp_path):
     assert settings.auth_required is True
 
 
+def test_local_runtime_requires_explicit_external_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("BILI_APP_MODE", "local")
+    monkeypatch.delenv("BILI_CONFIG_DIR", raising=False)
+    with pytest.raises(ValueError, match="仓库外数据根"):
+        RuntimeSettings.from_env()
+
+    repository_config = Path(__file__).resolve().parent.parent / "runtime-config"
+    monkeypatch.setenv("BILI_CONFIG_DIR", str(repository_config))
+    with pytest.raises(ValueError, match="源码仓库外"):
+        RuntimeSettings.from_env()
+
+
 def test_wildcard_only_trusted_hosts_is_rejected(monkeypatch, tmp_path):
     _base(monkeypatch, tmp_path)
     monkeypatch.setenv("BILI_TRUSTED_HOSTS", "*")
@@ -71,6 +83,11 @@ def test_wildcard_trusted_proxy_is_rejected(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="可信代理地址"):
         RuntimeSettings.from_env()
 
+    _base(monkeypatch, tmp_path)
+    monkeypatch.setenv("BILI_TRUSTED_PROXY_IPS", "0.0.0.0/0")
+    with pytest.raises(ValueError, match="覆盖全部"):
+        RuntimeSettings.from_env()
+
 
 def test_https_origin_requires_secure_cookie_and_matching_trusted_host(monkeypatch, tmp_path):
     _base(monkeypatch, tmp_path)
@@ -82,6 +99,16 @@ def test_https_origin_requires_secure_cookie_and_matching_trusted_host(monkeypat
     monkeypatch.setenv("BILI_TRUSTED_HOSTS", "other.example.test")
     with pytest.raises(ValueError, match="PUBLIC_BASE_URL"):
         RuntimeSettings.from_env()
+
+    _base(monkeypatch, tmp_path)
+    monkeypatch.setenv("BILI_PUBLIC_BASE_URL", "HTTPS://BILI.EXAMPLE.TEST/")
+    monkeypatch.setenv("BILI_COOKIE_SECURE", "false")
+    with pytest.raises(ValueError, match="BILI_COOKIE_SECURE"):
+        RuntimeSettings.from_env()
+
+    monkeypatch.setenv("BILI_COOKIE_SECURE", "true")
+    settings = RuntimeSettings.from_env()
+    assert settings.public_base_url == "https://bili.example.test"
 
 
 def test_hsts_rejected_without_https(monkeypatch, tmp_path):
@@ -140,6 +167,24 @@ def test_invalid_bind_hostname_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("BILI_HOST", "-invalid.home")
     with pytest.raises(ValueError, match="BILI_HOST"):
         RuntimeSettings.from_env()
+    monkeypatch.setenv("BILI_HOST", "本机.example")
+    with pytest.raises(ValueError, match="BILI_HOST"):
+        RuntimeSettings.from_env()
+
+
+def test_ipv6_bind_host_is_canonicalized_for_socket_use(monkeypatch, tmp_path):
+    _base(monkeypatch, tmp_path)
+    monkeypatch.setenv("BILI_HOST", "[::]")
+    assert RuntimeSettings.from_env().host == "::"
+
+
+def test_ipv6_public_url_and_trusted_host_keep_url_brackets(monkeypatch, tmp_path):
+    _base(monkeypatch, tmp_path)
+    monkeypatch.setenv("BILI_PUBLIC_BASE_URL", "HTTPS://[2001:DB8::1]:8443/")
+    monkeypatch.setenv("BILI_TRUSTED_HOSTS", "2001:db8::1")
+    settings = RuntimeSettings.from_env()
+    assert settings.public_base_url == "https://[2001:db8::1]:8443"
+    assert settings.trusted_hosts == ("[2001:db8::1]",)
 
 
 def test_explicit_environment_port_overrides_local_json_config(monkeypatch, tmp_env, tmp_path):

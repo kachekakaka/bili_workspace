@@ -24,6 +24,7 @@
 
 ## 长期入口
 
+- [领域语言](CONTEXT.md)
 - [构建与交付](README.md#构建与交付)
 - [项目文档](docs/README.md)
 - [测试治理](SoftwareTesting/README.md)

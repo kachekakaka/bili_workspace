@@ -196,6 +196,44 @@ def test_only_three_recent_migration_backups_are_retained(tmp_path: Path) -> Non
         store.close()
 
 
+def test_migration_rejects_invalid_backup_directory_without_changing_database(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    _create_v2_database(runtime.database_path)
+    backup_dir = runtime.database_path.parent / "backups"
+    backup_dir.write_text("not-a-directory", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="备份目录类型无效"):
+        NasStore(runtime, IndexStore(runtime.media_dir))
+
+    with sqlite3.connect(runtime.database_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert backup_dir.read_text(encoding="utf-8") == "not-a-directory"
+
+
+def test_backup_pruning_rejects_abnormal_entries_before_deleting_anything(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    store = NasStore(runtime, IndexStore(runtime.media_dir))
+    try:
+        backup_dir = runtime.database_path.parent / "backups"
+        backup_dir.mkdir()
+        keep = backup_dir / "bili_workspace-v2-keep.db"
+        keep.write_bytes(b"keep")
+        abnormal = backup_dir / "bili_workspace-v2-abnormal.db"
+        abnormal.mkdir()
+
+        with pytest.raises(RuntimeError, match="异常文件类型"):
+            store._prune_migration_backups()
+
+        assert keep.read_bytes() == b"keep"
+        assert abnormal.is_dir()
+    finally:
+        store.close()
+
+
 def test_newer_schema_is_rejected_without_downgrade_or_backup(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     runtime.database_path.parent.mkdir(parents=True, exist_ok=True)

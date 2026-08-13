@@ -6,7 +6,7 @@ import time
 from typing import Any, Iterable
 
 from app.config_files import ensure_json_from_default
-from app.paths import ROOT
+from app.paths import defaults_dir
 from app.runtime import RuntimeSettings
 
 _TAG_SCHEMA = """
@@ -53,7 +53,7 @@ class TagStore:
         self.runtime = runtime
         self.path = runtime.database_path
         self.config_path = runtime.config_dir / "tags.json"
-        self.default_config_path = ROOT / "config" / "tags.json.default"
+        self.default_config_path = defaults_dir() / "tags.json.default"
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
             self.path, timeout=30, check_same_thread=False, isolation_level=None

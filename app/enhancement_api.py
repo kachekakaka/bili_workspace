@@ -367,13 +367,15 @@ def enhanced_network(request: Request):
 @router.post("/network/enable-lan")
 def enhanced_enable_lan(request: Request):
     state = _state(request)
-    data = state.config_store.as_dict()
+    if state.runtime.launcher_managed:
+        return _err("启动器模式的监听与安全配置只能在 Windows 启动器中修改", 409)
+    data = state.config_store.persisted_dict()
     data["host"] = "0.0.0.0"
     atomic_write_json(state.config_store.path, data, backup=True)
     return _ok(
         {
             "host": "0.0.0.0",
             "restart_required": True,
-            "message": "已设置为监听所有网卡。请重启 start.bat；重启后会强制启用管理员登录。",
+            "message": "已设置为监听所有网卡。请通过当前启动入口重启；重启后会强制启用管理员登录。",
         }
     )

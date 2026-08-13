@@ -5,7 +5,7 @@ from app.state import AppState
 from tests.conftest import StaticCookieChecker, artifact_runner
 
 
-def test_v04_index_is_imported_without_moving_media(tmp_env):
+def test_v04_index_is_imported_without_moving_media(tmp_env, external_runtime_environment):
     item_dir = tmp_env.download_dir / "groups" / "旧分组" / "items" / "BV0000000520"
     item_dir.mkdir(parents=True)
     media = item_dir / "旧作品 [BV0000000520] [1080P].mp4"
@@ -54,7 +54,9 @@ def test_v04_index_is_imported_without_moving_media(tmp_env):
         state.stop()
 
 
-def test_task_snapshots_survive_restart_and_running_becomes_interrupted(tmp_env):
+def test_task_snapshots_survive_restart_and_running_becomes_interrupted(
+    tmp_env, external_runtime_environment
+):
     first = AppState.create(
         config_path=tmp_env.config_path,
         initial_config=tmp_env.initial,
@@ -90,7 +92,7 @@ def test_task_snapshots_survive_restart_and_running_becomes_interrupted(tmp_env)
         second.stop()
 
 
-def test_index_sync_short_circuits_when_unchanged(tmp_env):
+def test_index_sync_short_circuits_when_unchanged(tmp_env, external_runtime_environment):
     state = AppState.create(
         config_path=tmp_env.config_path,
         initial_config=tmp_env.initial,
@@ -106,7 +108,9 @@ def test_index_sync_short_circuits_when_unchanged(tmp_env):
         state.stop()
 
 
-def test_running_snapshot_writes_are_debounced(tmp_env, monkeypatch):
+def test_running_snapshot_writes_are_debounced(
+    tmp_env, monkeypatch, external_runtime_environment
+):
     state = AppState.create(
         config_path=tmp_env.config_path,
         initial_config=tmp_env.initial,

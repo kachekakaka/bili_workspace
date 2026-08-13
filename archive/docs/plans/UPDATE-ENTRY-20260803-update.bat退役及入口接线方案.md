@@ -34,8 +34,8 @@
 ### 2.2 已确认的直接消费者
 
 - 入口和结构说明：[`docs/README.md`](../../../docs/README.md)、[`scripts/README.md`](../../../scripts/README.md)、[`docs/设计文档.md`](../../../docs/设计文档.md)。
-- 运维与配置事实：[`docs/运维/发布与回滚流程.md`](../../../docs/运维/发布与回滚流程.md)、[`config/README.md`](../../../config/README.md)。
-- 源码边界和结构机械断言：[`tools/verify_source.py`](../../../tools/verify_source.py)、[`tests/test_repository_layout.py`](../../../tests/test_repository_layout.py)、[`tests/test_integrated_runtime.py`](../../../tests/test_integrated_runtime.py)。
+- 运维与配置事实：[`docs/运维/发布与回滚流程.md`](../../../docs/运维/发布与回滚流程.md)、当时存在的 `config/README.md`（现已随旧 Windows 链退役）。
+- 源码边界和结构机械断言：[`tools/verify_source.py`](../../../tools/verify_source.py)、[`tests/test_repository_layout.py`](../../../tests/test_repository_layout.py)、当时存在的 `tests/test_integrated_runtime.py`（现已由 T-LAUNCHER 接替并退役）。
 - 条件式产品源码引用：[`app/build_info.py`](../../../app/build_info.py) 在施工前会在文件存在时把三个根入口纳入源码指纹；用户已裁决并实施移除其中的退役名称。
 - 施工前的 [`DOC-GOVERNANCE-20260803` 活动方案](DOC-GOVERNANCE-20260803-测试入口与授权边界收口.md) 曾以 Markdown 链接指向 `update.bat`；该方案现已按“已被替代”退出活动区并完成归档登记。
 

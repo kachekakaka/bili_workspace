@@ -180,3 +180,17 @@ def test_security_headers_are_applied_to_early_auth_rejections(server_client):
 def test_numeric_ip_host_is_allowed_for_phone_access(server_client):
     response = server_client.get("/api/auth/status", headers={"Host": "192.168.1.50:3389"})
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "host",
+    (
+        "192.168.1.50:0",
+        "192.168.1.50:65536",
+        "[::1]:70000",
+        "192.168.1.50:+123",
+    ),
+)
+def test_host_header_rejects_invalid_ports(server_client, host):
+    response = server_client.get("/api/auth/status", headers={"Host": host})
+    assert response.status_code == 400

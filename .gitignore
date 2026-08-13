@@ -21,15 +21,11 @@ Thumbs.db
 *.local
 config.json.bak
 bootstrap-token.txt
-BBDown_portable/BBDown.data
 **/BBDown.data
 
 # Runtime state
 downloads/*
-!downloads/.gitkeep
 userdata/*
-!userdata/.gitkeep
-!userdata/README.md
 *.db
 *.db-shm
 *.db-wal
@@ -43,24 +39,20 @@ userdata/*
 .tmp/
 .runtime/
 
-# Third-party executables extracted from repository-integrated packs
-BBDown_portable/BBDown.exe
-BBDown_portable/ffmpeg/bin/*
-!BBDown_portable/ffmpeg/bin/.gitkeep
+# Third-party build caches
 wheelhouse/
 RELEASE_MANIFEST.sha256
 
 # Build and release outputs
 build/
-dist/
+dist/*
+!dist/bili-workspace-launcher-0.7.0.exe
 release/
 *.zip
 *.rar
 *.tar
 *.tar.gz
 *.sha256
-vendor/windows/.build/
-vendor/windows/*.tmp
 
 # Generated configuration files (tracked templates use .default)
 config.json

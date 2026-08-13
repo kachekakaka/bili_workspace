@@ -26,3 +26,12 @@ def test_settings_keep_basic_fields_visible_and_fold_advanced_fields() -> None:
     for advanced_id in ("cfgTimeout", "cfgPoll", "cfgDfn", "cfgEncoding"):
         assert f'id="{advanced_id}"' in script
     assert script.index('id="cfgQuality"') < script.index("v062-settings-advanced")
+
+
+def test_settings_omits_fields_managed_by_the_current_startup_entry() -> None:
+    script = text("web/assets/app/pages/settings.mjs")
+    assert "configResponse.protected_fields" in script
+    assert "protectedFields.has('port')" in script
+    assert "protectedFields.has('download_dir')" in script
+    assert "if (!portProtected)" in script
+    assert "if (!downloadProtected)" in script

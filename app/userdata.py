@@ -6,12 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from app.index_store import INDEX_NAME, IndexStore
-from app.paths import ROOT
 from app.runtime import RuntimeSettings
 
 
 def _absolute_no_follow(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
+
+
+def legacy_path_migration_enabled() -> bool:
+    return os.getenv("BILI_DISABLE_LEGACY_MIGRATION", "").strip() != "1"
 
 
 def _move_regular_file(source: Path, target: Path) -> bool:
@@ -46,11 +49,13 @@ def migrate_legacy_database(runtime: RuntimeSettings) -> dict[str, Any]:
     """
     target = _absolute_no_follow(Path(runtime.database_path))
     target.parent.mkdir(parents=True, exist_ok=True)
-    candidates = [
-        Path(runtime.config_dir) / "bili_workspace.db",
-        ROOT / "config" / "bili_workspace.db",
-        ROOT / "bili_workspace.db",
-    ]
+    if not legacy_path_migration_enabled():
+        return {
+            "database_path": str(target),
+            "migrated": False,
+            "migrated_from": "",
+        }
+    candidates = [Path(runtime.config_dir) / "bili_workspace.db"]
     moved_from = ""
     for candidate in candidates:
         legacy = _absolute_no_follow(candidate)
@@ -84,12 +89,13 @@ class UserdataIndexStore(IndexStore):
             resolved.mkdir(parents=True, exist_ok=True)
             target.parent.mkdir(parents=True, exist_ok=True)
 
-            legacy = resolved / INDEX_NAME
-            moved = _move_regular_file(legacy, target)
-            legacy_backup = legacy.with_suffix(legacy.suffix + ".bak")
-            target_backup = target.with_suffix(target.suffix + ".bak")
-            if moved or not legacy.exists():
-                _move_regular_file(legacy_backup, target_backup)
+            if legacy_path_migration_enabled():
+                legacy = resolved / INDEX_NAME
+                moved = _move_regular_file(legacy, target)
+                legacy_backup = legacy.with_suffix(legacy.suffix + ".bak")
+                target_backup = target.with_suffix(target.suffix + ".bak")
+                if moved or not legacy.exists():
+                    _move_regular_file(legacy_backup, target_backup)
 
             self.download_dir = resolved
             self.path = target
