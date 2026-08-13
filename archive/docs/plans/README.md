@@ -8,6 +8,8 @@
 
 ## 已完成计划
 
+- [DOC-CONSISTENCY-20260813 现行文档与验证消费者一致性收口方案](DOC-CONSISTENCY-20260813-现行文档与验证消费者一致性收口.md)：已完成私密漏洞报告入口、测试治理退出职责、Actions 缓存、T-DOCKER 触发、历史 CI 条件、Windows 迁移说明和活动文档职责收口；
+- [DOC-BASELINE-20260813 文档骨架基线整理方案](DOC-BASELINE-20260813-文档骨架基线整理.md)：已完成 T-DOC 标准资产、历史引用、验证授权、T-DOCKER `affected_only` 归属和活动 suite 稳定化收口；
 - [WIN-LAUNCHER-20260812 Windows 单文件启动器与仓库外数据根方案](WIN-LAUNCHER-20260812-Windows单文件启动器与仓库外数据根方案.md)：已完成 Windows amd64 单文件启动器、仓库外数据根、局域网安全配置、离线工具、固定 Docker 导出协议、Python 3.11 统一与旧便携运行链退役；
 - [DOC-CONSISTENCY-20260809 运行资产、测试治理与界面契约一致性收口方案](DOC-CONSISTENCY-20260809-运行资产测试治理与界面契约收口.md)：已完成 Windows 0.5.7 运行资产身份、T-PROJECT 结果与浏览器隔离、界面高度和 CSS 分层、Docker 构建触发输入、第三方来源说明及 T-DOC 运行时排除边界收口；
 - [DOC-GOV-20260809 文档生命周期与 T-PROJECT 浏览器测试收口方案](DOC-GOV-20260809-文档生命周期与T-PROJECT浏览器测试收口.md)：已完成活动文档归档入口、项目级 Skill 资产排除、T-PROJECT Playwright 必需阶段、Windows 集成运行包补齐和 strict full 验证收口；

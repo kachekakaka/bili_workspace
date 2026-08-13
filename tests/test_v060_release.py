@@ -105,7 +105,6 @@ def test_ci_uses_one_python_311_baseline_for_all_active_jobs() -> None:
     assert 'python-version: "3.12"' not in workflow
     assert 'python-version: "3.13"' not in workflow
     assert "matrix.python-version" not in workflow
-    assert "github.head_ref == 'release/v0.7.0'" in workflow
     assert "product-validation:" in workflow
     assert "windows-validation:" in workflow
     assert "docker-validation:" in workflow
@@ -116,6 +115,10 @@ def test_ci_uses_one_python_311_baseline_for_all_active_jobs() -> None:
         "docker-release:",
         "Build release image",
         "bili-workspace:v0.7.0",
+        "github.head_ref == 'release/v0.7.0'",
+        "github.head_ref == 'agent/v060-release-validation'",
+        "github.head_ref == 'agent/v060-userless-db-migration'",
+        "github.head_ref == 'feature/ui-v0.6.2'",
     ):
         assert obsolete not in workflow
     assert "tests/test_v070_release.py" in workflow

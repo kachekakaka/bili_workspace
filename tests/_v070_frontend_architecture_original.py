@@ -209,9 +209,9 @@ def test_node_and_playwright_gates_are_in_ci() -> None:
     assert "T-PROJECT browser phase" in workflow
     assert "sh scripts/dev/run-playwright-phase.sh" in workflow
     assert "Upload isolated Playwright evidence" in workflow
-    assert "chromium_headless_shell-" in playwright_job
-    assert "chrome-headless-shell-linux64" in playwright_job
-    assert 'test -x "$browser"' in playwright_job
+    assert "playwright install" not in playwright_job
+    assert "chromium_headless_shell-" not in playwright_job
+    assert "GITHUB_ENV" not in playwright_job
     assert "python -m pytest" not in playwright_job
     assert "-m playwright" in browser_phase
     assert "tools/t_project_isolation.py create" in browser_phase

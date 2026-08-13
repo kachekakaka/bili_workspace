@@ -23,8 +23,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -74,8 +72,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -115,44 +111,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.lock
           python -m pip check
-      - name: Install Playwright Chromium
-        run: python -m playwright install --with-deps chromium
-      - name: Resolve installed Playwright headless shell
-        shell: bash
-        run: |
-          set -eu
-          browser="$(
-            python - <<'PY'
-          from pathlib import Path
-
-          from playwright.sync_api import sync_playwright
-
-          with sync_playwright() as playwright:
-              chromium = Path(playwright.chromium.executable_path)
-
-          browser_dir = chromium.parent.parent
-          prefix = "chromium-"
-          if not browser_dir.name.startswith(prefix):
-              raise SystemExit(f"unexpected Playwright Chromium path: {chromium}")
-          revision = browser_dir.name.removeprefix(prefix)
-          headless_shell = (
-              browser_dir.parent
-              / f"chromium_headless_shell-{revision}"
-              / "chrome-headless-shell-linux64"
-              / "chrome-headless-shell"
-          )
-          print(headless_shell)
-          PY
-          )"
-          test -x "$browser"
-          printf 'BILI_PLAYWRIGHT_CHROMIUM=%s\n' "$browser" >> "$GITHUB_ENV"
       - name: Run the T-PROJECT Playwright phase
         env:
           BILI_TEST_ROOT: ${{ runner.temp }}/bili_workspace_test
@@ -171,11 +134,7 @@ jobs:
   product-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.ref_name == 'main' ||
-      github.head_ref == 'release/v0.7.0' ||
-      github.head_ref == 'agent/v060-release-validation' ||
-      github.head_ref == 'agent/v060-userless-db-migration' ||
-      github.head_ref == 'feature/ui-v0.6.2'
+      github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -184,8 +143,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -210,11 +167,7 @@ jobs:
   windows-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.ref_name == 'main' ||
-      github.head_ref == 'release/v0.7.0' ||
-      github.head_ref == 'agent/v060-release-validation' ||
-      github.head_ref == 'agent/v060-userless-db-migration' ||
-      github.head_ref == 'feature/ui-v0.6.2'
+      github.ref_name == 'main'
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -228,11 +181,6 @@ jobs:
         with:
           python-version: "3.11"
           architecture: x64
-          cache: pip
-          cache-dependency-path: |
-            requirements/dev.lock
-            launcher/requirements.txt
-            launcher/requirements-dev.txt
       - name: Install unified development and launcher dependencies
         run: |
           python -m pip install --upgrade pip
@@ -246,11 +194,7 @@ jobs:
   docker-validation:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.ref_name == 'main' ||
-      github.head_ref == 'release/v0.7.0' ||
-      github.head_ref == 'agent/v060-release-validation' ||
-      github.head_ref == 'agent/v060-userless-db-migration' ||
-      github.head_ref == 'feature/ui-v0.6.2'
+      github.ref_name == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -260,8 +204,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements/dev.lock
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

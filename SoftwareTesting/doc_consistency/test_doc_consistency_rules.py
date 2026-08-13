@@ -231,6 +231,61 @@ class DocConsistencyRulesTest(unittest.TestCase):
         self.assert_has(errors, "docs/需求文档.md: 活动 Markdown 和归档索引必须使用 LF")
         self.assert_has(errors, "docs/设计文档.md: 必须是有效 UTF-8")
 
+    def test_project_skill_assets_are_excluded_without_broadening_scope(self) -> None:
+        skill_roots = (
+            ".agents/skills",
+            ".claude/skills",
+            ".codex/skills",
+            ".cursor/skills",
+            ".github/skills",
+            ".opencode/skill",
+            ".opencode/skills",
+            "packages/example/.cursor/skills",
+        )
+        for index, root in enumerate(skill_roots):
+            skill = self.root / root / f"example-{index}" / "SKILL.md"
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_bytes(
+                b"# Project skill\r\n\r\n[missing](missing.md)\r\n"
+                b"C:\\Users\\example\\private\r\n"
+            )
+            self.write(f"{root}/example-{index}/CONTEXT.md", "# Skill context\n")
+
+        self.assert_clean()
+
+        adjacent_paths = (
+            ".agents/notes.md",
+            ".claude/notes.md",
+            ".codex/notes.md",
+            ".cursor/notes.md",
+            ".github/notes.md",
+            ".opencode/notes.md",
+        )
+        for relative in adjacent_paths:
+            self.write(relative, "# Notes\n\n[missing](missing.md)\n")
+        self.write("tooling/SKILL.md", "# Tool source\n\n[missing](missing.md)\n")
+
+        errors, _ = self.issues()
+        for relative in adjacent_paths:
+            self.assert_has(errors, f"{relative}: 链接目标不存在: missing.md")
+        self.assert_has(errors, "tooling/SKILL.md: 链接目标不存在: missing.md")
+
+    def test_top_level_markdown_root_requires_direct_owner(self) -> None:
+        self.write("handbook/README.md", "# 项目手册\n")
+
+        errors, _ = self.issues()
+        self.assert_has(
+            errors,
+            "handbook/: 含活动 Markdown 的顶层目录必须由 README.md、docs/README.md "
+            "或 SoftwareTesting/README.md 直接链接目录内 Markdown 所有者入口",
+        )
+
+        self.write(
+            "README.md",
+            self.read("README.md") + "\n- [项目手册](handbook/README.md)\n",
+        )
+        self.assert_clean()
+
     def test_local_link_and_heading_anchor_are_checked(self) -> None:
         self.write(
             "docs/需求文档.md",
@@ -535,65 +590,16 @@ C:\\Users\\example\\project
             "当前承接真源必须链接一个项目内活动 Markdown",
         )
 
-    def test_active_markdown_may_link_archive_index_but_not_body(self) -> None:
+    def test_active_navigation_may_link_archive_index_but_not_body(self) -> None:
         self.add_valid_archive()
         self.assert_clean()
 
         self.write(
-            "docs/需求文档.md",
-            self.read("docs/需求文档.md")
-            + "- [归档索引](../archive/docs/README.md)\n"
-            + "- [旧设计](../archive/docs/旧设计.md)\n",
+            "AGENTS.md",
+            self.read("AGENTS.md") + "- [旧设计](archive/docs/旧设计.md)\n",
         )
         errors, _ = self.issues()
-        self.assert_has(
-            errors,
-            "docs/需求文档.md: 活动 Markdown 不得直接链接归档正文",
-        )
-
-    def test_project_skill_assets_are_excluded_without_ignoring_other_skill_files(
-        self,
-    ) -> None:
-        skill_roots = (
-            ".agents/skills",
-            ".cursor/skills",
-            ".claude/skills",
-            ".codex/skills",
-            ".opencode/skills",
-            ".opencode/skill",
-            ".github/skills",
-            "nested/.codex/skills",
-        )
-        for skill_root in skill_roots:
-            self.write(
-                f"{skill_root}/example/SKILL.md",
-                "# 项目 Agent Skill\n\n[内部资源](missing.md)\n",
-            )
-        self.write(
-            ".codex/skills/example/CONTEXT.md",
-            "# Skill 上下文\n\n[内部资源](missing.md)\n",
-        )
-        self.assert_clean()
-
-        self.write("tools/SKILL.md", "# 普通文档\n\n[失效链接](missing.md)\n")
-        errors, _ = self.issues()
-        self.assert_has(errors, "tools/SKILL.md: 链接目标不存在")
-
-    def test_generated_runtime_markdown_is_excluded_without_ignoring_project_licenses(
-        self,
-    ) -> None:
-        self.write(
-            ".runtime/python/Lib/site-packages/example/LICENSE.md",
-            "# 依赖许可证\n\n[内部资源](missing.md)\n",
-        )
-        self.assert_clean()
-
-        self.write(
-            "licenses/LICENSE.md",
-            "# 项目许可证说明\n\n[失效链接](missing.md)\n",
-        )
-        errors, _ = self.issues()
-        self.assert_has(errors, "licenses/LICENSE.md: 链接目标不存在")
+        self.assert_has(errors, "AGENTS.md: 活动导航不得直接链接归档正文")
 
     def test_root_and_docs_index_duplicate_direct_links_are_warning(self) -> None:
         self.write(

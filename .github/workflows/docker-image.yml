@@ -8,12 +8,28 @@ on:
       - app/**
       - web/**
       - app/defaults/**
+      - .dockerignore
       - docker/**
       - docker/Dockerfile
       - docker/compose.yaml
       - requirements/runtime.lock
       - THIRD_PARTY_NOTICES.md
       - LICENSES/**
+      - .github/workflows/ci.yml
+      - .github/workflows/docker-image.yml
+  pull_request:
+    paths:
+      - app/**
+      - web/**
+      - app/defaults/**
+      - .dockerignore
+      - docker/**
+      - docker/Dockerfile
+      - docker/compose.yaml
+      - requirements/runtime.lock
+      - THIRD_PARTY_NOTICES.md
+      - LICENSES/**
+      - .github/workflows/ci.yml
       - .github/workflows/docker-image.yml
 
 permissions:
@@ -46,5 +62,3 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: false
           tags: bili-workspace:validation
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

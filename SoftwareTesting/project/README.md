@@ -25,6 +25,6 @@ sh scripts/dev/verify-source.sh
 
 入口会先在仓库外测试根创建带所有权标记的独立 run-id，将配置、浏览器 profile、缓存和临时输出重定向到该目录，并默认保留。源码环境需要项目锁定的开发依赖；日志和 `results/result.json` 位于命令最后显示的绝对路径中。
 
-T-PROJECT 不执行 T-DOC，完整测试应按协议另行运行文档门禁。缺少运行时、Node、Playwright 包或可用浏览器且尚未进入检查阶段时为 `blocked`；必需阶段被跳过为 `inconclusive`；进入检查阶段后的断言、静态检查或行为失败为 `failed`；中断或运行器异常为 `inconclusive`。测试根可通过 `BILI_TEST_ROOT` 覆盖，但必须满足[测试安全](../SAFETY.md)中的外部路径与所有权规则。
+T-PROJECT 不执行 T-DOC，也不执行 T-DOCKER 的真实镜像构建；其中的 Docker 配置与 Python 静态／逻辑检查不能替代这两个独立测试项。完整测试应按 Registry 和协议分别选择。缺少运行时、Node、Playwright 包或可用浏览器且尚未进入检查阶段时为 `blocked`；必需阶段被跳过为 `inconclusive`；进入检查阶段后的断言、静态检查或行为失败为 `failed`；中断或运行器异常为 `inconclusive`。测试根可通过 `BILI_TEST_ROOT` 覆盖，但必须满足[测试安全](../SAFETY.md)中的外部路径与所有权规则。
 
 测试不得访问真实持久化目录、外部网络、用户浏览器 profile 或凭据，也不会自动清理运行目录。进程、浏览器和清理约束见[测试安全](../SAFETY.md)。

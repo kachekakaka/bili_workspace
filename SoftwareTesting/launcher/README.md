@@ -43,7 +43,7 @@ build\launcher-candidate\bili-workspace-launcher-0.7.0.exe --self-check
 - 没有系统 Python、BBDown、FFmpeg 且启动时断网时，EXE 仍能启动并使用内置工具；
 - 真实 Docker Engine 生成规定的 `linux/amd64` tar、`.tar.sha256`、JSON，三者身份一致；中断恢复和精确临时镜像清理不调用通用 prune。
 
-这些是产品或外部进程验证，不能作为普通测试擅自运行，也不能使用真实用户数据根、Cookie、数据库或媒体。2026-08-13 已完成本机、局域网、安全失败关闭、端口冲突与进程所有权产品冒烟；断网干净机、Windows 会话关闭事件和真实 Docker 仍保留为未执行的独立验收。
+这些是产品或外部进程验证，不能作为普通测试擅自运行，也不能使用真实用户数据根、Cookie、数据库或媒体。这里的 Docker 阶段只承接启动器固定 `linux/amd64` 离线三件套的事务、身份与恢复协议；当前项目镜像的一般 amd64／arm64 实际构建由 [T-DOCKER](../docker/README.md) 承接。
 
 ## 关键断言
 
@@ -60,7 +60,3 @@ build\launcher-candidate\bili-workspace-launcher-0.7.0.exe --self-check
 ## 结果
 
 适用阶段全部以退出码 `0` 完成才是 `passed`。断言失败为 `failed`；缺少已要求的 Windows/Python/固定依赖或授权为 `blocked`；GUI 被跳过、打包/产品/Docker阶段适用却未执行时为 `inconclusive`。动态候选哈希、运行时间、真实 Docker 镜像 ID 和人工验收记录留在仓库外证据中；`launcher/current-build.json` 只承接当前规范 EXE 的稳定身份。
-
-2026-08-13 的产品试运行使用任务专属临时控制根与数据根，不接触真实 Cookie、数据库或媒体。最终试运行版 `build_id` 为 `663052a275a2`，平台 `windows/amd64`，大小 83,403,230 字节，SHA-256 为 `de6f066341fcd542f73770ae0b215300a9458f6d32da55bec02ada9690476b5e`，资源清单 SHA-256 为 `4b1b165791f49db649d78d1e8b2d462b2ae1917b7a52f8d47cfa39c2721560df`；EXE 自检、本机登录与首次改密、设置页路径归属、局域网监听、Host/代理/Cookie/HSTS、四类非法配置失败关闭、端口冲突不抢占、显式退出、Job Object 异常退出和遗留会话回收均通过。断网干净机和 Windows 会话关闭事件未单独执行；真实 Docker 仍是独立授权阶段。
-
-旧链退役后的正式树已重新生成 `dist/bili-workspace-launcher-0.7.0.exe`：`build_id` 为 `bb73fbe40cab`，大小 83,403,582 字节，SHA-256 为 `4a878e973f92f32947fc6e28ad356a8c4214dad781eff35b4cd2b78fa63430ba`，资源清单 SHA-256 为 `a74452b94d1e6ea62a5d837a0b8d6d999a69e2a1cdb95e187b0ba2b68a5974ba`；构建器记录 Python 3.11.1、PyInstaller 6.22.0、PySide6 6.11.1、Windows amd64，内部 EXE 自检已执行。

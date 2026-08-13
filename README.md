@@ -17,8 +17,9 @@
 
 - `app/`：Python 后端；
 - `web/`：浏览器前端；
-- `launcher/`：Windows amd64 单文件启动器源码、固定依赖与许可材料；
+- `launcher/`：Windows amd64 单文件启动器源码、固定依赖与许可材料；源码重链接与布局边界见[启动器重链接说明](launcher/RELINKING.md)；
 - `app/defaults/`：Windows 启动器与 Docker 共用的只读配置模板；
+- `scripts/`：[开发、构建与验证脚本入口](scripts/README.md)；
 - `docs/`：当前项目文档；
 - `SoftwareTesting/`：测试治理与活动测试入口。
 
@@ -48,6 +49,8 @@ Docker 镜像打包、校验和离线交付按[运维入口](docs/运维/README.
 
 - [项目文档总入口](docs/README.md)
 - [测试治理总入口](SoftwareTesting/README.md)
+- [安全政策](SECURITY.md)
+- [第三方声明](THIRD_PARTY_NOTICES.md)
 
 ## 已知边界
 

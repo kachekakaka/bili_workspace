@@ -57,9 +57,12 @@ def test_v070_release_regression_now_enforces_no_formal_publication() -> None:
         "platforms: linux/amd64,linux/arm64",
         "push: false",
         "Build amd64/arm64 image without publishing",
+        "pull_request:",
+        "- .dockerignore",
         "- app/defaults/**",
         "- THIRD_PARTY_NOTICES.md",
         "- LICENSES/**",
+        "- .github/workflows/ci.yml",
     ):
         assert token in docker
     for forbidden in (
@@ -86,6 +89,29 @@ def test_v070_release_regression_now_enforces_no_formal_publication() -> None:
     ):
         assert forbidden not in active_workflows
     assert "停止未来的正式发布" in decision
+
+
+def test_active_validation_workflows_do_not_install_browsers_or_persist_caches() -> None:
+    workflows = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+    }
+    combined = "\n".join(workflows.values())
+    for forbidden in (
+        "cache: pip",
+        "cache-dependency-path:",
+        "cache-from: type=gha",
+        "cache-to: type=gha",
+    ):
+        assert forbidden not in combined
+
+    ci = workflows["ci.yml"]
+    playwright_job = ci.split("\n  playwright:\n", 1)[1].split(
+        "\n  product-validation:\n", 1
+    )[0]
+    assert "playwright install" not in playwright_job
+    assert "chromium_headless_shell-" not in playwright_job
+    assert "sh scripts/dev/run-playwright-phase.sh" in playwright_job
 
 
 def test_v070_historical_docs_are_archived_and_current_facts_are_routed() -> None:

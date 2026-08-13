@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 import unicodedata
 from collections import Counter, deque
 from pathlib import Path
@@ -18,7 +19,6 @@ IGNORED_PARTS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
-    ".runtime",
     ".venv",
     "__pycache__",
     "build",
@@ -26,14 +26,16 @@ IGNORED_PARTS = {
     "node_modules",
     "venv",
 }
-PROJECT_SKILL_ROOTS = (
-    (".agents", "skills"),
-    (".cursor", "skills"),
-    (".claude", "skills"),
-    (".codex", "skills"),
-    (".opencode", "skills"),
-    (".opencode", "skill"),
-    (".github", "skills"),
+PROJECT_SKILL_ROOTS = frozenset(
+    {
+        (".agents", "skills"),
+        (".claude", "skills"),
+        (".codex", "skills"),
+        (".cursor", "skills"),
+        (".github", "skills"),
+        (".opencode", "skill"),
+        (".opencode", "skills"),
+    }
 )
 REQUIRED_FILES = (
     "AGENTS.md",
@@ -73,6 +75,12 @@ REQUIRED_NAVIGATION = {
         ("SoftwareTesting/doc_consistency/README.md", None),
     ),
 }
+TOP_LEVEL_OWNER_FILES = (
+    "README.md",
+    "docs/README.md",
+    "SoftwareTesting/README.md",
+)
+STANDARD_TOP_LEVEL_ROOTS = frozenset({"SoftwareTesting", "archive", "docs"})
 MACHINE_FILES = (
     "AGENTS.md",
     "README.md",
@@ -105,18 +113,24 @@ ABSOLUTE_USER_PATH_RE = re.compile(
 )
 
 
+def _is_project_skill_asset(path: Path, root: Path) -> bool:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return False
+    return any(
+        parts[index : index + 2] in PROJECT_SKILL_ROOTS
+        for index in range(len(parts) - 1)
+    )
+
+
 def _ignored(path: Path, root: Path) -> bool:
     try:
         relative = path.relative_to(root)
     except ValueError:
         return True
-    parts = relative.parts
-    if any(part in IGNORED_PARTS for part in parts):
-        return True
-    return any(
-        parts[index : index + len(skill_root)] == skill_root
-        for skill_root in PROJECT_SKILL_ROOTS
-        for index in range(len(parts) - len(skill_root) + 1)
+    return _is_project_skill_asset(path, root) or any(
+        part in IGNORED_PARTS for part in relative.parts
     )
 
 
@@ -417,6 +431,37 @@ def _check_docs_reachability(root: Path, errors: list[str]) -> None:
                 f"{path.relative_to(root).as_posix()}: "
                 "活动文档不能从 docs/README.md 通过两次实际 Markdown 链接到达"
             )
+
+
+def _check_top_level_markdown_ownership(root: Path, errors: list[str]) -> None:
+    candidates = sorted(
+        {
+            path.relative_to(root).parts[0]
+            for path in _active_markdown(root)
+            if len(path.relative_to(root).parts) > 1
+            and path.relative_to(root).parts[0] not in STANDARD_TOP_LEVEL_ROOTS
+        }
+    )
+    owner_targets: set[Path] = set()
+    for relative in TOP_LEVEL_OWNER_FILES:
+        owner = root / relative
+        content = _read_text(owner)
+        if content is None:
+            continue
+        owner_targets.update(
+            target.resolve(strict=False)
+            for _, target, _ in _local_links(content, owner)
+            if target.is_file() and target.suffix.lower() == ".md"
+        )
+
+    for name in candidates:
+        candidate = root / name
+        if any(_is_within(target, candidate) for target in owner_targets):
+            continue
+        errors.append(
+            f"{name}/: 含活动 Markdown 的顶层目录必须由 README.md、"
+            "docs/README.md 或 SoftwareTesting/README.md 直接链接目录内 Markdown 所有者入口"
+        )
 
 
 def _suite_readmes(root: Path) -> list[Path]:
@@ -809,19 +854,25 @@ def _check_archive_area(root: Path, relative: str, errors: list[str]) -> None:
 
 
 def _check_archive_navigation(root: Path, errors: list[str]) -> None:
+    navigation_files = (
+        "AGENTS.md",
+        "README.md",
+        "docs/README.md",
+        "SoftwareTesting/README.md",
+    )
     allowed = {
         (root / "archive/docs/README.md").resolve(strict=False),
         (root / "archive/SoftwareTesting/README.md").resolve(strict=False),
     }
-    for path in _active_markdown(root):
-        relative = path.relative_to(root).as_posix()
+    for relative in navigation_files:
+        path = root / relative
         content = _read_text(path)
         if content is None:
             continue
         for raw, target, _ in _local_links(content, path):
             if _is_archive(target, root) and target not in allowed:
                 errors.append(
-                    f"{relative}: 活动 Markdown 不得直接链接归档正文: {raw}"
+                    f"{relative}: 活动导航不得直接链接归档正文: {raw}"
                 )
 
 
@@ -898,6 +949,7 @@ def collect_doc_consistency(
     _check_markdown_files(workspace, errors)
     _check_navigation(workspace, errors)
     _check_docs_reachability(workspace, errors)
+    _check_top_level_markdown_ownership(workspace, errors)
     _check_suite_navigation(workspace, errors)
     backlog, backlog_plan_targets = _parse_backlog(workspace, errors)
     _check_plans(workspace, backlog, backlog_plan_targets, errors)
