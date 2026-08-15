@@ -597,6 +597,16 @@ def discard_export(request: Request, task_id: str):
     return ok({"discarded": True})
 
 
+def _sse_counts_changed(queue, export_queue, *, last_library: int, last_export: int) -> tuple[bool, int, int]:
+    library_count = queue.change_count()
+    export_count = export_queue.change_count()
+    return (
+        library_count != last_library or export_count != last_export,
+        library_count,
+        export_count,
+    )
+
+
 @router.get("/events")
 async def events(
     request: Request,
@@ -610,6 +620,8 @@ async def events(
         last = ""
         last_keepalive = 0.0
         last_auth_check = time.monotonic()
+        last_library_count = -1
+        last_export_count = -1
         while True:
             if await request.is_disconnected():
                 break
@@ -621,6 +633,19 @@ async def events(
                 if not state.nas.session_is_active(session_id):
                     break
                 last_auth_check = now_mono
+            changed, last_library_count, last_export_count = _sse_counts_changed(
+                state.queue,
+                state.export_queue,
+                last_library=last_library_count,
+                last_export=last_export_count,
+            )
+            if not changed:
+                # Nothing changed: skip full recomputation, keepalive only.
+                if now_mono - last_keepalive >= SSE_AUTH_HEARTBEAT_SECONDS:
+                    yield ": keepalive\n\n"
+                    last_keepalive = now_mono
+                await asyncio.sleep(1.0)
+                continue
             items = _list_records(request, owner_user_id=owner_user_id)
             event_data = {"tasks": items, "summary": _summary(items)}
             fingerprint = json.dumps(

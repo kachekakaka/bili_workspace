@@ -8,6 +8,8 @@
 
 ## 已完成计划
 
+- [BBDOWN-20260815 Windows 启动器 BBDown 子进程缺陷修复方案](BBDOWN-20260815-Windows启动器BBDown子进程缺陷修复.md)：已完成 BBDown 子进程三处修复（预览/下载无命令窗口、中文输出探测解码、凭据同步到可执行目录并开放启动器资源白名单），自用 EXE 重建并验收通过；
+- [TASKS-20260815 任务页性能优化方案](TASKS-20260815-任务页性能优化.md)：已完成 SSE 按变更计数推送与前端差量渲染，空闲零后台负载、任务页流畅，验收通过；
 - [DOC-CONSISTENCY-20260813 现行文档与验证消费者一致性收口方案](DOC-CONSISTENCY-20260813-现行文档与验证消费者一致性收口.md)：已完成私密漏洞报告入口、测试治理退出职责、Actions 缓存、T-DOCKER 触发、历史 CI 条件、Windows 迁移说明和活动文档职责收口；
 - [DOC-BASELINE-20260813 文档骨架基线整理方案](DOC-BASELINE-20260813-文档骨架基线整理.md)：已完成 T-DOC 标准资产、历史引用、验证授权、T-DOCKER `affected_only` 归属和活动 suite 稳定化收口；
 - [WIN-LAUNCHER-20260812 Windows 单文件启动器与仓库外数据根方案](WIN-LAUNCHER-20260812-Windows单文件启动器与仓库外数据根方案.md)：已完成 Windows amd64 单文件启动器、仓库外数据根、局域网安全配置、离线工具、固定 Docker 导出协议、Python 3.11 统一与旧便携运行链退役；

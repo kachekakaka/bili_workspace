@@ -18,6 +18,7 @@ const viewState = {
   summary: {},
   users: [],
   selected: new Set(),
+  signatures: new Map(),
   ownerUserId: '',
   status: '',
   destination: '',
@@ -113,7 +114,22 @@ function taskCard(task, admin) {
   const quality = [task.selected_quality, task.selected_resolution, task.selected_codec, task.selected_fps].filter(Boolean).join(' · ');
   const exportReady = task.destination === 'device' && task.status === 'success' && task.export_state !== 'downloaded';
   const owner = admin ? `<div class="enh-task-owner">用户：${esc(ownerLabel(task))}</div>` : '';
-  return `<article class="task-card" data-task-id="${esc(task.id)}" data-owner-user-id="${esc(task.owner_user_id || '')}"><div class="task-main"><div class="toolbar"><label class="enh-task-selector"><input type="checkbox" data-task-select="${esc(task.id)}" ${selected ? 'checked' : ''}> 选择</label><span class="badge ${taskStatusClass(task)}">${esc(taskStatusLabel(task))}</span><span class="badge ${task.destination === 'device' ? 'warn' : 'brand'}">${esc(task.destination_label || (task.destination === 'device' ? '设备导出' : '媒体库'))}</span>${task.selected_quality ? `<span class="badge neutral">${esc(task.selected_quality)}</span>` : ''}</div>${owner}<div class="task-title" style="margin-top:9px">${esc(task.display_title || task.title || task.bvid || task.key)}</div><div class="task-sub"><span>${esc(task.bvid || task.key)}</span>${task.destination === 'library' ? `<span>分组：${esc(task.group || '未分组')}</span>` : ''}<span>最低：${esc(task.min_height_label || task.min_height || '不限制')}</span><span>${task.preferred_quality ? `指定：${esc(task.preferred_quality)}` : '自动最高'}</span>${task.duration ? `<span>时长：${esc(task.duration)}</span>` : ''}${part ? `<span>${esc(part)}</span>` : ''}<span>${esc(task.phase_label || '')}</span>${task.created_at ? `<span>创建：${esc(formatDate(task.created_at))}</span>` : ''}</div><div class="enh-task-meta">${size ? `<span>当前大小 <strong>${esc(size)}</strong></span>` : ''}${task.speed_text ? `<span>速度 <strong>${esc(task.speed_text)}</strong></span>` : ''}${task.eta_text ? `<span>剩余 <strong>${esc(task.eta_text)}</strong></span>` : ''}${percent != null ? `<span>进度 <strong>${percent.toFixed(percent >= 10 ? 0 : 1)}%</strong></span>` : ''}${task.queue_position ? `<span>队列位置 <strong>${task.queue_position}</strong></span>` : ''}${task.elapsed_sec ? `<span>耗时 <strong>${Math.round(task.elapsed_sec)} 秒</strong></span>` : ''}</div>${quality ? `<div class="metric-foot" style="margin-top:7px">实际：${esc(quality)}</div>` : ''}${active ? `<div class="progress ${percent == null ? 'indeterminate' : ''}" title="${esc(task.progress_message || task.phase_label || '')}"><span style="width:${percent == null ? 38 : percent}%"></span></div>` : ''}${paused && size ? `<div class="progress"><span style="width:${percent == null ? 0 : percent}%"></span></div>` : ''}${task.progress_message && active ? `<div class="metric-foot enh-progress-message">${esc(task.progress_message)}</div>` : ''}${task.error && ['failed', 'cancelled'].includes(task.status) ? `<div class="notice ${paused ? 'warn' : 'bad'}" style="margin-top:10px">${esc(task.error)}</div>` : ''}</div><div class="task-side"><button type="button" class="btn small" data-task-log="${esc(task.id)}">日志</button>${active ? `<button type="button" class="btn small" data-task-action="pause" data-task-action-id="${esc(task.id)}">暂停</button><button type="button" class="btn danger small" data-task-action="cancel" data-task-action-id="${esc(task.id)}">取消</button>` : ''}${paused ? `<button type="button" class="btn primary small" data-task-action="resume" data-task-action-id="${esc(task.id)}">继续</button><button type="button" class="btn small" data-task-edit-retry="${esc(task.id)}">编辑后重试</button>` : ''}${task.status === 'failed' || (task.status === 'cancelled' && !paused) ? `<button type="button" class="btn primary small" data-task-action="retry" data-task-action-id="${esc(task.id)}">重试</button><button type="button" class="btn small" data-task-edit-retry="${esc(task.id)}">编辑画质</button>` : ''}${terminal && !active ? `<button type="button" class="btn danger small" data-task-action="delete" data-task-action-id="${esc(task.id)}">删除记录</button>` : ''}${admin && task.destination === 'library' && task.status === 'success' ? `<button type="button" class="btn small" data-task-library="${esc(task.bvid || task.key)}">作品库</button>` : ''}${exportReady ? `<a class="btn primary small" href="/api/exports/${encodeURIComponent(task.id)}/download">下载到设备</a><button type="button" class="btn danger small" data-task-discard-export="${esc(task.id)}">删除临时文件</button>` : ''}</div></article>`;
+  return `<div class="task-main"><div class="toolbar"><label class="enh-task-selector"><input type="checkbox" data-task-select="${esc(task.id)}" ${selected ? 'checked' : ''}> 选择</label><span class="badge ${taskStatusClass(task)}">${esc(taskStatusLabel(task))}</span><span class="badge ${task.destination === 'device' ? 'warn' : 'brand'}">${esc(task.destination_label || (task.destination === 'device' ? '设备导出' : '媒体库'))}</span>${task.selected_quality ? `<span class="badge neutral">${esc(task.selected_quality)}</span>` : ''}</div>${owner}<div class="task-title" style="margin-top:9px">${esc(task.display_title || task.title || task.bvid || task.key)}</div><div class="task-sub"><span>${esc(task.bvid || task.key)}</span>${task.destination === 'library' ? `<span>分组：${esc(task.group || '未分组')}</span>` : ''}<span>最低：${esc(task.min_height_label || task.min_height || '不限制')}</span><span>${task.preferred_quality ? `指定：${esc(task.preferred_quality)}` : '自动最高'}</span>${task.duration ? `<span>时长：${esc(task.duration)}</span>` : ''}${part ? `<span>${esc(part)}</span>` : ''}<span>${esc(task.phase_label || '')}</span>${task.created_at ? `<span>创建：${esc(formatDate(task.created_at))}</span>` : ''}</div><div class="enh-task-meta">${size ? `<span>当前大小 <strong>${esc(size)}</strong></span>` : ''}${task.speed_text ? `<span>速度 <strong>${esc(task.speed_text)}</strong></span>` : ''}${task.eta_text ? `<span>剩余 <strong>${esc(task.eta_text)}</strong></span>` : ''}${percent != null ? `<span>进度 <strong>${percent.toFixed(percent >= 10 ? 0 : 1)}%</strong></span>` : ''}${task.queue_position ? `<span>队列位置 <strong>${task.queue_position}</strong></span>` : ''}${task.elapsed_sec ? `<span>耗时 <strong>${Math.round(task.elapsed_sec)} 秒</strong></span>` : ''}</div>${quality ? `<div class="metric-foot" style="margin-top:7px">实际：${esc(quality)}</div>` : ''}${active ? `<div class="progress ${percent == null ? 'indeterminate' : ''}" title="${esc(task.progress_message || task.phase_label || '')}"><span style="width:${percent == null ? 38 : percent}%"></span></div>` : ''}${paused && size ? `<div class="progress"><span style="width:${percent == null ? 0 : percent}%"></span></div>` : ''}${task.progress_message && active ? `<div class="metric-foot enh-progress-message">${esc(task.progress_message)}</div>` : ''}${task.error && ['failed', 'cancelled'].includes(task.status) ? `<div class="notice ${paused ? 'warn' : 'bad'}" style="margin-top:10px">${esc(task.error)}</div>` : ''}</div><div class="task-side"><button type="button" class="btn small" data-task-log="${esc(task.id)}">日志</button>${active ? `<button type="button" class="btn small" data-task-action="pause" data-task-action-id="${esc(task.id)}">暂停</button><button type="button" class="btn danger small" data-task-action="cancel" data-task-action-id="${esc(task.id)}">取消</button>` : ''}${paused ? `<button type="button" class="btn primary small" data-task-action="resume" data-task-action-id="${esc(task.id)}">继续</button><button type="button" class="btn small" data-task-edit-retry="${esc(task.id)}">编辑后重试</button>` : ''}${task.status === 'failed' || (task.status === 'cancelled' && !paused) ? `<button type="button" class="btn primary small" data-task-action="retry" data-task-action-id="${esc(task.id)}">重试</button><button type="button" class="btn small" data-task-edit-retry="${esc(task.id)}">编辑画质</button>` : ''}${terminal && !active ? `<button type="button" class="btn danger small" data-task-action="delete" data-task-action-id="${esc(task.id)}">删除记录</button>` : ''}${admin && task.destination === 'library' && task.status === 'success' ? `<button type="button" class="btn small" data-task-library="${esc(task.bvid || task.key)}">作品库</button>` : ''}${exportReady ? `<a class="btn primary small" href="/api/exports/${encodeURIComponent(task.id)}/download">下载到设备</a><button type="button" class="btn danger small" data-task-discard-export="${esc(task.id)}">删除临时文件</button>` : ''}</div></div>`;
+}
+
+function taskArticle(task, admin) {
+  return `<article class="task-card" data-task-id="${esc(task.id)}" data-owner-user-id="${esc(task.owner_user_id || '')}">${taskCard(task, admin)}</article>`;
+}
+
+function taskSignature(task) {
+  return JSON.stringify([
+    task.id, task.status, task.progress_percent, task.progress_message,
+    task.downloaded_bytes, task.total_bytes, task.speed_text, task.eta_text,
+    task.selected_quality, task.selected_resolution, task.selected_codec, task.selected_fps,
+    task.phase_label, task.queue_position, task.error, task.export_state,
+    task.display_title, task.title, task.group, task.elapsed_sec,
+    task.current_part, task.part_total, task.quality_summary,
+  ]);
 }
 
 function groupedMarkup(tasks, admin) {
@@ -123,7 +139,7 @@ function groupedMarkup(tasks, admin) {
     if (!groups.has(key)) groups.set(key, { label: ownerLabel(task), items: [] });
     groups.get(key).items.push(task);
   }
-  return [...groups.values()].map(group => `<section class="enh-task-user-group"><div class="enh-task-user-group-head"><h3>${esc(group.label)}</h3><span class="badge neutral">${group.items.length} 个任务</span></div><div class="task-list">${group.items.map(task => taskCard(task, admin)).join('')}</div></section>`).join('');
+  return [...groups.values()].map(group => `<section class="enh-task-user-group"><div class="enh-task-user-group-head"><h3>${esc(group.label)}</h3><span class="badge neutral">${group.items.length} 个任务</span></div><div class="task-list">${group.items.map(task => taskArticle(task, admin)).join('')}</div></section>`).join('');
 }
 
 function queryString(admin) {
@@ -161,7 +177,54 @@ export async function mount(root, context) {
     const summary = viewState.summary || {};
     const connectionNote = ['reconnecting', 'error'].includes(viewState.connection) ? ' · 实时连接正在重连' : '';
     summaryNode.textContent = `共 ${summary.all ?? viewState.data.length} 个 · 排队 ${summary.queued || 0} · 下载 ${summary.running || 0} · 失败 ${summary.failed || 0} · 已选择 ${viewState.selected.size}${connectionNote}`;
-    results.innerHTML = tasks.length ? (admin && viewState.groupByUser ? groupedMarkup(tasks, admin) : `<div class="task-list">${tasks.map(task => taskCard(task, admin)).join('')}</div>`) : '<div class="empty">没有符合条件的任务</div>';
+    if (admin && viewState.groupByUser) {
+      results.innerHTML = tasks.length ? groupedMarkup(tasks, admin) : '<div class="empty">没有符合条件的任务</div>';
+      viewState.signatures = new Map();
+      return;
+    }
+    if (!tasks.length) {
+      results.innerHTML = '<div class="empty">没有符合条件的任务</div>';
+      viewState.signatures = new Map();
+      return;
+    }
+    let list = results.querySelector('.task-list');
+    if (!list) {
+      list = document.createElement('div');
+      list.className = 'task-list';
+      results.replaceChildren(list);
+    }
+    const nextSignatures = new Map();
+    const existing = new Map();
+    for (const node of [...list.children]) {
+      if (node.dataset.taskId) existing.set(node.dataset.taskId, node);
+    }
+    let anchor = null;
+    for (const task of tasks) {
+      const signature = taskSignature(task);
+      nextSignatures.set(task.id, signature);
+      const node = existing.get(task.id);
+      if (node && viewState.signatures.get(task.id) === signature) {
+        anchor = node;
+        continue;
+      }
+      const card = document.createElement('article');
+      card.className = 'task-card';
+      card.dataset.taskId = task.id;
+      card.dataset.ownerUserId = task.owner_user_id || '';
+      card.innerHTML = taskCard(task, admin);
+      if (node) {
+        list.replaceChild(card, node);
+      } else if (anchor) {
+        anchor.after(card);
+      } else {
+        list.prepend(card);
+      }
+      anchor = card;
+    }
+    for (const node of [...list.children]) {
+      if (!nextSignatures.has(node.dataset.taskId)) node.remove();
+    }
+    viewState.signatures = nextSignatures;
   };
 
   const reload = async () => {
@@ -169,6 +232,7 @@ export async function mount(root, context) {
     const response = await context.api(`/api/tasks${query ? `?${query}` : ''}`, { signal: context.signal });
     viewState.data = response.data || [];
     viewState.summary = response.summary || {};
+    viewState.signatures = new Map();
     renderResults();
   };
 

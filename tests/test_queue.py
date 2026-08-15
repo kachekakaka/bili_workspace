@@ -257,3 +257,42 @@ def test_newly_finished_task_is_retained_when_history_is_trimmed(tmp_env):
     assert queue.get_task(running["id"]) is not None
     assert len(queue.list_tasks()) <= 3
     queue.stop()
+
+def test_change_count_increments_without_persistence_callback(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+
+    def runner(argv, **kwargs):
+        del kwargs
+        work = Path(argv[argv.index("--work-dir") + 1])
+        (work / "demo.mp4").write_bytes(b"video")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    queue = TaskQueue(store, index, runner=runner)
+    before = queue.change_count()
+    created = queue.enqueue([_target(401)])
+    assert queue.change_count() > before
+    task = wait_terminal(queue, created[0]["id"])
+    assert task["status"] == "success"
+    assert queue.change_count() > before
+    queue.stop()
+
+
+def test_change_count_increments_with_callback(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    seen = []
+
+    def runner(argv, **kwargs):
+        del kwargs
+        work = Path(argv[argv.index("--work-dir") + 1])
+        (work / "demo.mp4").write_bytes(b"video")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    queue = TaskQueue(store, index, runner=runner, on_state_change=lambda *args: seen.append(args))
+    before = queue.change_count()
+    queue.enqueue([_target(402)])
+    wait_terminal(queue, queue.list_tasks()[0]["id"])
+    assert queue.change_count() > before
+    assert seen
+    queue.stop()

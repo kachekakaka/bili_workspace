@@ -259,6 +259,7 @@ class TaskQueue:
         self._order: deque[str] = deque()
         self._cancel_events: dict[str, threading.Event] = {}
         self._stop = False
+        self._change_count = 0
         storage_root = self.config_store.get().download_path()
         for snapshot in initial_tasks or []:
             try:
@@ -284,6 +285,9 @@ class TaskQueue:
             worker.start()
 
     def _notify_locked(self, task: Task | None, *, task_id: str = "") -> None:
+        # Every state/progress transition bumps the change counter so SSE
+        # consumers can skip full recomputation while nothing changed.
+        self._change_count += 1
         callback = self.on_state_change
         if callback is None:
             return
@@ -292,6 +296,9 @@ class TaskQueue:
         except Exception:
             # Persistence must never turn a valid download into a failed task.
             pass
+
+    def change_count(self) -> int:
+        return self._change_count
 
     def stop(self) -> None:
         with self._cv:
