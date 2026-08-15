@@ -116,3 +116,25 @@ def test_resource_replacement_restores_previous_tree_if_publish_fails(
     assert payload.read_bytes() == b"previous-invalid-copy"
     assert not list(manager.paths.resources_dir.glob(".*.bak-*"))
     assert not list(manager.paths.resources_dir.glob(".*.tmp-*"))
+
+
+def test_resource_target_allows_runtime_credentials_file(tmp_path: Path) -> None:
+    manager = ResourceManager(AppPaths(tmp_path / "control"), _bundle(tmp_path / "bundle"))
+    target, _manifest = manager.ensure_extracted()
+    credential = target / "windows-tools" / "BBDown.data"
+    credential.write_text("SESS" + "DATA=session;", encoding="utf-8")
+
+    target_again, _manifest_again = manager.ensure_extracted()
+    assert target_again == target
+    assert credential.read_text(encoding="utf-8") == "SESS" + "DATA=session;"
+
+
+def test_resource_target_extra_file_still_fails_closed(tmp_path: Path) -> None:
+    manager = ResourceManager(AppPaths(tmp_path / "control"), _bundle(tmp_path / "bundle"))
+    target, _manifest = manager.ensure_extracted()
+    extra = target / "windows-tools" / "unlisted.txt"
+    extra.write_text("x", encoding="utf-8")
+
+    target_again, _manifest_again = manager.ensure_extracted()
+    assert target_again == target
+    assert not extra.exists()

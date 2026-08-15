@@ -18,6 +18,9 @@ _MARKER_NAME = ".bili-launcher-resource.json"
 _MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 _MAX_MARKER_BYTES = 64 * 1024
 _MAX_RESOURCE_ENTRIES = 50_000
+# BBDown 从自身可执行文件目录读取 BBDown.data；启动器把数据根凭据镜像到
+# windows-tools 目录。该运行时文件不参与内置清单集合校验。
+_RUNTIME_CREDENTIAL_FILES = frozenset({"windows-tools/BBDown.data"})
 _WINDOWS_RESERVED_BASENAMES = {
     "aux",
     "con",
@@ -196,6 +199,11 @@ class ResourceManager:
             for path, is_directory in entries
             if not is_directory and path != marker
         }
+        # Runtime credentials mirrored next to BBDown.exe are owned by the
+        # data root, not by the immutable embedded bundle.  They are allowed
+        # to appear in the expanded tree without failing the set check or
+        # triggering a rebuild.
+        actual = actual - _RUNTIME_CREDENTIAL_FILES
         expected = set(manifest.files)
         if actual != expected:
             raise ResourceError(

@@ -5,8 +5,10 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,9 @@ from typing import Any, Callable
 from app.config import AppConfig
 from app.constants import MAX_INFO_OUTPUT_CHARS, MAX_LOG_TAIL_CHARS
 from app.progress import BbdownProgressParser, ProgressEvent
+
+_CREDENTIAL_FILE = "BBDown.data"
+_SYNC_LOCK = threading.Lock()
 
 
 @dataclass
@@ -65,6 +70,89 @@ class _TailBuffer:
 
 def _regular_file(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
+
+
+class _EncodingProbe:
+    """Detect whether BBDown console output is UTF-8 or ANSI (GBK).
+
+    BBDown on Windows writes console output with the system ANSI code page
+    (GBK) when stdout is redirected.  A plain UTF-8 decoder would turn every
+    Chinese character into U+FFFD.  Output encoding is consistent for one
+    process, so a bounded prefix decides the codec before decoding starts.
+    """
+
+    _LIMIT = 32 * 1024
+
+    def __init__(self) -> None:
+        self._buffer = b""
+        self._decided: str | None = None
+        self._failed_at_tail = False
+
+    def feed(self, chunk: bytes) -> tuple[str, bytes] | None:
+        if self._decided is not None:
+            return self._decided, b""
+        self._buffer += chunk
+        if not any(byte >= 0x80 for byte in self._buffer):
+            if len(self._buffer) >= 4096:
+                self._decided = "utf-8"
+                return self._decided, self._buffer
+            return None
+        try:
+            self._buffer.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            if len(self._buffer) - exc.start <= 3 and len(self._buffer) < self._LIMIT:
+                # A UTF-8 multi-byte sequence may be cut at the chunk boundary.
+                self._failed_at_tail = True
+                return None
+            self._decided = "gbk"
+        else:
+            self._decided = "utf-8"
+        return self._decided, self._buffer
+
+    def finish(self) -> str:
+        if self._decided is not None:
+            return self._decided
+        # Never decided: pure ASCII, or a trailing sequence that stayed
+        # incomplete up to the stream end.  Real BBDown output is ANSI/GBK,
+        # so a failed tail favours GBK; pure ASCII is identical in both.
+        return "gbk" if self._failed_at_tail else "utf-8"
+
+
+def _decode_output(data: bytes) -> str:
+    if not data:
+        return ""
+    probe = _EncodingProbe()
+    decision = probe.feed(data)
+    if decision is None:
+        return data.decode(probe.finish(), errors="replace")
+    encoding, payload = decision
+    return payload.decode(encoding, errors="replace")
+
+
+def sync_credentials_to_tool_dir(credential_dir: Path, tool_dir: Path) -> None:
+    """Keep BBDown.data next to BBDown.exe before every invocation.
+
+    BBDown 1.6.3 reads its cookie only from its own executable directory.
+    The launcher keeps the binary in a read-only resource directory while
+    credentials live in the data root, so credentials must be mirrored
+    before each run: copy when present, remove stale copies when absent.
+    Failures are tolerated (logged to stderr) so downloads are not blocked.
+    """
+    source = Path(credential_dir).resolve() / _CREDENTIAL_FILE
+    target_dir = Path(tool_dir).resolve()
+    target = target_dir / _CREDENTIAL_FILE
+    if target_dir == source.parent:
+        return
+    with _SYNC_LOCK:
+        try:
+            if source.is_file() and not source.is_symlink():
+                temporary = target_dir / f".{_CREDENTIAL_FILE}.{uuid.uuid4().hex}.tmp"
+                shutil.copy2(source, temporary)
+                os.replace(temporary, target)
+            elif target.is_file() and not target.is_symlink():
+                target.unlink()
+        except OSError as exc:
+            print(f"[bbdown] 凭据同步失败（忽略并继续）: {exc}", file=sys.stderr)
 
 
 def find_ffmpeg(bbdown_dir: Path) -> Path | None:
@@ -161,6 +249,7 @@ def _terminate_process_tree(proc: subprocess.Popen[Any]) -> None:
                 stderr=subprocess.DEVNULL,
                 check=False,
                 timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
         except Exception:
             try:
@@ -207,12 +296,10 @@ def _run_streaming(
     on_output: Callable[[str], None] | None,
     on_progress: Callable[[ProgressEvent], None] | None,
 ) -> BbdownResult:
-    creationflags = 0
-    start_new_session = False
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     if os.name == "nt":
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        start_new_session = True
+        creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    start_new_session = os.name != "nt"
 
     proc = subprocess.Popen(
         argv,
@@ -229,25 +316,33 @@ def _run_streaming(
 
     def read_output() -> None:
         assert proc.stdout is not None
-        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        probe = _EncodingProbe()
+        decoder: codecs.IncrementalDecoder | None = None
+
+        def emit(text: str) -> None:
+            if not text:
+                return
+            tail.append(text)
+            if on_output:
+                on_output(text[-8192:])
+            _emit_progress(parser, text, on_progress)
+
         try:
             while True:
                 chunk = proc.stdout.read(4096)
                 if not chunk:
                     break
-                text = decoder.decode(chunk)
-                if not text:
-                    continue
-                tail.append(text)
-                if on_output:
-                    on_output(text[-8192:])
-                _emit_progress(parser, text, on_progress)
-            final_text = decoder.decode(b"", final=True)
-            if final_text:
-                tail.append(final_text)
-                if on_output:
-                    on_output(final_text)
-                _emit_progress(parser, final_text, on_progress)
+                if decoder is None:
+                    decision = probe.feed(chunk)
+                    if decision is None:
+                        continue
+                    decided, payload = decision
+                    decoder = codecs.getincrementaldecoder(decided)(errors="replace")
+                    chunk = payload
+                emit(decoder.decode(chunk))
+            if decoder is None:
+                decoder = codecs.getincrementaldecoder(probe.finish())(errors="replace")
+            emit(decoder.decode(b"", final=True))
             if on_progress:
                 for event in parser.flush():
                     on_progress(event)
@@ -345,30 +440,30 @@ def run_bbdown_info(
             timeout=timeout,
             max_chars=MAX_INFO_OUTPUT_CHARS,
         )
+    sync_credentials_to_tool_dir(bbdown_dir, Path(argv[0]).resolve().parent)
     try:
         completed = subprocess.run(
             argv,
             cwd=str(bbdown_dir),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            text=False,
             timeout=timeout,
             shell=False,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
         )
     except subprocess.TimeoutExpired as exc:
         return BbdownResult(
             -1,
-            str(exc.stdout or "")[-MAX_INFO_OUTPUT_CHARS:],
-            str(exc.stderr or "")[-MAX_INFO_OUTPUT_CHARS:],
+            _decode_output(bytes(exc.stdout or b""))[-MAX_INFO_OUTPUT_CHARS:],
+            _decode_output(bytes(exc.stderr or b""))[-MAX_INFO_OUTPUT_CHARS:],
             argv,
             timed_out=True,
         )
     return BbdownResult(
         int(completed.returncode),
-        str(completed.stdout or "")[-MAX_INFO_OUTPUT_CHARS:],
-        str(completed.stderr or "")[-MAX_INFO_OUTPUT_CHARS:],
+        _decode_output(completed.stdout)[-MAX_INFO_OUTPUT_CHARS:],
+        _decode_output(completed.stderr)[-MAX_INFO_OUTPUT_CHARS:],
         argv,
     )
 
@@ -395,6 +490,7 @@ def run_bbdown(
         return BbdownResult(-1, "", "任务已取消", argv, cancelled=True)
 
     if runner is None:
+        sync_credentials_to_tool_dir(bbdown_dir, Path(argv[0]).resolve().parent)
         return _run_streaming(
             argv,
             cwd=bbdown_dir,
