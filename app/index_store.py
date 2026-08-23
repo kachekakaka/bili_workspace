@@ -70,18 +70,36 @@ class IndexStore:
         """Return a cheap token suitable for incremental media-library synchronization."""
         with self._lock:
             self._refresh_if_external_change()
-            stamp = self._known_stamp or (0, 0)
-            return str(self.path), self._revision, stamp[0], stamp[1]
+            return self._change_token_locked()
 
-    def snapshot(self) -> tuple[tuple[str, int, int, int], dict[str, dict[str, Any]]]:
+    def _change_token_locked(self) -> tuple[str, int, int, int]:
+        stamp = self._known_stamp or (0, 0)
+        return str(self.path), self._revision, stamp[0], stamp[1]
+
+    def snapshot_if_changed(
+        self,
+        previous_token: tuple[str, int, int, int] | None,
+    ) -> tuple[
+        tuple[str, int, int, int],
+        int,
+        dict[str, dict[str, Any]] | None,
+    ]:
+        """Atomically copy entries only when the caller's token is stale."""
         with self._lock:
             self._refresh_if_external_change()
-            token = self.change_token()
-            return token, {
+            token = self._change_token_locked()
+            count = sum(isinstance(value, dict) for value in self._data.values())
+            if previous_token == token:
+                return token, count, None
+            return token, count, {
                 str(key): deepcopy(value)
                 for key, value in self._data.items()
                 if isinstance(value, dict)
             }
+
+    def snapshot(self) -> tuple[tuple[str, int, int, int], dict[str, dict[str, Any]]]:
+        token, _count, entries = self.snapshot_if_changed(None)
+        return token, entries or {}
 
     def _decode(self, path: Path) -> dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))

@@ -1,4 +1,5 @@
 export const SEARCH_FILTER_MODES = Object.freeze(['raw', 'exact', 'fuzzy']);
+export const SEARCH_PAGE_LRU_LIMIT = 24;
 
 export function normalizeSearchText(value) {
   return String(value || '').normalize('NFKC').toLocaleLowerCase();
@@ -40,6 +41,23 @@ export function searchPageKey({ keyword = '', order = 'totalrank', page = 1 } = 
     String(order || 'totalrank'),
     Math.max(1, Number.parseInt(page, 10) || 1),
   ]);
+}
+
+export function readLru(cache, key) {
+  if (!(cache instanceof Map) || !cache.has(key)) return undefined;
+  const value = cache.get(key);
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+export function writeLru(cache, key, value, limit = SEARCH_PAGE_LRU_LIMIT) {
+  if (!(cache instanceof Map)) throw new TypeError('cache must be a Map');
+  const capacity = Math.max(1, Number.parseInt(limit, 10) || SEARCH_PAGE_LRU_LIMIT);
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > capacity) cache.delete(cache.keys().next().value);
+  return value;
 }
 
 export function shouldPrefetchNextPage({

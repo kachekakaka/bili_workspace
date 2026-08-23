@@ -84,13 +84,28 @@ def test_helpers_and_dependency_locks_are_grouped() -> None:
 
 def test_launcher_build_and_test_helpers_are_the_only_windows_scripts() -> None:
     build = _text("scripts/windows/build-launcher.bat")
+    test_run = _text("scripts/windows/new-test-run.ps1")
 
     assert r".venv\Scripts\python.exe" in build
     assert "-m tools.build_launcher" in build
     assert "--run-exe-self-check" in build
-    assert ".bili-workspace-test-run.json" in _text(
-        "scripts/windows/new-test-run.ps1"
-    )
+    assert ".bili-workspace-test-run.json" in test_run
+    assert "[string]$TestId" in test_run
+    assert "schema_version = 2" in test_run
+    assert "test_id = $TestId" in test_run
+    assert "schema v1 测试运行只能按隐式 T-PROJECT" in test_run
+
+
+def test_docker_manual_is_a_t_docker_evidence_consumer() -> None:
+    docker_test = _text("SoftwareTesting/docker/README.md")
+    docker_manual = _text("docs/运维/Docker镜像打包与离线交付.md")
+    scripts = _text("scripts/README.md")
+
+    assert "../../docs/运维/Docker镜像打包与离线交付.md" in docker_test
+    assert "../../SoftwareTesting/docker/README.md" in docker_manual
+    assert docker_manual.count("-TestId T-DOCKER") == 2
+    assert "-TestId T-PROJECT" in scripts
+    assert "-TestId T-DOCKER" in scripts
 
 
 def test_historical_release_reports_are_archived() -> None:

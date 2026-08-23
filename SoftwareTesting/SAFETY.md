@@ -11,7 +11,7 @@ Linux/macOS：${TMPDIR:-/tmp}/bili_workspace_test
 
 可以用 `BILI_TEST_ROOT` 覆盖默认根，但仍必须位于仓库外且不能包含仓库。测试入口首次创建根时写入 `.bili-workspace-test-root.json`；已有根缺少该标记、标记不属于当前仓库、目录是符号链接/重解析点，或测试根与仓库互相包含时必须停止。
 
-每次运行只能使用该根下新建且直接相邻的 `<run-id>/`，并写入 `.bili-workspace-test-run.json`。配置、userdata、数据库、下载、运行时、媒体工具、HOME、缓存、临时文件、Python 字节码、pytest basetemp、日志和结果都必须位于该目录；最终状态写入 `results/result.json`，取值为 `passed`、`failed`、`blocked`、`inconclusive` 或 `not_run`。
+每次运行只能使用该根下新建且直接相邻的 `<run-id>/`，并写入 `.bili-workspace-test-run.json`。同一测试根可以保存多个 Registry 测试项，但每个运行目录只能绑定一个 `test_id`，运行标记与结果身份必须一致，禁止让不同测试项共享同一 run-id。配置、userdata、数据库、下载、运行时、媒体工具、HOME、缓存、临时文件、Python 字节码、pytest basetemp、日志和结果都必须位于该目录；最终状态写入 `results/result.json`，取值为 `passed`、`failed`、`blocked`、`inconclusive` 或 `not_run`。
 
 测试输出默认保留。已确认方案明确列明清理、本任务创建且所有权可验证的精确 `<run-id>/` 时，重新验证所有权并展示精确绝对路径后，可随该方案的实施授权清理。方案未列明、使用宽泛匹配或未解析路径、其他运行、测试根、仓库外非任务产物、所有权不明或涉及真实数据的删除，仍须取得精确授权；不得删除项目目录。
 

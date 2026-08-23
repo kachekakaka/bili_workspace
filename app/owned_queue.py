@@ -92,16 +92,16 @@ class OwnedTaskQueue(TaskQueue):
 
     def _notify_locked(self, task: Task | None, *, task_id: str = "") -> None:
         callback = self.on_state_change
-        if callback is None:
-            return
-        try:
-            if task is None:
-                callback(task_id, None)
-                return
-            callback(task.id, self._public_payload(task))
-        except Exception:
-            # Persistence must never turn a valid download into a failed task.
-            pass
+        if callback is not None:
+            try:
+                if task is None:
+                    callback(task_id, None)
+                else:
+                    callback(task.id, self._public_payload(task))
+            except Exception:
+                # Persistence must never turn a valid download into a failed task.
+                pass
+        self._bump_change_locked()
 
     def _drop_task_locked(self, task_id: str) -> None:
         task = self._tasks.get(task_id)

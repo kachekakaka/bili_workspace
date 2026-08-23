@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import threading
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from app.constants import (
     ADMIN_TASK_HISTORY_LIMIT,
@@ -22,6 +24,7 @@ from app.nas import _hash_password
 from app.runtime import RuntimeSettings
 from app.state import AppState
 from app.task_ownership_store import TaskOwnershipNasStore
+from app.task_ownership_api import events
 from tests.conftest import StaticCookieChecker, artifact_runner, wait_terminal
 
 
@@ -187,6 +190,142 @@ def test_normal_users_are_isolated_and_can_export_same_bv(
             user_a[1]["user_id"]
         }
         assert admin["user"]["role"] == "admin"
+    finally:
+        client.close()
+        state.stop()
+
+
+def test_owned_queue_cancel_during_preflight_is_realtime_and_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info_started = threading.Event()
+    cancellation_seen = threading.Event()
+    release = threading.Event()
+
+    def cancellable_runner(argv, **kwargs):
+        cancel_event = kwargs.get("cancel_event")
+        if "--only-show-info" in argv:
+            info_started.set()
+            while cancel_event is not None and not cancel_event.wait(timeout=0.01):
+                pass
+            cancellation_seen.set()
+            release.wait(timeout=2)
+            return SimpleNamespace(returncode=1, stdout="预检已停止", stderr="")
+        return artifact_runner()(argv)
+
+    cancellable_runner.supports_info = True
+    cancellable_runner.supports_cancel_event = True
+    state, client, _admin, user_a, _user_b = _setup_state(
+        tmp_path, monkeypatch, runner=cancellable_runner
+    )
+    try:
+        _as(client, user_a)
+        before = state.export_queue.change_count()
+        created_response = client.post(
+            "/api/download", json={"bvids": ["BV1CANCEL001"]}
+        )
+        assert created_response.status_code == 200, created_response.text
+        task_id = created_response.json()["data"][0]["id"]
+        assert info_started.wait(timeout=2)
+        assert state.export_queue.change_count() > before
+
+        cancelling = client.post(f"/api/tasks/{task_id}/cancel")
+        assert cancelling.status_code == 200, cancelling.text
+        snapshot = cancelling.json()["data"]
+        assert snapshot["status"] == "running"
+        assert snapshot["phase"] == "cancelling"
+        assert snapshot["finished_at"] is None
+        assert cancellation_seen.wait(timeout=1)
+
+        repeated = client.post(f"/api/tasks/{task_id}/cancel")
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["data"]["phase"] == "cancelling"
+
+        release.set()
+        finished = wait_terminal(state.export_queue, task_id)
+        assert finished["status"] == "cancelled"
+        assert finished["phase"] == "cancelled"
+        assert finished["finished_at"] is not None
+        assert state.export_queue.change_count() > before + 1
+
+        terminal_repeat = client.post(f"/api/tasks/{task_id}/cancel")
+        assert terminal_repeat.status_code == 200, terminal_repeat.text
+        assert terminal_repeat.json()["data"]["phase"] == "cancelled"
+    finally:
+        release.set()
+        client.close()
+        state.stop()
+
+
+def test_task_status_summary_aggregates_five_hundred_rows_without_loading_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, user_b = _setup_state(tmp_path, monkeypatch)
+    statuses = ("queued", "running", "success", "skipped", "failed", "cancelled")
+    now = time.time()
+    rows = []
+    for index in range(500):
+        owner = user_a[1]["user_id"] if index < 300 else user_b[1]["user_id"]
+        status = statuses[index % len(statuses)]
+        rows.append(
+            (
+                f"summary-{index:04d}",
+                owner,
+                "device",
+                f"BV{index:010d}",
+                status,
+                now + index,
+                now + index,
+                '{"large":"payload-not-needed"}',
+            )
+        )
+    try:
+        with state.nas._transaction() as conn:
+            conn.executemany(
+                "INSERT INTO task_records(id,owner_user_id,destination,source_key,status,"
+                "created_at,updated_at,payload_json) VALUES(?,?,?,?,?,?,?,?)",
+                rows,
+            )
+
+        summary = state.nas.task_status_summary()
+        assert summary["all"] == 500
+        assert summary["active"] == summary["queued"] + summary["running"]
+
+        owner_summary = state.nas.task_status_summary(user_a[1]["user_id"])
+        assert owner_summary["all"] == 300
+        assert sum(owner_summary[name] for name in statuses) == 300
+
+        async def first_summary_event() -> str:
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/events",
+                    "query_string": b"view=summary",
+                    "headers": [],
+                    "app": client.app,
+                    "state": {
+                        "auth_context": {
+                            "user_id": user_a[1]["user_id"],
+                            "role": "user",
+                            "session_id": "",
+                        }
+                    },
+                },
+                receive=receive,
+            )
+            response = await events(request, view="summary")
+            chunk = await anext(response.body_iterator)
+            return chunk.decode() if isinstance(chunk, bytes) else chunk
+
+        chunk = asyncio.run(first_summary_event())
+        data_line = next(line for line in chunk.splitlines() if line.startswith("data: "))
+        payload = json.loads(data_line.removeprefix("data: "))
+        assert set(payload) == {"summary", "at"}
+        assert payload["summary"]["all"] == 300
     finally:
         client.close()
         state.stop()

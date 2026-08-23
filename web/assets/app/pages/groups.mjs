@@ -1,3 +1,4 @@
+import { resourceKey } from '../core/resource-cache.mjs';
 import {
   bindCoverFallback,
   bindDialogCancel,
@@ -8,28 +9,62 @@ import {
   modalActions,
 } from './shared.mjs';
 
+const GROUPS_RESOURCE = resourceKey('groups');
+const STATUS_RESOURCE = resourceKey('status');
+
 function groupCard(group) {
   return `<article class="group-card"><div class="group-cover"><img data-cover-img src="${esc(coverUrl(group.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer"><span>${esc(group.display_name?.slice(0, 1) || '▣')}</span></div><div class="group-name">${esc(group.display_name)}</div><div class="group-stats">${Number(group.media_count || 0)} 个作品 · ${formatBytes(group.total_size)}<br>进行中：${Number(group.active_count || 0)} · 失败：${Number(group.failed_count || 0)}<br>最近更新：${formatDate(group.latest_download)}<br>目录标识：${esc(group.folder_key)}</div><div class="toolbar"><button type="button" class="btn small" data-browse-group="${esc(group.id)}">查看</button><button type="button" class="btn small" data-rename-group="${esc(group.id)}">重命名</button><button type="button" class="btn small" data-merge-group="${esc(group.id)}">合并</button><button type="button" class="btn danger small" data-delete-group="${esc(group.id)}" ${group.display_name === '未分组' ? 'disabled' : ''}>删除</button></div></article>`;
 }
 
 export async function mount(root, context) {
   const host = document.createElement('div');
-  let groups = [];
+  let groups = context.resources.peek(GROUPS_RESOURCE)?.value
+    || context.shared.get().groups
+    || [];
+  let signature = '';
+  let loadError = null;
+  let renderedStale = null;
 
   const render = () => {
-    host.innerHTML = `<section class="card"><div class="toolbar spread"><div><h2>分组管理</h2><p class="metric-foot">重命名只修改显示名称，不搬移大型媒体文件。</p></div><button type="button" id="createGroupTop" class="btn primary">＋ 新建分组</button></div></section><section id="groupResults" class="group-grid" style="margin-top:18px">${groups.map(groupCard).join('')}</section>`;
+    const nextSignature = JSON.stringify(groups);
+    const stale = loadError || context.resources.peek(GROUPS_RESOURCE)?.stale;
+    if (nextSignature === signature && Boolean(stale) === renderedStale) return;
+    signature = nextSignature;
+    renderedStale = Boolean(stale);
+    host.innerHTML = `<section class="card"><div class="toolbar spread"><div><h2>分组管理</h2><p class="metric-foot">重命名只修改显示名称，不搬移大型媒体文件。</p></div><button type="button" id="createGroupTop" class="btn primary">＋ 新建分组</button></div></section>${stale ? '<div class="notice warn" style="margin-top:12px">分组刷新失败，当前显示最近一次缓存。<button type="button" class="btn small" data-groups-retry>重试</button></div>' : ''}<section id="groupResults" class="group-grid" style="margin-top:18px">${groups.length ? groups.map(groupCard).join('') : '<div class="empty">还没有分组</div>'}</section>`;
     bindCoverFallback(host, context.signal);
   };
 
   const reload = async () => {
-    const response = await context.api('/api/groups', { signal: context.signal });
-    groups = response.data?.records || [];
-    context.shared.patch({ groups });
-    if (context.isCurrent()) render();
+    loadError = null;
+    try {
+      groups = await context.resources.refresh(
+        GROUPS_RESOURCE,
+        async ({ signal }) => (await context.api('/api/groups', { signal })).data?.records || [],
+        { signal: context.signal },
+      );
+      context.shared.patch({ groups });
+      if (context.isCurrent()) render();
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      loadError = error;
+      if (context.isCurrent()) render();
+    }
+  };
+
+  const invalidateGroupConsumers = () => {
+    context.resources.invalidate(GROUPS_RESOURCE);
+    context.resources.invalidate(STATUS_RESOURCE);
+    context.resources.invalidateWhere(key => (
+      key.startsWith('library-query:')
+      || key.startsWith('library-summary:')
+      || key.startsWith('library:')
+    ));
   };
 
   context.commit(() => root.replaceChildren(host));
-  await reload();
+  render();
+  void reload();
 
   const openCreate = () => {
     const modal = context.modal.open({
@@ -45,6 +80,7 @@ export async function mount(root, context) {
         await context.api('/api/groups', { method: 'POST', body: { name: modal.body.querySelector('#newGroupName').value.trim() } });
         modal.close('created');
         context.toast.show('分组已创建', 'good');
+        invalidateGroupConsumers();
         await reload();
       } catch (error) {
         context.toast.show(error.message, 'bad');
@@ -73,6 +109,7 @@ export async function mount(root, context) {
         await context.api(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'PATCH', body: { name } });
         modal.close('saved');
         context.toast.show('分组已重命名', 'good');
+        invalidateGroupConsumers();
         await reload();
       } catch (error) {
         context.toast.show(error.message, 'bad');
@@ -101,6 +138,7 @@ export async function mount(root, context) {
         });
         modal.close('merged');
         context.toast.show('分组已合并', 'good');
+        invalidateGroupConsumers();
         await reload();
       } catch (error) {
         context.toast.show(error.message, 'bad');
@@ -111,6 +149,10 @@ export async function mount(root, context) {
   host.addEventListener('click', async event => {
     const target = event.target.closest('button');
     if (!target) return;
+    if (target.dataset.groupsRetry !== undefined) {
+      await reload();
+      return;
+    }
     if (target.id === 'createGroupTop') {
       openCreate();
       return;
@@ -138,6 +180,7 @@ export async function mount(root, context) {
       try {
         await context.api(`/api/groups/${encodeURIComponent(group.id)}`, { method: 'DELETE' });
         context.toast.show('分组已删除', 'good');
+        invalidateGroupConsumers();
         await reload();
       } catch (error) {
         context.toast.show(error.message, 'bad');

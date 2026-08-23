@@ -103,3 +103,30 @@ def test_recorded_file_must_be_inside_entry_target(tmp_path):
             path="items/safe",
             files=_metadata(tmp_path, outside),
         )
+
+
+def test_snapshot_if_changed_skips_deepcopy_for_unchanged_ten_thousand_entries(
+    tmp_path, monkeypatch
+):
+    store = IndexStore(tmp_path)
+    with store._lock:
+        store._data = {
+            f"BV{index:010d}": {"title": f"作品 {index}", "files": [{"size": index}]}
+            for index in range(10_000)
+        }
+        store._revision += 1
+
+    token, count, entries = store.snapshot_if_changed(None)
+    assert count == 10_000
+    assert entries is not None and len(entries) == 10_000
+    entries["BV0000000000"]["files"][0]["size"] = -1
+    assert store._data["BV0000000000"]["files"][0]["size"] == 0
+
+    def fail_deepcopy(_value):
+        raise AssertionError("unchanged snapshot must not deepcopy entries")
+
+    monkeypatch.setattr("app.index_store.deepcopy", fail_deepcopy)
+    same_token, same_count, unchanged = store.snapshot_if_changed(token)
+    assert same_token == token
+    assert same_count == 10_000
+    assert unchanged is None

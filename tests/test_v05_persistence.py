@@ -108,6 +108,43 @@ def test_index_sync_short_circuits_when_unchanged(tmp_env, external_runtime_envi
         state.stop()
 
 
+def test_index_sync_does_not_acknowledge_changes_after_its_snapshot(
+    tmp_env, monkeypatch, external_runtime_environment
+):
+    state = AppState.create(
+        config_path=tmp_env.config_path,
+        initial_config=tmp_env.initial,
+        runner=artifact_runner(),
+        cookie_checker=StaticCookieChecker(logged_in=True),
+    )
+    original_snapshot = state.index.snapshot_if_changed
+    captured_tokens = []
+    mutate_after_first_snapshot = True
+
+    def snapshot_with_concurrent_change(previous_token):
+        nonlocal mutate_after_first_snapshot
+        result = original_snapshot(previous_token)
+        captured_tokens.append(result[0])
+        if mutate_after_first_snapshot:
+            mutate_after_first_snapshot = False
+            with state.index._lock:
+                state.index._revision += 1
+        return result
+
+    monkeypatch.setattr(state.index, "snapshot_if_changed", snapshot_with_concurrent_change)
+    try:
+        state.nas.sync_index(force=True)
+        assert state.nas._last_index_token == captured_tokens[0]
+        assert state.nas._last_index_token != state.index.change_token()
+
+        state.nas.sync_index()
+        assert len(captured_tokens) == 2
+        assert state.nas._last_index_token == captured_tokens[1]
+        assert state.nas._last_index_token == state.index.change_token()
+    finally:
+        state.stop()
+
+
 def test_running_snapshot_writes_are_debounced(
     tmp_env, monkeypatch, external_runtime_environment
 ):
@@ -142,5 +179,34 @@ def test_running_snapshot_writes_are_debounced(
         payload["status"] = "success"
         state.nas.save_task_snapshot("library", payload["id"], payload)
         assert writes == 2
+    finally:
+        state.stop()
+
+
+def test_running_transition_is_not_hidden_by_progress_debounce(
+    tmp_env, external_runtime_environment
+):
+    state = AppState.create(
+        config_path=tmp_env.config_path,
+        initial_config=tmp_env.initial,
+        runner=artifact_runner(),
+        cookie_checker=StaticCookieChecker(logged_in=True),
+    )
+    payload = {
+        "id": "queued-to-running",
+        "owner_user_id": state.nas.default_owner_user_id(),
+        "status": "queued",
+        "created_at": 100.0,
+    }
+    try:
+        state.nas.save_task_snapshot("library", payload["id"], payload)
+        payload["status"] = "running"
+        payload["started_at"] = 101.0
+        state.nas.save_task_snapshot("library", payload["id"], payload)
+
+        record = state.nas.task_record(payload["id"])
+        assert record is not None
+        assert record["status"] == "running"
+        assert state.nas.task_status_summary()["running"] == 1
     finally:
         state.stop()

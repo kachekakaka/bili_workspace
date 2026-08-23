@@ -33,7 +33,7 @@ def test_repository_uses_one_python_311_baseline() -> None:
     assert 'python-version: "3.12"' not in workflows
     assert 'python-version: "3.13"' not in workflows
     dockerfile = text("docker/Dockerfile")
-    assert "FROM python:3.11-slim-bookworm@sha256:" in dockerfile
+    assert "FROM python:3.11.15-slim-bookworm@sha256:" in dockerfile
     launcher_script = text("scripts/windows/build-launcher.bat")
     assert r".venv\Scripts\python.exe" in launcher_script
     assert "bili-launcher-py311" not in launcher_script

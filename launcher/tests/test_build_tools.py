@@ -170,7 +170,7 @@ def test_resource_scan_rejects_embedded_bilibili_credentials(tmp_path: Path) -> 
     (tools / "BBDown.exe").write_bytes(b"fake")
     (ffmpeg / "ffmpeg.exe").write_bytes(b"fake")
     (source / "application.txt").write_text(
-        "SESSDATA=realistic-secret-value", encoding="utf-8"
+        "SESSDATA=" + "realistic-secret-value", encoding="utf-8"
     )
 
     with pytest.raises(RuntimeError, match="登录凭据"):

@@ -13,7 +13,7 @@ PAGE_MODULES = [
 ]
 CORE_MODULES = [
     "api.mjs", "auth-session.mjs", "context-store.mjs", "format.mjs",
-    "lifecycle.mjs", "route-policy.mjs", "router.mjs", "search-policy.mjs",
+    "lifecycle.mjs", "resource-cache.mjs", "route-policy.mjs", "router.mjs", "search-policy.mjs",
     "task-stream.mjs", "version-check.mjs",
 ]
 REMOVED_ASSETS = [

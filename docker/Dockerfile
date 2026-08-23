@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.11-slim-bookworm@sha256:77923445c077d8eb971b14b2b114a1d9cd4a87edb4c75654820ca4832ee8cb15
+FROM python:3.11.15-slim-bookworm@sha256:d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3
 
 ARG TARGETARCH
 ARG BBDOWN_VERSION=1.6.3
@@ -28,7 +28,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/data/userdata/tmp \
     TZ=Asia/Shanghai
 
-RUN apt-get update \
+RUN mkdir -p "$TMPDIR" \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates curl ffmpeg libicu72 tini unzip \
     && rm -rf /var/lib/apt/lists/*

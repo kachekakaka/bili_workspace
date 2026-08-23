@@ -2,6 +2,7 @@
 import io
 import os
 import subprocess
+import threading
 
 from app.bbdown import (
     _decode_output,
@@ -12,6 +13,7 @@ from app.bbdown import (
     sync_credentials_to_tool_dir,
 )
 from app.config import AppConfig
+from app.constants import MAX_INFO_OUTPUT_CHARS, MAX_LOG_TAIL_CHARS
 
 GBK_INFO = (
     "视频标题：测试作品标题\n"
@@ -128,24 +130,80 @@ def test_run_bbdown_info_suppresses_window_and_decodes_gbk(tmp_env, monkeypatch)
     )
     captured = {}
 
-    def fake_run(argv, **kwargs):
+    def fake_popen(argv, **kwargs):
         captured["argv"] = argv
         captured["creationflags"] = kwargs.get("creationflags", 0)
+        process = _FakePopen(argv, **kwargs)
+        process.stdout = _FakeStream(GBK_INFO)
+        return process
 
-        class Completed:
-            returncode = 0
-            stdout = GBK_INFO
-            stderr = b""
-
-        return Completed()
-
-    monkeypatch.setattr("app.bbdown.subprocess.run", fake_run)
+    monkeypatch.setattr("app.bbdown.subprocess.Popen", fake_popen)
     result = run_bbdown_info("https://www.bilibili.com/video/BV1qt4y1X7TW", cfg)
     assert result.ok
     assert "视频标题：测试作品标题" in result.stdout
     assert "\ufffd" not in result.stdout
     if os.name == "nt":
         assert captured["creationflags"] & subprocess.CREATE_NO_WINDOW
+
+
+def test_run_bbdown_info_keeps_more_than_download_log_tail(tmp_env, monkeypatch):
+    cfg = AppConfig(
+        download_dir=str(tmp_env.download_dir),
+        bbdown_dir=str(tmp_env.bbdown_dir),
+    )
+    payload = ("视频标题：长输出\n" + "x" * (MAX_LOG_TAIL_CHARS + 8192)).encode("utf-8")
+
+    def fake_popen(argv, **kwargs):
+        process = _FakePopen(argv, **kwargs)
+        process.stdout = _FakeStream(payload)
+        return process
+
+    monkeypatch.setattr("app.bbdown.subprocess.Popen", fake_popen)
+    result = run_bbdown_info("https://www.bilibili.com/video/BV1qt4y1X7TW", cfg)
+    assert result.ok
+    assert len(result.stdout) > MAX_LOG_TAIL_CHARS
+    assert len(result.stdout) <= MAX_INFO_OUTPUT_CHARS
+    assert "视频标题：长输出" in result.stdout
+
+
+def test_run_bbdown_info_passes_cancellation_to_opted_in_runner(tmp_env):
+    cfg = AppConfig(
+        download_dir=str(tmp_env.download_dir),
+        bbdown_dir=str(tmp_env.bbdown_dir),
+    )
+    cancel = threading.Event()
+    started = threading.Event()
+    box = {}
+
+    def runner(argv, **kwargs):
+        del argv
+        received = kwargs.get("cancel_event")
+        assert received is cancel
+        started.set()
+        received.wait(timeout=2)
+        return type("Completed", (), {"returncode": 1, "stdout": "stopped", "stderr": ""})()
+
+    runner.supports_info = True
+    runner.supports_cancel_event = True
+
+    thread = threading.Thread(
+        target=lambda: box.setdefault(
+            "result",
+            run_bbdown_info(
+                "https://www.bilibili.com/video/BV1qt4y1X7TW",
+                cfg,
+                runner=runner,
+                cancel_event=cancel,
+            ),
+        )
+    )
+    thread.start()
+    assert started.wait(timeout=1)
+    cancel.set()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert box["result"].cancelled is True
+    assert box["result"].ok is False
 
 
 class _FakeStream:

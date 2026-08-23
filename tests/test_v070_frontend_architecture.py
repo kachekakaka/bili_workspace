@@ -23,13 +23,21 @@ def test_task_stream_and_route_generation_contracts_remain_single() -> None:
     dashboard = (
         ROOT / "web" / "assets" / "app" / "pages" / "dashboard.mjs"
     ).read_text(encoding="utf-8")
+    main = (ROOT / "web" / "assets" / "app" / "main.mjs").read_text(
+        encoding="utf-8"
+    )
     assert "url = '/api/events'" in stream
-    assert stream.count("new EventSourceImpl(url)") == 1
+    assert stream.count("new EventSourceImpl(") == 1
     assert "createGenerationGate" in router
     assert "controller.abort()" in router
-    assert "context.taskStream.start()" in tasks
+    assert "context.taskStream.acquire('full'" in tasks
     assert "context.taskStream.subscribe(" in tasks
-    assert "context.taskStream.start()" in dashboard
+    assert "context.taskStream.acquire('summary'" in dashboard
     assert "context.taskStream.subscribe(" in dashboard
+    assert "taskStream.start()" not in main
+    assert "createResourceCache()" in main
+    assert "searchPage.clearSearchSessionState()" in main
+    assert "libraryPage.clearLibrarySessionState()" in main
+    assert "tasksPage.clearTaskPageSessionState()" in main
     assert "bili-v070-library-query" in tasks
     assert "bili-v070-task-owner" in task_route

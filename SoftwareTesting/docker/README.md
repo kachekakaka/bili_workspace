@@ -13,12 +13,15 @@
 | --- | --- | --- |
 | `.github/workflows/ci.yml` 的 `docker-validation` 作业 | 使用 `docker/Dockerfile` 和当前根构建上下文执行单架构 `linux/amd64` 构建，再从本地验证镜像运行版本冒烟 | 镜像构建成功，容器内 `app.__version__` 为当前版本；镜像只使用任务内标签，不推送 |
 | `.github/workflows/docker-image.yml` | 使用 Buildx 与 QEMU 构建 `linux/amd64,linux/arm64`，`push: false` | 两个声明架构均完成构建求值，不创建或推送正式镜像 |
+| [Docker 镜像打包与离线交付手册](../../docs/运维/Docker镜像打包与离线交付.md) | 本地按目标平台执行构建、隔离运行、离线打包和复载 | 作为 `T-DOCKER` 手工执行入口，新证据使用 `test_id: T-DOCKER`；只有手册列明的必要阶段实际成功后才能记录 `passed` |
 
 CI 作业中先行执行的持久化、迁移和发布契约 pytest 仍属于 T-PROJECT；它们不能替代真实 Docker 构建。T-LAUNCHER 负责启动器面向 `linux/amd64` 的 Docker 导出三件套及其事务、身份与恢复协议，也不替代本项的一般项目镜像构建。
 
 ## 选择与环境
 
 T-DOCKER 不属于每次完整检查都固定执行的 `full` 项。候选命中触发条件时，全量测试或正式认证才按实际影响选择本项；未命中时记录为 `not_run`，不能据其他静态检查宣称通过。
+
+本地手工入口与两个 workflow 消费者属于同一个 `T-DOCKER`，不创建派生测试 ID。真实 Docker build/run/save/load 会启动进程、读取公开构建输入并产生镜像、容器和仓库外产物，必须在执行前取得相应授权；静态检查或本手册存在本身不能替代动态结果。
 
 专用多架构 workflow 在 `main` push 和 pull request 命中同一组精确路径时运行；普通 PR 不因无关文件变化执行 T-DOCKER。
 

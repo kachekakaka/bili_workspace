@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { filterAndSortTasks } from '../../web/assets/app/pages/tasks.mjs';
+import {
+  filterAndSortTasks,
+  isPausedTask,
+  isStoppingTask,
+  taskActionState,
+} from '../../web/assets/app/pages/tasks.mjs';
 
 const tasks = [
   { id: 'a', title: '管理员作品', owner_user_id: 'u1', owner_label: '甲', status: 'failed', destination: 'library', created_at: 1 },
@@ -29,4 +34,24 @@ test('normal users cannot activate admin-only owner and destination filters', ()
 test('paused tasks remain selectable through the cancelled status filter', () => {
   const result = filterAndSortTasks(tasks, filters({ status: 'cancelled', direction: 'asc' }), true);
   assert.deepEqual(result.map(task => task.id), ['c']);
+});
+
+test('paused classification prefers phase and keeps legacy snapshots compatible', () => {
+  assert.equal(isPausedTask({ status: 'cancelled', phase: 'paused' }), true);
+  assert.equal(isPausedTask({ status: 'cancelled', phase: 'cancelled', error: '任务已暂停' }), true);
+  assert.equal(isPausedTask({ status: 'cancelled', phase: 'cancelled', error: '任务已取消' }), false);
+});
+
+test('stopping phases hide conflicting actions until the terminal event arrives', () => {
+  const cancelling = { status: 'running', phase: 'cancelling' };
+  assert.equal(isStoppingTask(cancelling), true);
+  assert.deepEqual(taskActionState(cancelling), {
+    active: true,
+    paused: false,
+    stopping: true,
+    canPause: false,
+    canCancel: false,
+    canResume: false,
+  });
+  assert.equal(taskActionState({ status: 'cancelled', phase: 'paused' }).canResume, true);
 });

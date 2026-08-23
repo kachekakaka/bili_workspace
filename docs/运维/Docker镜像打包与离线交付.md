@@ -4,6 +4,8 @@
 
 本手册只承接当前源码的 Linux 镜像构建、隔离验证、`docker save` 离线打包、校验和复载。真实 QNAP 目录、账号权限、网络入口和上线方式暂不在当前范围；形成新的部署想法后再单独决策。
 
+本手册是现有 [T-DOCKER](../../SoftwareTesting/docker/README.md) 的本地手工执行入口，沿用其 `affected_only` 选择、真实 Docker 副作用和结果语义，不创建新的测试项。
+
 私有离线包不是正式发布物。项目仍不创建新版本 tag、GitHub Release 或 GHCR 正式镜像，也不使用冻结的 V0.7.0 镜像冒充当前源码。
 
 ## 2. 目标平台与命名
@@ -55,7 +57,7 @@ Dockerfile 可以使用其中已经固定的公共 Debian、Python 和 BBDown �
 使用项目隔离入口创建仓库外空白运行目录，分别映射配置、运行数据和下载媒体。示例使用 PowerShell：
 
 ```powershell
-$runRoot = & .\scripts\windows\new-test-run.ps1 -Action Create
+$runRoot = & .\scripts\windows\new-test-run.ps1 -Action Create -TestId T-DOCKER
 
 docker run --detach --rm `
   --name bili-workspace-image-check `
@@ -136,11 +138,14 @@ docker image inspect bili-workspace:qnap-amd64-YYYYMMDD \
 ```powershell
 & .\scripts\windows\new-test-run.ps1 `
   -Action Record `
+  -TestId T-DOCKER `
   -RunRoot $runRoot `
   -Status passed `
   -ExitCode 0 `
   -Message '镜像构建、隔离运行、离线打包与复载验证通过。'
 ```
+
+只有镜像构建、元数据检查、隔离运行、离线打包和复载等本轮必要阶段均实际成功时才能记录 `passed`；跳过、失败或证据不完整时必须按 [T-DOCKER 结果语义](../../SoftwareTesting/docker/README.md#结果语义)记录实际状态。
 
 ## 7. Container Station 导入边界
 

@@ -65,6 +65,8 @@ export HOME="$RUN_ROOT/home"
 export XDG_CACHE_HOME="$RUN_ROOT/userdata/cache"
 export PYTHONPYCACHEPREFIX="$RUN_ROOT/pycache"
 export TMPDIR="$RUN_ROOT/tmp"
+export TEMP="$RUN_ROOT/tmp"
+export TMP="$RUN_ROOT/tmp"
 export BILI_RUN_PLAYWRIGHT=1
 unset BILI_DATABASE_PATH
 mkdir -p "$BILI_CACHE_DIR"
@@ -85,7 +87,8 @@ if "$PYTHON_BIN" -B -X utf8 tools/playwright_runtime.py \
   --workspace-root "$ROOT" \
   --run-root "$RUN_ROOT" \
   --probe >"$RESULTS_DIR/playwright-browser.path" 2>"$RESULTS_DIR/playwright-runtime.log"; then
-  if ! IFS= read -r BILI_PLAYWRIGHT_CHROMIUM <"$RESULTS_DIR/playwright-browser.path" || [ -z "$BILI_PLAYWRIGHT_CHROMIUM" ]; then
+  BILI_PLAYWRIGHT_CHROMIUM=$(tr -d '\r' <"$RESULTS_DIR/playwright-browser.path")
+  if [ -z "$BILI_PLAYWRIGHT_CHROMIUM" ]; then
     record_result inconclusive 1 "浏览器运行器未返回可用路径。"
     echo "[不确定] 浏览器运行器未返回可用路径。" >&2
     exit 1

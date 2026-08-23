@@ -284,21 +284,25 @@ class TaskQueue:
         for worker in self._workers:
             worker.start()
 
-    def _notify_locked(self, task: Task | None, *, task_id: str = "") -> None:
-        # Every state/progress transition bumps the change counter so SSE
-        # consumers can skip full recomputation while nothing changed.
+    def _bump_change_locked(self) -> None:
         self._change_count += 1
+
+    def _notify_locked(self, task: Task | None, *, task_id: str = "") -> None:
         callback = self.on_state_change
-        if callback is None:
-            return
-        try:
-            callback(task.id if task else task_id, task.to_dict() if task else None)
-        except Exception:
-            # Persistence must never turn a valid download into a failed task.
-            pass
+        if callback is not None:
+            try:
+                callback(task.id if task else task_id, task.to_dict() if task else None)
+            except Exception:
+                # Persistence must never turn a valid download into a failed task.
+                pass
+        # Publish the change only after the persistence callback returns. This
+        # prevents summary SSE consumers from observing a new count while the
+        # corresponding task row still contains the previous state.
+        self._bump_change_locked()
 
     def change_count(self) -> int:
-        return self._change_count
+        with self._lock:
+            return self._change_count
 
     def stop(self) -> None:
         with self._cv:
@@ -440,37 +444,80 @@ class TaskQueue:
                 self._drop_task_locked(task_id)
             return len(remove)
 
-    def cancel(self, task_id: str) -> bool:
+    def cancel(self, task_id: str, *, intent: str = "cancel") -> bool:
+        if intent not in {"cancel", "pause"}:
+            raise ValueError("不支持的停止意图")
         task_to_log: Task | None = None
+        log_message = ""
         with self._cv:
             task = self._tasks.get(task_id)
-            if task is None or task.status in TERMINAL_STATUSES:
+            if task is None:
                 return False
+            if task.status in TERMINAL_STATUSES:
+                return (
+                    intent == "cancel"
+                    and task.status == "cancelled"
+                    and task.phase == "cancelled"
+                ) or (
+                    intent == "pause"
+                    and task.status == "cancelled"
+                    and task.phase == "paused"
+                )
             event = self._cancel_events.setdefault(task_id, threading.Event())
-            event.set()
             if task.status == "queued":
+                event.set()
                 try:
                     self._pending.remove(task_id)
                 except ValueError:
                     pass
                 task.status = "cancelled"
-                task.phase = "cancelled"
-                task.phase_label = PHASE_LABELS["cancelled"]
-                task.error = "任务已取消"
-                task.progress_message = "任务在队列中被取消"
+                if intent == "pause":
+                    task.phase = "paused"
+                    task.phase_label = PHASE_LABELS["paused"]
+                    task.error = "任务已暂停；点击继续会使用同一任务 ID 从头重新开始当前下载"
+                    task.progress_message = "任务在排队阶段暂停"
+                    log_message = "\n[任务] 已在排队阶段暂停。\n"
+                else:
+                    task.phase = "cancelled"
+                    task.phase_label = PHASE_LABELS["cancelled"]
+                    task.error = "任务已取消"
+                    task.progress_message = "任务在队列中被取消"
+                    log_message = "\n[任务] 收到取消请求。\n"
                 task.finished_at = time.time()
                 task.last_heartbeat = task.finished_at
                 self._mark_recent_locked(task.id)
                 self._trim_history_locked()
             else:
-                task.error = "正在取消任务…"
-                task.progress_message = "正在终止 BBDown 进程树"
+                if intent == "pause" and task.phase == "cancelling":
+                    return False
+                if intent == "pause" and task.phase == "pausing":
+                    return True
+                if intent == "cancel" and task.phase == "cancelling":
+                    return True
+                event.set()
+                if intent == "pause":
+                    task.phase = "pausing"
+                    task.phase_label = PHASE_LABELS["pausing"]
+                    task.error = "正在暂停任务…"
+                    task.progress_message = "正在等待当前处理步骤停止"
+                    log_message = "\n[任务] 收到暂停请求。\n"
+                else:
+                    task.phase = "cancelling"
+                    task.phase_label = PHASE_LABELS["cancelling"]
+                    task.error = "正在取消任务…"
+                    task.progress_message = "正在等待当前处理步骤停止"
+                    log_message = "\n[任务] 收到取消请求。\n"
+                task.progress_percent = None
+                task.speed_text = ""
+                task.eta_text = ""
+                task.downloaded_bytes = None
+                task.total_bytes = None
                 task.last_heartbeat = time.time()
             self._notify_locked(task)
             task_to_log = task
             self._cv.notify_all()
-        if task_to_log is not None:
-            self._append_log(task_to_log, "\n[任务] 收到取消请求。\n")
+        if task_to_log is not None and log_message:
+            self._append_log(task_to_log, log_message)
         return True
 
     def enqueue(
@@ -789,13 +836,15 @@ class TaskQueue:
                 self._run_one(task)
                 continue
             acquired = False
+            stopped_while_waiting = False
             try:
                 while not acquired and not self._stop:
                     acquired = semaphore.acquire(timeout=0.5)
                     if self._cancel_events.get(task.id, threading.Event()).is_set():
                         self._finish(task, "cancelled", error="任务已取消")
+                        stopped_while_waiting = True
                         break
-                if acquired:
+                if acquired and not stopped_while_waiting:
                     self._run_one(task)
             finally:
                 if acquired:
@@ -817,8 +866,20 @@ class TaskQueue:
 
     def _set_progress(self, task: Task, event: ProgressEvent) -> None:
         with self._lock:
-            if task.status != "running":
+            if task.status != "running" or task.phase in {"cancelling", "pausing"}:
                 return
+            before = (
+                task.phase,
+                task.phase_label,
+                task.progress_percent,
+                task.speed_text,
+                task.eta_text,
+                task.downloaded_bytes,
+                task.total_bytes,
+                task.current_part,
+                task.part_total,
+                task.progress_message,
+            )
             phase_changed = event.phase != task.phase
             task.phase = event.phase
             task.phase_label = event.phase_label
@@ -845,6 +906,20 @@ class TaskQueue:
             if event.message:
                 task.progress_message = event.message
             task.last_heartbeat = time.time()
+            after = (
+                task.phase,
+                task.phase_label,
+                task.progress_percent,
+                task.speed_text,
+                task.eta_text,
+                task.downloaded_bytes,
+                task.total_bytes,
+                task.current_part,
+                task.part_total,
+                task.progress_message,
+            )
+            if after != before:
+                self._notify_locked(task)
 
     def _set_phase(
         self,
@@ -855,6 +930,18 @@ class TaskQueue:
         percent: float | None = None,
     ) -> None:
         with self._lock:
+            if task.status != "running" or task.phase in {"cancelling", "pausing"}:
+                return
+            before = (
+                task.phase,
+                task.phase_label,
+                task.progress_percent,
+                task.speed_text,
+                task.eta_text,
+                task.downloaded_bytes,
+                task.total_bytes,
+                task.progress_message,
+            )
             task.phase = phase
             task.phase_label = PHASE_LABELS.get(phase, phase)
             task.progress_percent = percent
@@ -865,8 +952,27 @@ class TaskQueue:
             if message:
                 task.progress_message = message
             task.last_heartbeat = time.time()
+            after = (
+                task.phase,
+                task.phase_label,
+                task.progress_percent,
+                task.speed_text,
+                task.eta_text,
+                task.downloaded_bytes,
+                task.total_bytes,
+                task.progress_message,
+            )
+            if after != before:
+                self._notify_locked(task)
 
-    def _finish(self, task: Task, status: str, *, error: str = "") -> None:
+    def _finish(
+        self,
+        task: Task,
+        status: str,
+        *,
+        error: str = "",
+        phase_override: str = "",
+    ) -> None:
         now = time.time()
         with self._lock:
             task.status = status
@@ -875,7 +981,7 @@ class TaskQueue:
             task.last_heartbeat = now
             task.speed_text = ""
             task.eta_text = ""
-            task.phase = status if status in PHASE_LABELS else "failed"
+            task.phase = phase_override or (status if status in PHASE_LABELS else "failed")
             task.phase_label = PHASE_LABELS.get(task.phase, task.phase)
             if status == "success":
                 task.phase = "completed"
@@ -1004,6 +1110,7 @@ class TaskQueue:
                 timeout=min(120.0, float(cfg.download_timeout_sec)),
                 runner=self.runner,
                 credential_dir=self.bbdown_data_dir,
+                cancel_event=cancel_event,
             )
             if cancel_event.is_set():
                 self._finish(task, "cancelled", error="任务已取消")

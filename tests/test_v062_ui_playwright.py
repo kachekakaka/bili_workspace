@@ -132,6 +132,7 @@ def mock_api(route: Route) -> None:
                 "message": "测试登录有效",
                 "default_group": "未分组",
                 "default_min_height": 1080,
+                "group_records": GROUPS,
                 "download_dir": "/downloads",
                 "temp_dir": "/tmp/exports",
                 "cache_dir": "/tmp/cache",

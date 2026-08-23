@@ -287,11 +287,16 @@ class TaskOwnershipNasStore(SerializedAuthNasStore):
             self._execute("DELETE FROM task_records WHERE id=?", (task_id,))
             self._execute("DELETE FROM task_snapshots WHERE task_id=?", (task_id,))
             self._snapshot_last_write.pop(task_id, None)
+            self._snapshot_last_status.pop(task_id, None)
             return
         now = time.time()
         value = dict(payload)
         status = str(value.get("status") or "failed")
-        if status == "running" and now - self._snapshot_last_write.get(task_id, 0.0) < 1.0:
+        if (
+            status == "running"
+            and self._snapshot_last_status.get(task_id) == "running"
+            and now - self._snapshot_last_write.get(task_id, 0.0) < 1.0
+        ):
             return
         existing = self._one(
             "SELECT owner_user_id FROM task_records WHERE id=?", (task_id,)
@@ -341,6 +346,7 @@ class TaskOwnershipNasStore(SerializedAuthNasStore):
             (task_id, destination, status, created_at, now, encoded),
         )
         self._snapshot_last_write[task_id] = now
+        self._snapshot_last_status[task_id] = status
         if status in TERMINAL_STATUSES or now - self._last_snapshot_prune >= 60:
             self.cleanup_task_history(now=now, owner_user_id=owner)
             self._last_snapshot_prune = now
@@ -355,6 +361,28 @@ class TaskOwnershipNasStore(SerializedAuthNasStore):
 
     def task_snapshot(self, task_id: str) -> dict[str, Any] | None:
         return self.task_record(task_id)
+
+    def task_status_summary(self, owner_user_id: str | None = None) -> dict[str, int]:
+        params: tuple[Any, ...] = ()
+        where = ""
+        if owner_user_id is not None:
+            where = " WHERE owner_user_id=?"
+            params = (str(owner_user_id),)
+        rows = self._all(
+            f"SELECT status,COUNT(*) AS n FROM task_records{where} GROUP BY status",
+            params,
+        )
+        counts = {str(row["status"]): int(row["n"] or 0) for row in rows}
+        return {
+            "all": sum(counts.values()),
+            "queued": counts.get("queued", 0),
+            "running": counts.get("running", 0),
+            "success": counts.get("success", 0),
+            "skipped": counts.get("skipped", 0),
+            "failed": counts.get("failed", 0),
+            "cancelled": counts.get("cancelled", 0),
+            "active": counts.get("queued", 0) + counts.get("running", 0),
+        }
 
     def list_task_records(
         self,
@@ -412,6 +440,8 @@ class TaskOwnershipNasStore(SerializedAuthNasStore):
     def delete_task_snapshot(self, task_id: str) -> None:
         self._execute("DELETE FROM task_records WHERE id=?", (task_id,))
         self._execute("DELETE FROM task_snapshots WHERE task_id=?", (task_id,))
+        self._snapshot_last_write.pop(task_id, None)
+        self._snapshot_last_status.pop(task_id, None)
 
     def clear_finished_task_snapshots(self, keep_ids: set[str] | None = None) -> int:
         keep_ids = keep_ids or set()
@@ -570,6 +600,7 @@ class TaskOwnershipNasStore(SerializedAuthNasStore):
                     (f"%task={task_id}%",),
                 )
             self._snapshot_last_write.pop(task_id, None)
+            self._snapshot_last_status.pop(task_id, None)
         return len(stale)
 
     def _cleanup_loop(self) -> None:

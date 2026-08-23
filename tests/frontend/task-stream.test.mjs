@@ -30,49 +30,90 @@ class FakeEventSource {
   }
 }
 
-test('task payload reducer replaces task data and preserves explicit summary', () => {
-  const next = reduceTaskStreamPayload(
+test('full and summary reducers have disjoint payload shapes', () => {
+  const full = reduceTaskStreamPayload(
     { tasks: [{ id: 'old' }], summary: { all: 1 } },
     { tasks: [{ id: 'new' }], summary: { all: 2 }, grouped: [] },
     123,
   );
-  assert.deepEqual(next.tasks, [{ id: 'new' }]);
-  assert.equal(next.summary.all, 2);
-  assert.equal(next.receivedAt, 123);
+  assert.deepEqual(full.tasks, [{ id: 'new' }]);
+  assert.equal(full.summary.all, 2);
+  assert.equal(full.receivedAt, 123);
+
+  const summary = reduceTaskStreamPayload(
+    { tasks: [{ id: 'must-not-survive' }], grouped: [{ owner: 'x' }] },
+    { summary: { active: 3 } },
+    456,
+    'summary',
+  );
+  assert.deepEqual(Object.keys(summary).sort(), ['receivedAt', 'summary']);
+  assert.equal(summary.summary.active, 3);
 });
 
-test('TaskStream start is idempotent and owns only one EventSource', () => {
+test('TaskStream has zero sources without a page lease', () => {
+  FakeEventSource.instances = [];
+  const stream = createTaskStream({ EventSourceImpl: FakeEventSource });
+  assert.equal(stream.activeSourceCount(), 0);
+  assert.equal(stream.leaseCount(), 0);
+  assert.equal(FakeEventSource.instances.length, 0);
+});
+
+test('summary lease uses summary endpoint and never retains full task data', () => {
   FakeEventSource.instances = [];
   const stream = createTaskStream({ EventSourceImpl: FakeEventSource, now: () => 456 });
   const values = [];
-  stream.subscribe(value => values.push(value));
-  const first = stream.start();
-  const second = stream.start();
-  assert.equal(first, second);
-  assert.equal(FakeEventSource.instances.length, 1);
-  assert.equal(stream.activeSourceCount(), 1);
-  assert.equal(first.url, '/api/events');
-  first.emit('tasks', JSON.stringify({ tasks: [{ id: 'task-1' }], summary: { all: 1 } }));
-  assert.equal(values.at(-1).tasks[0].id, 'task-1');
-  stream.stop({ clear: true });
-  assert.equal(first.closed, true);
+  stream.subscribe(value => values.push(value), { mode: 'summary' });
+  const release = stream.acquire('summary');
+  const source = FakeEventSource.instances[0];
+  assert.equal(source.url, '/api/events?view=summary');
+  source.emit('tasks', JSON.stringify({ summary: { all: 7 }, tasks: [{ id: 'leak' }] }));
+  assert.equal(values.at(-1).summary.all, 7);
+  assert.equal('tasks' in values.at(-1), false);
+  release();
+  assert.equal(source.closed, true);
   assert.equal(stream.activeSourceCount(), 0);
-  assert.deepEqual(stream.get().tasks, []);
 });
 
-test('entering and leaving a task view ten times only changes subscribers', () => {
+test('full lease preempts summary with one source and snapshots reset on mode return', () => {
   FakeEventSource.instances = [];
   const stream = createTaskStream({ EventSourceImpl: FakeEventSource });
-  stream.start();
+  const releaseSummary = stream.acquire('summary');
+  const firstSummary = FakeEventSource.instances.at(-1);
+  firstSummary.emit('tasks', JSON.stringify({ summary: { all: 1 } }));
+
+  const releaseFull = stream.acquire('full');
+  const firstFull = FakeEventSource.instances.at(-1);
+  assert.equal(firstSummary.closed, true);
+  assert.equal(stream.activeMode(), 'full');
+  assert.equal(stream.activeSourceCount(), 1);
+  firstFull.emit('tasks', JSON.stringify({ tasks: [{ id: 'old-full' }], summary: { all: 1 } }));
+  assert.equal(stream.get('full').tasks[0].id, 'old-full');
+
+  releaseFull();
+  const secondSummary = FakeEventSource.instances.at(-1);
+  assert.equal(firstFull.closed, true);
+  assert.equal(secondSummary.url, '/api/events?view=summary');
+  assert.deepEqual(stream.get('summary').summary, {});
+
+  const releaseFullAgain = stream.acquire('full');
+  assert.equal(secondSummary.closed, true);
+  assert.deepEqual(stream.get('full').tasks, []);
+  assert.equal(stream.activeSourceCount(), 1);
+  releaseFullAgain();
+  releaseSummary();
+  assert.equal(stream.activeSourceCount(), 0);
+});
+
+test('route abort releases a lease immediately even before a mount handle exists', () => {
+  FakeEventSource.instances = [];
+  const stream = createTaskStream({ EventSourceImpl: FakeEventSource });
   for (let index = 0; index < 10; index += 1) {
-    const unsubscribeTasks = stream.subscribe(() => {});
-    const unsubscribeConnection = stream.subscribeConnection(() => {});
+    const controller = new AbortController();
+    stream.acquire('full', { signal: controller.signal });
     assert.equal(stream.activeSourceCount(), 1);
-    assert.equal(unsubscribeTasks(), true);
-    assert.equal(unsubscribeTasks(), false);
-    assert.equal(unsubscribeConnection(), true);
-    assert.equal(unsubscribeConnection(), false);
+    controller.abort();
+    assert.equal(stream.activeSourceCount(), 0);
+    assert.equal(stream.leaseCount(), 0);
   }
-  assert.equal(FakeEventSource.instances.length, 1);
-  stream.stop();
+  assert.equal(FakeEventSource.instances.length, 10);
 });

@@ -6,6 +6,8 @@ param(
     [string]$TestRoot = '',
     [string]$RunId = '',
     [string]$RunRoot = '',
+    [Parameter(Mandatory = $true)]
+    [string]$TestId,
     [ValidateSet('passed', 'failed', 'blocked', 'inconclusive', 'not_run')]
     [string]$Status = 'inconclusive',
     [int]$ExitCode = -1,
@@ -21,6 +23,10 @@ $RunMarkerName = '.bili-workspace-test-run.json'
 $DefaultWorkspaceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { $WorkspaceRoot = $DefaultWorkspaceRoot }
 $WorkspaceRoot = [System.IO.Path]::GetFullPath($WorkspaceRoot)
+
+if ($TestId -notmatch '^T-[A-Z0-9]+(?:-[A-Z0-9]+)*$') {
+    throw 'TestId 必须是形如 T-PROJECT 或 T-DOCKER 的 Registry ID'
+}
 
 function Test-IsWithin([string]$Path, [string]$Parent) {
     $candidate = [System.IO.Path]::GetFullPath($Path).TrimEnd([char[]]'\/')
@@ -102,7 +108,7 @@ function Assert-RootMarker([string]$Root, [string]$Workspace) {
     Assert-NonEmptyStringProperty $marker 'created_at' '测试根目录所有权标记'
 }
 
-function Assert-Run([string]$Candidate, [string]$Workspace) {
+function Assert-Run([string]$Candidate, [string]$Workspace, [string]$ExpectedTestId) {
     $run = [System.IO.Path]::GetFullPath($Candidate)
     Assert-NotReparsePoint $run '测试运行目录'
     if (-not (Test-Path -LiteralPath $run -PathType Container)) { throw "测试运行目录不存在: $run" }
@@ -118,7 +124,21 @@ function Assert-Run([string]$Candidate, [string]$Workspace) {
     if (-not ([System.IO.Directory]::GetParent($run).FullName.Equals($root, [System.StringComparison]::OrdinalIgnoreCase))) {
         throw '测试运行目录必须是测试根目录的直接子目录'
     }
-    Assert-Property $marker 'schema_version' 1 '测试运行所有权标记'
+    $schemaProperty = $marker.PSObject.Properties['schema_version']
+    if ($null -eq $schemaProperty) { throw '测试运行所有权标记缺少 schema_version' }
+    $schemaVersion = [int]$schemaProperty.Value
+    if ($schemaVersion -eq 1) {
+        if ($ExpectedTestId -ne 'T-PROJECT') {
+            throw 'schema v1 测试运行只能按隐式 T-PROJECT 记录，不能绑定其他 TestId'
+        }
+    }
+    elseif ($schemaVersion -eq 2) {
+        Assert-NonEmptyStringProperty $marker 'test_id' '测试运行所有权标记'
+        Assert-Property $marker 'test_id' $ExpectedTestId '测试运行所有权标记'
+    }
+    else {
+        throw "测试运行所有权标记使用不支持的 schema_version: $schemaVersion"
+    }
     Assert-Property $marker 'kind' 'bili-workspace-test-run' '测试运行所有权标记'
     Assert-Property $marker 'project_id' $ProjectId '测试运行所有权标记'
     Assert-Property $marker 'workspace_root' $Workspace '测试运行所有权标记'
@@ -136,7 +156,7 @@ function Assert-Run([string]$Candidate, [string]$Workspace) {
         }
         Assert-NotReparsePoint $child '测试运行子目录'
     }
-    return [pscustomobject]@{ Path = $run; Marker = $marker }
+    return [pscustomobject]@{ Path = $run; Marker = $marker; SchemaVersion = $schemaVersion }
 }
 
 if ($Action -eq 'Create') {
@@ -182,9 +202,10 @@ if ($Action -eq 'Create') {
     if (Test-Path -LiteralPath $RunRoot) { throw "测试运行目录已存在: $RunRoot" }
     New-Item -ItemType Directory -Path $RunRoot | Out-Null
     $runMarker = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         kind = 'bili-workspace-test-run'
         project_id = $ProjectId
+        test_id = $TestId
         workspace_root = $WorkspaceRoot
         test_root = $TestRoot
         run_root = $RunRoot
@@ -196,8 +217,9 @@ if ($Action -eq 'Create') {
         New-Item -ItemType Directory -Path (Join-Path $RunRoot $directory) | Out-Null
     }
     $initialResult = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         project_id = $ProjectId
+        test_id = $TestId
         run_id = $RunId
         status = 'inconclusive'
         updated_at = [DateTime]::UtcNow.ToString('o')
@@ -213,9 +235,9 @@ if ($Action -eq 'Create') {
 }
 
 if ([string]::IsNullOrWhiteSpace($RunRoot)) { throw 'Record 操作必须提供 -RunRoot' }
-$validated = Assert-Run $RunRoot $WorkspaceRoot
+$validated = Assert-Run $RunRoot $WorkspaceRoot $TestId
 $result = [ordered]@{
-    schema_version = 1
+    schema_version = $validated.SchemaVersion
     project_id = $ProjectId
     run_id = $validated.Marker.run_id
     status = $Status
@@ -223,6 +245,7 @@ $result = [ordered]@{
     workspace_root = $WorkspaceRoot
     run_root = $validated.Path
 }
+if ($validated.SchemaVersion -eq 2) { $result['test_id'] = $TestId }
 if ($ExitCode -ge 0) { $result['exit_code'] = $ExitCode }
 if (-not [string]::IsNullOrWhiteSpace($Message)) { $result['message'] = $Message }
 $resultPath = Join-Path $validated.Path 'results\result.json'

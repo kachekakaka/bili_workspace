@@ -1,9 +1,12 @@
 import { once } from '../core/lifecycle.mjs';
 import {
   filterSearchItems,
+  readLru,
+  SEARCH_PAGE_LRU_LIMIT,
   searchPageKey,
   shouldPrefetchNextPage,
   splitTitleTerms,
+  writeLru,
 } from '../core/search-policy.mjs';
 import {
   bindCoverFallback,
@@ -38,7 +41,46 @@ const searchState = {
   preloadController: null,
   preloadHandle: 0,
   preloadHandleType: '',
+  sessionKey: '',
 };
+
+function cancelSearchPreload() {
+  if (!searchState.preloadHandle) return;
+  if (searchState.preloadHandleType === 'idle' && globalThis.cancelIdleCallback) {
+    globalThis.cancelIdleCallback(searchState.preloadHandle);
+  } else {
+    globalThis.clearTimeout(searchState.preloadHandle);
+  }
+  searchState.preloadHandle = 0;
+  searchState.preloadHandleType = '';
+}
+
+export function clearSearchSessionState() {
+  cancelSearchPreload();
+  searchState.currentController?.abort();
+  searchState.preloadController?.abort();
+  searchState.currentController = null;
+  searchState.preloadController = null;
+  searchState.cache.clear();
+  searchState.selected.clear();
+  Object.assign(searchState, {
+    q: '',
+    order: 'totalrank',
+    page: 1,
+    pages: 0,
+    total: 0,
+    data: null,
+    hideDownloaded: true,
+    filterMode: 'raw',
+    filterText: '',
+    filterTouched: false,
+    destination: 'library',
+    groupId: '',
+    minHeight: 1080,
+    sessionKey: '',
+    requestGeneration: searchState.requestGeneration + 1,
+  });
+}
 
 function policyMode(mode = searchState.filterMode) {
   return mode === 'all' ? 'exact' : mode === 'any' ? 'fuzzy' : 'raw';
@@ -133,6 +175,15 @@ async function mapLimit(items, limit, callback) {
 }
 
 export async function mount(root, context) {
+  const sessionKey = String(
+    context.session.get().user?.id
+    || context.session.get().username
+    || '',
+  );
+  if (searchState.sessionKey !== sessionKey) {
+    clearSearchSessionState();
+    searchState.sessionKey = sessionKey;
+  }
   const groups = context.shared.get().groups || [];
   const tags = context.shared.get().tags || [];
   if (!FILTER_MODES.has(searchState.filterMode)) searchState.filterMode = 'raw';
@@ -143,16 +194,8 @@ export async function mount(root, context) {
   const results = host.querySelector('#enhSearchResults');
   let ownsModal = false;
 
-  const cancelIdlePreload = () => {
-    if (!searchState.preloadHandle) return;
-    if (searchState.preloadHandleType === 'idle' && globalThis.cancelIdleCallback) globalThis.cancelIdleCallback(searchState.preloadHandle);
-    else globalThis.clearTimeout(searchState.preloadHandle);
-    searchState.preloadHandle = 0;
-    searchState.preloadHandleType = '';
-  };
-
   const abortSearchRequests = () => {
-    cancelIdlePreload();
+    cancelSearchPreload();
     searchState.currentController?.abort();
     searchState.preloadController?.abort();
     searchState.currentController = null;
@@ -217,18 +260,21 @@ export async function mount(root, context) {
 
   const fetchRawPage = async (query, order, page, { fresh = false, signal } = {}) => {
     const key = searchPageKey({ keyword: query, order, page });
-    if (!fresh && searchState.cache.has(key)) return searchState.cache.get(key);
+    if (!fresh) {
+      const cached = readLru(searchState.cache, key);
+      if (cached !== undefined) return cached;
+    }
     if (fresh) searchState.cache.delete(key);
     const params = new URLSearchParams({ q: query, order, page: String(page) });
     if (fresh) params.set('fresh', 'true');
     const response = await context.api(`/api/search?${params}`, { signal });
     const data = response.data || {};
-    searchState.cache.set(key, data);
+    writeLru(searchState.cache, key, data, SEARCH_PAGE_LRU_LIMIT);
     return data;
   };
 
   const scheduleNextPagePreload = generation => {
-    cancelIdlePreload();
+    cancelSearchPreload();
     const query = searchState.q;
     const order = searchState.order;
     const currentPage = searchState.page;

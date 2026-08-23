@@ -1,4 +1,5 @@
 import { once } from '../core/lifecycle.mjs';
+import { resourceKey } from '../core/resource-cache.mjs';
 import {
   bindCoverFallback,
   bindDialogCancel,
@@ -46,6 +47,21 @@ const libraryState = {
   tag: '',
 };
 
+export function clearLibrarySessionState() {
+  libraryState.selected.clear();
+  Object.assign(libraryState, {
+    page: 1,
+    data: null,
+    q: '',
+    groupId: '',
+    sort: 'newest',
+    codec: '',
+    minHeight: 0,
+    watched: '',
+    tag: '',
+  });
+}
+
 export function splitLibrarySort(value) {
   const text = String(value || 'newest');
   if (SORT_ALIASES[text]) return [...SORT_ALIASES[text]];
@@ -68,6 +84,48 @@ export function libraryTagColor(tag) {
   const old = String(OLD_COLORS[name] || '').toLowerCase();
   if (DEFAULT_COLORS[name] && (!configured || configured === old)) return DEFAULT_COLORS[name];
   return safeColor(tag?.color || DEFAULT_COLORS[name] || '#64748b');
+}
+
+export function libraryResponseSignature(data) {
+  const value = data || {};
+  return JSON.stringify([
+    value.page,
+    value.pages,
+    value.total,
+    (value.items || []).map(item => [
+      item.id,
+      item.source_key,
+      item.title,
+      item.cover,
+      item.duration_text,
+      item.author,
+      item.bvid,
+      item.group_id,
+      item.group_name,
+      item.total_size,
+      item.watch_position,
+      item.watch_duration,
+      item.selected_quality,
+      item.selected_resolution,
+      item.selected_codec,
+      item.primary_file_id,
+      item.tags,
+    ]),
+  ]);
+}
+
+function libraryQuery() {
+  return {
+    page: Math.max(1, Number(libraryState.page || 1)),
+    page_size: 36,
+    q: libraryState.q,
+    group_id: libraryState.groupId,
+    sort: libraryState.sort,
+    codec: libraryState.codec,
+    min_height: Number(libraryState.minHeight || 0),
+    watched: libraryState.watched,
+    tag: libraryState.tag,
+  };
 }
 
 function tagOptions(tags, selected = '', includeAll = false) {
@@ -174,11 +232,15 @@ export async function mount(root, context) {
       </div>
     </section>
     <section class="enh-library-toolbar" style="margin-top:16px"><div class="enh-batch-layout"><span id="enhLibrarySummary" class="metric-foot">正在读取作品库…</span><div class="enh-batch-actions"><button type="button" id="enhLibrarySelectVisible" class="btn small" title="选择当前页全部作品"><span aria-hidden="true">✓</span> 本页</button><button type="button" id="enhLibraryClear" class="btn small" title="清空跨页选择"><span aria-hidden="true">×</span> 清空</button><div class="enh-select-shell enh-batch-select" data-icon="⌁"><select id="enhLibraryBatchTag" class="select enh-inline-select">${tagOptions(tags)}</select></div><button type="button" id="enhLibraryAddTag" class="btn small"><span aria-hidden="true">＋</span> 标签</button><button type="button" id="enhLibraryRemoveTag" class="btn small"><span aria-hidden="true">－</span> 标签</button><button type="button" id="enhLibraryDownload" class="btn small"><span aria-hidden="true">↓</span> 下载 ${libraryState.selected.size}</button><button type="button" id="enhLibraryDelete" class="btn danger small"><span aria-hidden="true">⌫</span> 删除 ${libraryState.selected.size}</button></div></div></section>
+    <div id="enhLibraryStale" class="hidden" style="margin-top:12px"></div>
     <section id="enhLibraryResults" style="margin-top:16px"><div class="loading-card">正在读取作品库…</div></section>
   </div>`;
   context.commit(() => root.replaceChildren(host));
 
   let ownsModal = false;
+  let currentResourceKey = '';
+  let currentSignature = '';
+  let loadError = null;
   const results = host.querySelector('#enhLibraryResults');
   const summary = host.querySelector('#enhLibrarySummary');
   host.querySelector('#enhLibrarySortField').value = sortField;
@@ -187,6 +249,43 @@ export async function mount(root, context) {
   host.querySelector('#enhLibraryHeight').value = String(libraryState.minHeight || 0);
   host.querySelector('#enhLibraryWatched').value = libraryState.watched;
 
+  const updateSelectionUi = () => {
+    const data = libraryState.data || { items: [], page: 1, pages: 0, total: 0 };
+    summary.textContent = `共 ${data.total || 0} 个作品 · 第 ${data.page || 1} / ${data.pages || 0} 页 · 已选择 ${libraryState.selected.size}`;
+    host.querySelector('#enhLibraryDownload').innerHTML = `<span aria-hidden="true">↓</span> 下载 ${libraryState.selected.size}`;
+    host.querySelector('#enhLibraryDelete').innerHTML = `<span aria-hidden="true">⌫</span> 删除 ${libraryState.selected.size}`;
+    for (const input of host.querySelectorAll('[data-library-select]')) {
+      input.checked = libraryState.selected.has(input.dataset.librarySelect);
+    }
+  };
+
+  const updateFilterUi = () => {
+    for (const button of host.querySelectorAll('[data-library-group-chip]')) {
+      button.classList.toggle(
+        'active',
+        String(button.dataset.libraryGroupChip || '') === String(libraryState.groupId || ''),
+      );
+    }
+    for (const button of host.querySelectorAll('[data-library-tag-chip]')) {
+      button.classList.toggle(
+        'active',
+        String(button.dataset.libraryTagChip || '') === String(libraryState.tag || ''),
+      );
+    }
+  };
+
+  const renderStale = () => {
+    const node = host.querySelector('#enhLibraryStale');
+    const entry = currentResourceKey ? context.resources.peek(currentResourceKey) : null;
+    if (!loadError && !entry?.stale) {
+      node.className = 'hidden';
+      node.replaceChildren();
+      return;
+    }
+    node.className = `notice ${libraryState.data ? 'warn' : 'bad'}`;
+    node.innerHTML = `作品库刷新失败，当前显示${libraryState.data ? '最近一次缓存' : '空状态'}。<button type="button" class="btn small" data-library-retry>重试</button>`;
+  };
+
   const renderResults = () => {
     if (!context.isCurrent()) return;
     const data = libraryState.data || { items: [], page: 1, pages: 0, total: 0 };
@@ -194,33 +293,66 @@ export async function mount(root, context) {
     for (const id of [...libraryState.selected]) {
       if (!validIds.has(String(id)) && data.pages <= 1) libraryState.selected.delete(id);
     }
-    summary.textContent = `共 ${data.total || 0} 个作品 · 第 ${data.page || 1} / ${data.pages || 0} 页 · 已选择 ${libraryState.selected.size}`;
-    host.querySelector('#enhLibraryDownload').innerHTML = `<span aria-hidden="true">↓</span> 下载 ${libraryState.selected.size}`;
-    host.querySelector('#enhLibraryDelete').innerHTML = `<span aria-hidden="true">⌫</span> 删除 ${libraryState.selected.size}`;
     results.innerHTML = (data.items || []).length
       ? `<div class="media-grid">${data.items.map(item => libraryCard(item, tags)).join('')}</div>${paginationHtml(data.page || 1, data.pages || 1)}`
       : '<div class="empty">没有符合条件的作品</div>';
     bindCoverFallback(results, context.signal);
+    updateSelectionUi();
+    renderStale();
   };
 
   const loadLibrary = async (page = libraryState.page) => {
     libraryState.page = Math.max(1, Number(page || 1));
-    results.innerHTML = '<div class="loading-card">正在读取作品库…</div>';
-    const params = new URLSearchParams({
-      page: String(libraryState.page),
-      page_size: '36',
-      q: libraryState.q,
-      group_id: libraryState.groupId,
-      sort: libraryState.sort,
-      codec: libraryState.codec,
-      min_height: String(libraryState.minHeight || 0),
-      watched: libraryState.watched,
-      tag: libraryState.tag,
-    });
-    const response = await context.api(`/api/enhancements/library?${params}`, { signal: context.signal });
-    libraryState.data = response.data || { items: [], page: 1, pages: 0, total: 0 };
-    libraryState.page = Number(libraryState.data.page || libraryState.page);
-    renderResults();
+    const query = libraryQuery();
+    const key = resourceKey('library-query', query);
+    if (key !== currentResourceKey) currentSignature = '';
+    currentResourceKey = key;
+    loadError = null;
+    const cached = context.resources.peek(key);
+    if (cached?.value) {
+      const signature = libraryResponseSignature(cached.value);
+      libraryState.data = cached.value;
+      libraryState.page = Number(cached.value.page || libraryState.page);
+      if (signature !== currentSignature) {
+        currentSignature = signature;
+        renderResults();
+      } else {
+        renderStale();
+      }
+    } else {
+      libraryState.data = null;
+      results.innerHTML = '<div class="loading-card">正在读取作品库…</div>';
+      updateSelectionUi();
+    }
+    const params = new URLSearchParams(
+      Object.fromEntries(Object.entries(query).map(([name, value]) => [name, String(value)])),
+    );
+    try {
+      const data = await context.resources.refresh(
+        key,
+        async ({ signal }) => (
+          (await context.api(`/api/enhancements/library?${params}`, { signal })).data
+          || { items: [], page: 1, pages: 0, total: 0 }
+        ),
+        { signal: context.signal },
+      );
+      if (!context.isCurrent() || currentResourceKey !== key) return;
+      const signature = libraryResponseSignature(data);
+      libraryState.data = data;
+      libraryState.page = Number(data.page || libraryState.page);
+      loadError = null;
+      if (signature !== currentSignature) {
+        currentSignature = signature;
+        renderResults();
+      } else {
+        renderStale();
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError' || currentResourceKey !== key) return;
+      loadError = error;
+      if (!libraryState.data) results.innerHTML = '<div class="empty">作品库暂时无法读取</div>';
+      renderStale();
+    }
   };
 
   const assignTags = async (item, values) => {
@@ -231,6 +363,29 @@ export async function mount(root, context) {
     });
     item.tags = response.data?.tags || [];
     return item.tags;
+  };
+
+  const invalidateLibraryPages = () => {
+    context.resources.invalidateWhere(
+      key => (
+        key.startsWith('library-query:')
+        || key.startsWith('library-summary:')
+        || key.startsWith('library:')
+      ),
+    );
+  };
+
+  const saveCurrentPageToCache = () => {
+    if (!currentResourceKey || !libraryState.data) return;
+    currentSignature = libraryResponseSignature(libraryState.data);
+    context.resources.set(currentResourceKey, libraryState.data);
+  };
+
+  const patchTagRow = item => {
+    const row = [...results.querySelectorAll('[data-tag-row]')].find(
+      node => String(node.dataset.tagRow) === String(item.source_key),
+    );
+    if (row) row.outerHTML = tagChips(tags, item.source_key, item.tags);
   };
 
   const selectedLibraryItems = async () => {
@@ -252,14 +407,25 @@ export async function mount(root, context) {
     }
     try {
       const items = await selectedLibraryItems();
+      const updated = new Map();
       await mapLimit(items, 6, async item => {
         const values = new Set(item.tags || []);
         if (add) values.add(tag);
         else values.delete(tag);
         await assignTags(item, [...values]);
+        updated.set(String(item.id), item.tags);
       });
+      for (const item of libraryState.data?.items || []) {
+        if (!updated.has(String(item.id))) continue;
+        item.tags = updated.get(String(item.id));
+        patchTagRow(item);
+      }
+      invalidateLibraryPages();
+      saveCurrentPageToCache();
       context.toast.show(`已${add ? '添加' : '移除'}标签“${tag}”`, 'good');
-      await loadLibrary();
+      if (libraryState.tag || splitLibrarySort(libraryState.sort)[0] === 'tag') {
+        void loadLibrary();
+      }
     } catch (error) {
       if (error?.name !== 'AbortError') context.toast.show(error.message, 'bad');
     }
@@ -287,6 +453,7 @@ export async function mount(root, context) {
         });
         modal.close('saved');
         context.toast.show('作品分组已修改', 'good');
+        invalidateLibraryPages();
         await loadLibrary();
       } catch (error) {
         context.toast.show(error.message, 'bad');
@@ -312,6 +479,7 @@ export async function mount(root, context) {
     for (const id of deleted) libraryState.selected.delete(id);
     const errorCount = Object.keys(response.data?.errors || {}).length;
     context.toast.show(`已删除 ${deleted.length} 个作品${errorCount ? `，${errorCount} 个失败` : ''}`, errorCount ? 'warn' : 'good');
+    invalidateLibraryPages();
     await loadLibrary();
     return true;
   };
@@ -408,6 +576,7 @@ export async function mount(root, context) {
     libraryState.minHeight = Number(host.querySelector('#enhLibraryHeight').value);
     libraryState.watched = host.querySelector('#enhLibraryWatched').value;
     libraryState.page = 1;
+    updateFilterUi();
     await loadLibrary();
   };
 
@@ -425,21 +594,25 @@ export async function mount(root, context) {
     if (!input) return;
     if (input.checked) libraryState.selected.add(input.dataset.librarySelect);
     else libraryState.selected.delete(input.dataset.librarySelect);
-    renderResults();
+    updateSelectionUi();
   }, { signal: context.signal });
 
   host.addEventListener('click', async event => {
     const target = event.target.closest('button');
     if (!target) return;
-    if (target.dataset.libraryGroupChip !== undefined) {
+    if (target.dataset.libraryRetry !== undefined) {
+      await loadLibrary();
+    } else if (target.dataset.libraryGroupChip !== undefined) {
       libraryState.groupId = target.dataset.libraryGroupChip || '';
       host.querySelector('#enhLibraryGroup').value = libraryState.groupId;
       libraryState.page = 1;
+      updateFilterUi();
       await loadLibrary();
     } else if (target.dataset.libraryTagChip !== undefined) {
       libraryState.tag = target.dataset.libraryTagChip || '';
       host.querySelector('#enhLibraryTag').value = libraryState.tag;
       libraryState.page = 1;
+      updateFilterUi();
       await loadLibrary();
     } else if (target.dataset.tagKey !== undefined) {
       const item = (libraryState.data?.items || []).find(value => String(value.source_key) === String(target.dataset.tagKey));
@@ -451,7 +624,12 @@ export async function mount(root, context) {
       target.disabled = true;
       try {
         await assignTags(item, [...values]);
-        renderResults();
+        patchTagRow(item);
+        invalidateLibraryPages();
+        saveCurrentPageToCache();
+        if (libraryState.tag || splitLibrarySort(libraryState.sort)[0] === 'tag') {
+          void loadLibrary();
+        }
       } catch (error) {
         context.toast.show(error.message, 'bad');
       } finally {
@@ -469,10 +647,10 @@ export async function mount(root, context) {
       await loadLibrary(value);
     } else if (target.id === 'enhLibrarySelectVisible') {
       for (const item of libraryState.data?.items || []) libraryState.selected.add(item.id);
-      renderResults();
+      updateSelectionUi();
     } else if (target.id === 'enhLibraryClear') {
       libraryState.selected.clear();
-      renderResults();
+      updateSelectionUi();
     } else if (target.id === 'enhLibraryAddTag') {
       await batchTag(true);
     } else if (target.id === 'enhLibraryRemoveTag') {
@@ -517,7 +695,7 @@ export async function mount(root, context) {
     }
   }, { signal: context.signal });
 
-  await loadLibrary();
+  void loadLibrary();
   return Object.freeze({
     dispose: once(() => {
       if (ownsModal) context.modal.close('route');

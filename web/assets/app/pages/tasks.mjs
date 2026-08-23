@@ -1,6 +1,12 @@
 import * as implementation from './tasks-impl.mjs';
 
-export { filterAndSortTasks } from './tasks-impl.mjs';
+export {
+  clearTaskPageSessionState,
+  filterAndSortTasks,
+  isPausedTask,
+  isStoppingTask,
+  taskActionState,
+} from './tasks-impl.mjs';
 
 function takeRequestedOwner() {
   try {

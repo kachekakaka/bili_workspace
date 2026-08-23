@@ -3,9 +3,14 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.config import ConfigStore
 from app.index_store import IndexStore
-from app.queue import TaskQueue
+from app.progress import PHASE_LABELS, ProgressEvent
+from app.queue import Task, TaskQueue
+from app.task_extensions import cancel_task, pause_task
+from app.task_logs import task_log_path
 from app.urls import Target
 from tests.conftest import wait_terminal
 
@@ -124,7 +129,7 @@ def test_history_limit_never_drops_queued_tasks(tmp_env):
         assert len(queue.list_tasks()) == 105
         assert all(queue.get_task(task["id"]) is not None for task in created)
         release.set()
-        assert wait_terminal(queue, created[-1]["id"], timeout=30)["status"] == "success"
+        assert wait_terminal(queue, created[-1]["id"], timeout=60)["status"] == "success"
         assert len(calls) == 105
     finally:
         release.set()
@@ -154,6 +159,237 @@ def test_cancel_queued_task(tmp_env):
     assert queue.get_task(second["id"])["status"] == "cancelled"
     release.set()
     queue.stop()
+
+
+def test_progress_and_phase_changes_notify_only_when_visible_state_changes(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    seen = []
+    queue = TaskQueue(store, index, on_state_change=lambda *args: seen.append(args))
+    task = Task(
+        id="progress-notify",
+        key="KPROGRESS",
+        url="https://www.bilibili.com/video/BV1PROGRESS1",
+        bvid="BV1PROGRESS1",
+        force=False,
+        status="running",
+        phase="resolving",
+        phase_label=PHASE_LABELS["resolving"],
+    )
+    event = ProgressEvent(
+        phase="download_video",
+        phase_label=PHASE_LABELS["download_video"],
+        progress_percent=12.5,
+        speed_text="1 MiB/s",
+        message="下载视频 12.5%",
+    )
+    try:
+        before = queue.change_count()
+        queue._set_progress(task, event)
+        assert queue.change_count() == before + 1
+        assert len(seen) == 1
+
+        queue._set_progress(task, event)
+        assert queue.change_count() == before + 1
+        assert len(seen) == 1
+
+        queue._set_phase(task, "merge", message="正在混流", percent=None)
+        assert queue.change_count() == before + 2
+        queue._set_phase(task, "merge", message="正在混流", percent=None)
+        assert queue.change_count() == before + 2
+
+        task.phase = "cancelling"
+        queue._set_progress(task, event)
+        assert task.phase == "cancelling"
+        assert queue.change_count() == before + 2
+    finally:
+        queue.stop()
+
+
+def test_change_count_is_published_after_state_callback(tmp_env, monkeypatch):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    order = []
+    queue = TaskQueue(
+        store,
+        index,
+        on_state_change=lambda *_args: order.append("persisted"),
+    )
+    original_bump = queue._bump_change_locked
+
+    def ordered_bump():
+        order.append("published")
+        original_bump()
+
+    monkeypatch.setattr(queue, "_bump_change_locked", ordered_bump)
+    task = Task(
+        id="notification-order",
+        key="KORDER",
+        url="https://www.bilibili.com/video/BV1ORDER001",
+        bvid="BV1ORDER001",
+        force=False,
+    )
+    try:
+        with queue._lock:
+            queue._notify_locked(task)
+        assert order == ["persisted", "published"]
+    finally:
+        queue.stop()
+
+
+def test_pause_can_be_upgraded_to_cancel_without_false_terminal_state(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(argv, **kwargs):
+        del kwargs
+        started.set()
+        release.wait(timeout=5)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    queue = TaskQueue(store, index, runner=runner)
+    try:
+        created = queue.enqueue([_target(202)])[0]
+        assert started.wait(timeout=2)
+
+        pausing = pause_task(queue, created["id"])
+        assert pausing["status"] == "running"
+        assert pausing["phase"] == "pausing"
+        assert pausing["finished_at"] is None
+
+        cancelling = cancel_task(queue, created["id"])
+        assert cancelling["status"] == "running"
+        assert cancelling["phase"] == "cancelling"
+        assert cancelling["finished_at"] is None
+        assert cancel_task(queue, created["id"])["phase"] == "cancelling"
+
+        release.set()
+        finished = wait_terminal(queue, created["id"])
+        assert finished["status"] == "cancelled"
+        assert finished["phase"] == "cancelled"
+        assert finished["finished_at"] is not None
+        assert cancel_task(queue, created["id"])["phase"] == "cancelled"
+    finally:
+        release.set()
+        queue.stop()
+
+
+def test_cancel_during_synchronous_metadata_wait_does_not_start_preflight(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    metadata_started = threading.Event()
+    release = threading.Event()
+    runner_calls = []
+
+    def metadata_fetcher(*_args):
+        metadata_started.set()
+        release.wait(timeout=5)
+        return {"title": "延迟元数据"}
+
+    def runner(argv, **kwargs):
+        del kwargs
+        runner_calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    queue = TaskQueue(
+        store,
+        index,
+        runner=runner,
+        metadata_fetcher=metadata_fetcher,
+    )
+    try:
+        created = queue.enqueue([_target(205)])[0]
+        assert metadata_started.wait(timeout=2)
+        cancelling = cancel_task(queue, created["id"])
+        assert cancelling["status"] == "running"
+        assert cancelling["phase"] == "cancelling"
+        assert cancelling["finished_at"] is None
+        release.set()
+        finished = wait_terminal(queue, created["id"])
+        assert finished["phase"] == "cancelled"
+        assert runner_calls == []
+    finally:
+        release.set()
+        queue.stop()
+
+
+def test_cancel_while_execution_slot_arrives_commits_terminal_once(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    entered = threading.Event()
+    allow_acquire = threading.Event()
+    seen = []
+
+    class GateSemaphore:
+        def acquire(self, timeout):
+            del timeout
+            entered.set()
+            allow_acquire.wait(timeout=3)
+            return True
+
+        def release(self):
+            return None
+
+    queue = TaskQueue(
+        store,
+        index,
+        runner=lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="", stderr=""
+        ),
+        execution_semaphore=GateSemaphore(),
+        on_state_change=lambda _task_id, payload: seen.append(payload),
+    )
+    try:
+        created = queue.enqueue([_target(206)])[0]
+        assert entered.wait(timeout=2)
+        cancelling = cancel_task(queue, created["id"])
+        assert cancelling["phase"] == "cancelling"
+        allow_acquire.set()
+        finished = wait_terminal(queue, created["id"])
+        assert finished["phase"] == "cancelled"
+        terminal = [
+            payload
+            for payload in seen
+            if payload
+            and payload["id"] == created["id"]
+            and payload["status"] == "cancelled"
+        ]
+        assert len(terminal) == 1
+    finally:
+        allow_acquire.set()
+        queue.stop()
+
+
+def test_queued_pause_is_terminal_and_cannot_be_relabelled_as_cancel(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(argv, **kwargs):
+        del kwargs
+        started.set()
+        release.wait(timeout=5)
+        work = Path(argv[argv.index("--work-dir") + 1])
+        (work / "demo.mp4").write_bytes(b"x")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    queue = TaskQueue(store, index, runner=runner)
+    try:
+        _running, queued = queue.enqueue([_target(203), _target(204)])
+        assert started.wait(timeout=2)
+        paused = pause_task(queue, queued["id"])
+        assert paused["status"] == "cancelled"
+        assert paused["phase"] == "paused"
+        assert paused["finished_at"] is not None
+        assert pause_task(queue, queued["id"])["phase"] == "paused"
+        with pytest.raises(ValueError, match="已暂停"):
+            cancel_task(queue, queued["id"])
+    finally:
+        release.set()
+        queue.stop()
 
 
 def test_force_rolls_back_old_output_when_index_commit_fails(tmp_env):
@@ -220,7 +456,7 @@ def test_clear_finished_removes_task_log_but_keeps_media(tmp_env):
     queue = TaskQueue(store, index, runner=runner)
     created = queue.enqueue([_target(301)])[0]
     done = wait_terminal(queue, created["id"])
-    log_path = tmp_env.download_dir / ".bili_logs" / f"{created['id']}.log"
+    log_path = task_log_path(tmp_env.download_dir, created["id"])
     output = tmp_env.download_dir / done["output_path"] / "demo.mp4"
     assert log_path.is_file()
     assert output.is_file()

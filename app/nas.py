@@ -238,6 +238,7 @@ class NasStore:
         self._bootstrap_token = ""
         self._login_failures: dict[str, list[float]] = {}
         self._snapshot_last_write: dict[str, float] = {}
+        self._snapshot_last_status: dict[str, str] = {}
         self._last_snapshot_prune = 0.0
         self._transcode_lock = threading.Semaphore(1)
         self._stop = threading.Event()
@@ -1291,9 +1292,16 @@ class NasStore:
         return group or self.create_group(str(entry.get("group") or DEFAULT_GROUP))
 
     def sync_index(self, force: bool = False) -> dict[str, int]:
-        token, entries = self.index.snapshot()
-        if not force and token == self._last_index_token:
-            return {"imported": 0, "unchanged": len(entries), "skipped": 0, "removed": 0}
+        token, entry_count, entries = self.index.snapshot_if_changed(
+            None if force else self._last_index_token
+        )
+        if entries is None:
+            return {
+                "imported": 0,
+                "unchanged": entry_count,
+                "skipped": 0,
+                "removed": 0,
+            }
 
         imported = unchanged = skipped = 0
         valid_keys: set[str] = set()
@@ -1439,7 +1447,10 @@ class NasStore:
                     removed += 1
         if patches:
             self.index.patch_entries(patches)
-        self._last_index_token = self.index.change_token()
+        # Only acknowledge the exact snapshot processed above. If the index was
+        # patched or changed concurrently during this pass, the next call must
+        # observe the newer token and reconcile it instead of silently skipping it.
+        self._last_index_token = token
         return {
             "imported": imported,
             "unchanged": unchanged,

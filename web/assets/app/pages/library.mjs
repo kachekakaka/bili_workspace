@@ -1,7 +1,9 @@
 import * as implementation from './library-impl.mjs';
 
 export {
+  clearLibrarySessionState,
   librarySortValue,
+  libraryResponseSignature,
   libraryTagColor,
   splitLibrarySort,
 } from './library-impl.mjs';

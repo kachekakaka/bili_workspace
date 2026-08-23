@@ -12,13 +12,14 @@ def _text(name: str) -> str:
 def test_dockerfile_bundles_runtime_and_fixed_bbdown_release():
     dockerfile = _text("docker/Dockerfile")
     assert (
-        "python:3.11-slim-bookworm@sha256:"
-        "77923445c077d8eb971b14b2b114a1d9cd4a87edb4c75654820ca4832ee8cb15"
+        "python:3.11.15-slim-bookworm@sha256:"
+        "d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3"
         in dockerfile
     )
     assert "BBDOWN_VERSION=1.6.3" in dockerfile
     assert "BBDown_${BBDOWN_VERSION}_${BBDOWN_RELEASE_DATE}_linux-${asset_arch}.zip" in dockerfile
     assert "apt-get install" in dockerfile and "ffmpeg" in dockerfile
+    assert dockerfile.index('mkdir -p "$TMPDIR"') < dockerfile.index("apt-get install")
     assert "USER 1000:1000" in dockerfile
     assert "HEALTHCHECK" in dockerfile
     assert "BBDown.data" in dockerfile

@@ -314,6 +314,6 @@ git diff --check
 - 三份 T-DOC 目标与 Skill 资产逐字节相等，SHA-256 分别为 `05C44FCFB2B1D5A1936EFA3CDDDDC1AA3B13134F2B09A5822ADA4B0B3D499C24`、`A139C3B9972F8C4B8A2C72D9E125E8C8E1F01E1E3E2A019861619C61B985B6C0`、`700348DD492AC585F66AC6AD2C5190433ACB6EF289D0B4976F2E0A3334BF6F2C`。
 - T-DOC 规则夹具通过：29 项测试全部成功；生命周期关闭前的项目 T-DOC 通过，`0 warning(s)`。
 - 定向 Markdown 与仓库布局测试使用既有项目 `.venv` 的 Python 3.11.1 执行，结果为 `8 passed`。PATH 中的默认 `python` 缺少 pytest，首次调用结果为 `blocked`，没有安装或下载依赖。
-- `tools/verify_source.py` 进入可判定阶段后为 `failed`：唯一命中是 Git 原有 `launcher/tests/test_build_tools.py` 中用于验证扫描器的合成字符串 `SESSDATA=realistic-secret-value`；该文件与 HEAD 无差异，修正校验器或产品测试不在本方案范围，因此保留为既有基线残余。
+- `tools/verify_source.py` 进入可判定阶段后为 `failed`：唯一命中是 Git 原有 `launcher/tests/test_build_tools.py` 中用于验证扫描器的合成字符串 `SESSDATA=<synthetic-secret-value>`；该文件与 HEAD 无差异，修正校验器或产品测试不在本方案范围，因此保留为既有基线残余。
 - `git diff --check` 通过。最终 T-DOC 在待办退出、方案移动、归档索引更新和空条件目录清理全部落地后执行；为保证门禁绑定最终候选，其结果只在本次任务交付中据实报告，不再回写并改变门禁后的候选。
 - Docker 构建与容器运行、Playwright、产品进程与真实数据、T-PROJECT full、T-LAUNCHER 产品／打包验收、全量测试、正式认证和远端 CI 均保持 `not_run`；未执行 commit、push、PR、发布、安装或外部写入。

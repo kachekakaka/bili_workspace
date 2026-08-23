@@ -151,6 +151,13 @@ def _list_records(
     return [_live_record(state, item) for item in records]
 
 
+def _owner_filter(request: Request, owner_user_id: str = "") -> str | None:
+    auth = _auth(request)
+    if _is_admin(auth):
+        return owner_user_id or None
+    return str(auth["user_id"])
+
+
 def _audit_task(request: Request, action: str, task: dict[str, Any]) -> None:
     auth = _auth(request)
     _state(request).nas.audit(
@@ -169,7 +176,7 @@ def status(request: Request, refresh_login: bool = False):
     if _is_admin(auth):
         return legacy_status(request, refresh_login=refresh_login)
     state = _state(request)
-    items = _list_records(request)
+    summary = state.nas.task_status_summary(str(auth["user_id"]))
     return ok(
         {
             "version": __version__,
@@ -178,7 +185,7 @@ def status(request: Request, refresh_login: bool = False):
             "active_tasks": state.export_queue.active_count_for_owner(
                 str(auth["user_id"])
             ),
-            "task_summary": _summary(items),
+            "task_summary": summary,
         }
     )
 
@@ -611,6 +618,7 @@ def _sse_counts_changed(queue, export_queue, *, last_library: int, last_export: 
 async def events(
     request: Request,
     owner_user_id: str = Query("", max_length=100),
+    view: Literal["full", "summary"] = "full",
 ):
     state = _state(request)
     auth = _auth(request)
@@ -646,8 +654,15 @@ async def events(
                     last_keepalive = now_mono
                 await asyncio.sleep(1.0)
                 continue
-            items = _list_records(request, owner_user_id=owner_user_id)
-            event_data = {"tasks": items, "summary": _summary(items)}
+            if view == "summary":
+                event_data = {
+                    "summary": state.nas.task_status_summary(
+                        _owner_filter(request, owner_user_id)
+                    )
+                }
+            else:
+                items = _list_records(request, owner_user_id=owner_user_id)
+                event_data = {"tasks": items, "summary": _summary(items)}
             fingerprint = json.dumps(
                 event_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             )

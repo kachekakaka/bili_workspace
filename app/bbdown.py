@@ -117,6 +117,9 @@ class _EncodingProbe:
         # so a failed tail favours GBK; pure ASCII is identical in both.
         return "gbk" if self._failed_at_tail else "utf-8"
 
+    def buffered(self) -> bytes:
+        return self._buffer
+
 
 def _decode_output(data: bytes) -> str:
     if not data:
@@ -295,6 +298,7 @@ def _run_streaming(
     cancel_event: threading.Event | None,
     on_output: Callable[[str], None] | None,
     on_progress: Callable[[ProgressEvent], None] | None,
+    max_chars: int = MAX_LOG_TAIL_CHARS,
 ) -> BbdownResult:
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     if os.name == "nt":
@@ -311,7 +315,7 @@ def _run_streaming(
         creationflags=creationflags,
         start_new_session=start_new_session,
     )
-    tail = _TailBuffer()
+    tail = _TailBuffer(max_chars)
     parser = BbdownProgressParser()
 
     def read_output() -> None:
@@ -342,7 +346,9 @@ def _run_streaming(
                 emit(decoder.decode(chunk))
             if decoder is None:
                 decoder = codecs.getincrementaldecoder(probe.finish())(errors="replace")
-            emit(decoder.decode(b"", final=True))
+                emit(decoder.decode(probe.buffered(), final=True))
+            else:
+                emit(decoder.decode(b"", final=True))
             if on_progress:
                 for event in parser.flush():
                     on_progress(event)
@@ -392,26 +398,35 @@ def _run_injected(
     cwd: Path,
     timeout: float | None,
     max_chars: int,
+    cancel_event: threading.Event | None = None,
 ) -> BbdownResult:
+    if cancel_event is not None and cancel_event.is_set():
+        return BbdownResult(-1, "", "任务已取消", argv, cancelled=True)
+    kwargs = {
+        "cwd": str(cwd),
+        "capture_output": True,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "timeout": timeout,
+    }
+    if cancel_event is not None and getattr(runner, "supports_cancel_event", False):
+        kwargs["cancel_event"] = cancel_event
     try:
-        completed = runner(
-            argv,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
+        completed = runner(argv, **kwargs)
     except subprocess.TimeoutExpired as exc:
         output = str(exc.stdout or "")[-max_chars:]
         error = str(exc.stderr or "")[-max_chars:]
+        if cancel_event is not None and cancel_event.is_set():
+            return BbdownResult(-1, output, error, argv, cancelled=True)
         return BbdownResult(-1, output, error, argv, timed_out=True)
+    cancelled = cancel_event is not None and cancel_event.is_set()
     return BbdownResult(
         returncode=int(completed.returncode),
         stdout=str(completed.stdout or "")[-max_chars:],
         stderr=str(completed.stderr or "")[-max_chars:],
         argv=argv,
+        cancelled=cancelled,
     )
 
 
@@ -422,9 +437,12 @@ def run_bbdown_info(
     timeout: float | None = 60.0,
     runner=None,
     credential_dir: Path | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> BbdownResult:
     argv = build_info_argv(url, cfg)
     bbdown_dir = Path(credential_dir or cfg.bbdown_path()).resolve()
+    if cancel_event is not None and cancel_event.is_set():
+        return BbdownResult(-1, "", "任务已取消", argv, cancelled=True)
     if runner is not None and not getattr(runner, "supports_info", False):
         # Legacy test/provider runners only implement the download invocation.
         synthetic = (
@@ -439,32 +457,17 @@ def run_bbdown_info(
             cwd=bbdown_dir,
             timeout=timeout,
             max_chars=MAX_INFO_OUTPUT_CHARS,
+            cancel_event=cancel_event,
         )
     sync_credentials_to_tool_dir(bbdown_dir, Path(argv[0]).resolve().parent)
-    try:
-        completed = subprocess.run(
-            argv,
-            cwd=str(bbdown_dir),
-            capture_output=True,
-            text=False,
-            timeout=timeout,
-            shell=False,
-            check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return BbdownResult(
-            -1,
-            _decode_output(bytes(exc.stdout or b""))[-MAX_INFO_OUTPUT_CHARS:],
-            _decode_output(bytes(exc.stderr or b""))[-MAX_INFO_OUTPUT_CHARS:],
-            argv,
-            timed_out=True,
-        )
-    return BbdownResult(
-        int(completed.returncode),
-        _decode_output(completed.stdout)[-MAX_INFO_OUTPUT_CHARS:],
-        _decode_output(completed.stderr)[-MAX_INFO_OUTPUT_CHARS:],
+    return _run_streaming(
         argv,
+        cwd=bbdown_dir,
+        timeout=timeout,
+        cancel_event=cancel_event,
+        on_output=None,
+        on_progress=None,
+        max_chars=MAX_INFO_OUTPUT_CHARS,
     )
 
 
@@ -498,6 +501,7 @@ def run_bbdown(
             cancel_event=cancel_event,
             on_output=on_output,
             on_progress=on_progress,
+            max_chars=MAX_LOG_TAIL_CHARS,
         )
 
     result = _run_injected(
@@ -506,6 +510,7 @@ def run_bbdown(
         cwd=bbdown_dir,
         timeout=timeout,
         max_chars=MAX_LOG_TAIL_CHARS,
+        cancel_event=cancel_event,
     )
     combined = result.combined
     if on_output and combined:

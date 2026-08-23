@@ -158,6 +158,7 @@ _ALLOWED_UNTRACKED_DOCKER_INPUTS = {
     "app/defaults/config.json.default",
     "app/defaults/runtime.env.default",
     "app/defaults/tags.json.default",
+    "web/assets/app/core/resource-cache.mjs",
 }
 _LAUNCHER_MODULE_NAMES = {
     "__init__.py",

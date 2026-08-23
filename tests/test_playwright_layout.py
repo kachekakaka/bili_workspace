@@ -321,14 +321,17 @@ def test_search_filtering_preload_and_layout(browser: Browser, width: int, heigh
         page.goto(f"{base_url}/#/search", wait_until="domcontentloaded")
         page.wait_for_selector('[data-enhanced-view="search"]')
         page.fill("#enhSearchQuery", "测试 原因")
-        page.click("#enhSearchButton")
+        with page.expect_request(
+            lambda request: urlparse(request.url).path == "/api/search"
+            and parse_qs(urlparse(request.url).query).get("page") == ["2"]
+        ):
+            page.click("#enhSearchButton")
         page.wait_for_selector('[data-search-key="BV1LAYOUT001"]')
-        page.wait_for_timeout(350)
 
         pages_requested = [int(parse_qs(urlparse(url).query)["page"][0]) for url in requests]
         assert pages_requested.count(1) == 1
         assert set(pages_requested) <= {1, 2}
-        assert pages_requested.count(2) <= 1
+        assert pages_requested.count(2) == 1
 
         before_filter = len(requests)
         page.click('[data-search-filter-mode="all"]')

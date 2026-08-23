@@ -19,17 +19,31 @@ def install_task_extensions(queue) -> None:
     queue._enhancement_pause_requested = set()
     original_finish = queue._finish
 
-    def wrapped_finish(self, task, status: str, *, error: str = "") -> None:
-        pause_requested = self._enhancement_pause_requested
-        if status == "cancelled" and task.id in pause_requested:
-            pause_requested.discard(task.id)
+    def wrapped_finish(
+        self,
+        task,
+        status: str,
+        *,
+        error: str = "",
+        phase_override: str = "",
+    ) -> None:
+        with self._lock:
+            pause_requested = task.id in self._enhancement_pause_requested
+            self._enhancement_pause_requested.discard(task.id)
+            if status == "cancelled" and pause_requested:
+                original_finish(
+                    task,
+                    "cancelled",
+                    error="任务已暂停；点击继续会使用同一任务 ID 从头重新开始当前下载",
+                    phase_override="paused",
+                )
+                return
             original_finish(
                 task,
-                "cancelled",
-                error="任务已暂停；点击继续会使用同一任务 ID 从头重新开始当前下载",
+                status,
+                error=error,
+                phase_override=phase_override,
             )
-            return
-        original_finish(task, status, error=error)
 
     queue._finish = MethodType(wrapped_finish, queue)
 
@@ -48,6 +62,15 @@ def _active_duplicate(queue, task) -> bool:
         and other.status in {"queued", "running"}
         for other in queue._tasks.values()
     )
+
+
+def _is_paused_task(task) -> bool:
+    if task.status != "cancelled":
+        return False
+    if task.phase == "paused":
+        return True
+    legacy_message = f"{task.error}\n{task.progress_message}"
+    return "已暂停" in legacy_message
 
 
 def retry_in_place(
@@ -162,38 +185,44 @@ def pause_task(queue, task_id: str) -> dict[str, Any]:
     install_task_extensions(queue)
     with queue._cv:
         task = _task_or_raise(queue, task_id)
-        if task.status == "queued":
-            try:
-                queue._pending.remove(task.id)
-            except ValueError:
-                pass
-            event = queue._cancel_events.setdefault(task.id, threading.Event())
-            event.set()
-            now = time.time()
-            task.status = "cancelled"
-            task.phase = "cancelled"
-            task.phase_label = PHASE_LABELS["cancelled"]
-            task.error = "任务已暂停；点击继续会使用同一任务 ID 从头重新开始当前下载"
-            task.progress_message = task.error
-            task.finished_at = now
-            task.last_heartbeat = now
-            queue._mark_recent_locked(task.id)
-            queue._notify_locked(task)
-            queue._cv.notify_all()
-            queue._append_log(task, "\n[任务] 已在排队阶段暂停。\n")
+        if _is_paused_task(task):
             return task.to_dict()
-        if task.status != "running":
+        if task.status in TERMINAL_STATUSES:
             raise ValueError("只有排队中或下载中的任务可以暂停")
-        queue._enhancement_pause_requested.add(task.id)
-    if not queue.cancel(task_id):
+        if task.status == "running":
+            if task.phase == "cancelling":
+                raise ValueError("任务正在取消，不能改为暂停")
+            if task.phase == "pausing":
+                return task.to_dict()
+            queue._enhancement_pause_requested.add(task.id)
+    if not queue.cancel(task_id, intent="pause"):
+        with queue._cv:
+            queue._enhancement_pause_requested.discard(task_id)
+            task = _task_or_raise(queue, task_id)
+            if _is_paused_task(task):
+                return task.to_dict()
         raise ValueError("任务已结束，无法暂停")
     return queue.get_task(task_id) or {}
 
 
 def cancel_task(queue, task_id: str) -> dict[str, Any]:
     install_task_extensions(queue)
-    queue._enhancement_pause_requested.discard(task_id)
-    if not queue.cancel(task_id):
+    with queue._cv:
+        task = _task_or_raise(queue, task_id)
+        if _is_paused_task(task):
+            raise ValueError("任务已暂停；如需取消，请先继续任务")
+        if task.status == "cancelled":
+            return task.to_dict()
+        if task.status in TERMINAL_STATUSES:
+            raise ValueError("任务已结束，无法取消")
+        queue._enhancement_pause_requested.discard(task_id)
+    if not queue.cancel(task_id, intent="cancel"):
+        with queue._cv:
+            task = _task_or_raise(queue, task_id)
+            if _is_paused_task(task):
+                raise ValueError("任务已暂停；如需取消，请先继续任务")
+            if task.status == "cancelled":
+                return task.to_dict()
         raise ValueError("任务已结束，无法取消")
     return queue.get_task(task_id) or {}
 

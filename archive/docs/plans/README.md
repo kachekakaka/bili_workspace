@@ -8,6 +8,9 @@
 
 ## 已完成计划
 
+- [DOC-TEST-GOV-20260820 归档索引与 Docker 测试证据归属收口方案](DOC-TEST-GOV-20260820-归档索引与Docker测试证据归属收口.md)：已补齐归档根索引，将新运行证据升级为带 Registry `test_id` 的 schema v2，保留 T-PROJECT v1 兼容，并把 Docker 本地手工验证接入现有 T-DOCKER；
+- [TASK-CANCEL-20260823 任务实时状态与预检取消一致性修复方案](TASK-CANCEL-20260823-任务实时状态与预检取消一致性修复.md)：已恢复 OwnedTaskQueue 与阶段/进度通知，收口 cancelling/pausing/paused、取消幂等和 BBDown 信息预检停止，并通过隔离浏览器任务卡差量更新验证；
+- [PERF-20260823 全站页面性能收口方案](PERF-20260823-全站页面性能收口.md)：已完成媒体索引未变化快路径、会话资源缓存、TaskStream 租约与摘要模式、共享页面读取、Library 局部 DOM 更新和 Search LRU，并通过确定性工作量及隔离浏览器验证；
 - [BBDOWN-20260815 Windows 启动器 BBDown 子进程缺陷修复方案](BBDOWN-20260815-Windows启动器BBDown子进程缺陷修复.md)：已完成 BBDown 子进程三处修复（预览/下载无命令窗口、中文输出探测解码、凭据同步到可执行目录并开放启动器资源白名单），自用 EXE 重建并验收通过；
 - [TASKS-20260815 任务页性能优化方案](TASKS-20260815-任务页性能优化.md)：已完成 SSE 按变更计数推送与前端差量渲染，空闲零后台负载、任务页流畅，验收通过；
 - [DOC-CONSISTENCY-20260813 现行文档与验证消费者一致性收口方案](DOC-CONSISTENCY-20260813-现行文档与验证消费者一致性收口.md)：已完成私密漏洞报告入口、测试治理退出职责、Actions 缓存、T-DOCKER 触发、历史 CI 条件、Windows 迁移说明和活动文档职责收口；

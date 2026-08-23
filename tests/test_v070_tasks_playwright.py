@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Browser, Route, sync_playwright  # noqa: E402
 
-from tests.test_playwright_layout import envelope, mock_api, static_site
+from tests.test_playwright_layout import envelope, mock_api, static_site, task_items
 
 RUN_LAYOUT = os.getenv("BILI_RUN_PLAYWRIGHT") == "1"
 pytestmark = [
@@ -34,7 +34,7 @@ def task_browser() -> Browser:
         instance.close()
 
 
-def test_tasks_reuse_one_sse_and_logout_closes_it(task_browser: Browser) -> None:
+def test_task_stream_switches_modes_and_zero_lease_closes_it(task_browser: Browser) -> None:
     with static_site() as base_url:
         context = task_browser.new_context(viewport={"width": 1024, "height": 768})
         page = context.new_page()
@@ -113,9 +113,30 @@ def test_tasks_reuse_one_sse_and_logout_closes_it(task_browser: Browser) -> None
               total: window.__v070EventSources.length,
               active: window.__v070EventSources.filter(source => !source.closed).length,
               urls: window.__v070EventSources.map(source => source.url),
+              closed: window.__v070EventSources.map(source => source.closed),
             })"""
         )
-        assert counts == {"total": 1, "active": 1, "urls": ["/api/events"]}
+        assert counts["total"] == 12
+        assert counts["active"] == 1
+        assert counts["urls"][:11] == ["/api/events"] * 11
+        assert counts["urls"][-1] == "/api/events?view=summary"
+        assert counts["closed"] == [True] * 11 + [False]
+
+        page.evaluate("location.hash = '#/download'")
+        page.wait_for_selector("#downloadForm")
+        zero_lease = page.evaluate(
+            """() => ({
+              total: window.__v070EventSources.length,
+              active: window.__v070EventSources.filter(source => !source.closed).length,
+            })"""
+        )
+        assert zero_lease == {"total": 12, "active": 0}
+
+        page.evaluate("location.hash = '#/dashboard'")
+        page.wait_for_selector("#dashboardMetrics")
+        assert page.evaluate(
+            "window.__v070EventSources.filter(source => !source.closed).length"
+        ) == 1
 
         page.click("#userMenuButton")
         page.click("[data-menu-logout]")
@@ -127,5 +148,128 @@ def test_tasks_reuse_one_sse_and_logout_closes_it(task_browser: Browser) -> None
               closed: window.__v070EventSources.map(source => source.closed),
             })"""
         )
-        assert after_logout == {"total": 1, "active": 0, "closed": [True]}
+        assert after_logout == {"total": 13, "active": 0, "closed": [True] * 13}
         context.close()
+
+
+def test_task_event_replaces_only_the_changed_card(task_browser: Browser) -> None:
+    first = {
+        **task_items()[0],
+        "id": "task-1",
+        "status": "running",
+        "phase": "downloading",
+        "phase_label": "正在下载",
+        "finished_at": None,
+    }
+    second = {
+        **task_items()[0],
+        "id": "task-2",
+        "key": "BV1TASK00002",
+        "bvid": "BV1TASK00002",
+        "title": "未变化任务",
+        "display_title": "未变化任务",
+    }
+    event_source_script = """
+      (() => {
+        const instances = [];
+        class FakeEventSource {
+          constructor(url) {
+            this.url = url;
+            this.closed = false;
+            this.listeners = new Map();
+            instances.push(this);
+            queueMicrotask(() => this.emit('open', ''));
+          }
+          addEventListener(type, listener) {
+            if (!this.listeners.has(type)) this.listeners.set(type, []);
+            this.listeners.get(type).push(listener);
+          }
+          emit(type, data) {
+            for (const listener of this.listeners.get(type) || []) listener({data});
+          }
+          close() { this.closed = true; }
+        }
+        window.EventSource = FakeEventSource;
+        window.__v070EventSources = instances;
+      })();
+    """
+
+    def route_api(route: Route) -> None:
+        path = urlparse(route.request.url).path
+        if path == "/api/tasks":
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(
+                    envelope(
+                        [first, second],
+                        summary={"all": 2, "active": 1, "queued": 0, "running": 1, "failed": 0},
+                        grouped=[],
+                    ),
+                    ensure_ascii=False,
+                ),
+            )
+            return
+        mock_api(route)
+
+    with static_site() as base_url:
+        page = task_browser.new_page(viewport={"width": 1024, "height": 768})
+        page.add_init_script(event_source_script)
+        page.route("**/api/**", route_api)
+        page.goto(f"{base_url}/index.html#/tasks", wait_until="domcontentloaded")
+        page.wait_for_selector('[data-task-id="task-2"]')
+        page.evaluate(
+            """() => {
+              window.__taskCardRefs = {
+                first: document.querySelector('[data-task-id="task-1"]'),
+                second: document.querySelector('[data-task-id="task-2"]'),
+              };
+            }"""
+        )
+
+        cancelling = {
+            **first,
+            "phase": "cancelling",
+            "phase_label": "正在取消",
+            "progress_message": "正在取消",
+        }
+        page.evaluate(
+            "payload => window.__v070EventSources.at(-1).emit('tasks', JSON.stringify(payload))",
+            {"tasks": [cancelling, second], "summary": {"all": 2, "active": 1, "running": 1}},
+        )
+        page.wait_for_function(
+            "() => document.querySelector('[data-task-id=\"task-1\"]')?.textContent.includes('正在取消')"
+        )
+        cancelling_identity = page.evaluate(
+            """() => ({
+              firstChanged: document.querySelector('[data-task-id="task-1"]') !== window.__taskCardRefs.first,
+              secondPreserved: document.querySelector('[data-task-id="task-2"]') === window.__taskCardRefs.second,
+            })"""
+        )
+        assert cancelling_identity == {"firstChanged": True, "secondPreserved": True}
+        page.evaluate(
+            "window.__taskCardRefs.cancelling = document.querySelector('[data-task-id=\"task-1\"]')"
+        )
+
+        cancelled = {
+            **cancelling,
+            "status": "cancelled",
+            "phase": "cancelled",
+            "phase_label": "已取消",
+            "finished_at": 1_700_000_200,
+        }
+        page.evaluate(
+            "payload => window.__v070EventSources.at(-1).emit('tasks', JSON.stringify(payload))",
+            {"tasks": [cancelled, second], "summary": {"all": 2, "active": 0, "running": 0}},
+        )
+        page.wait_for_function(
+            "() => document.querySelector('[data-task-id=\"task-1\"]')?.textContent.includes('已取消')"
+        )
+        final_identity = page.evaluate(
+            """() => ({
+              firstChanged: document.querySelector('[data-task-id="task-1"]') !== window.__taskCardRefs.cancelling,
+              secondPreserved: document.querySelector('[data-task-id="task-2"]') === window.__taskCardRefs.second,
+            })"""
+        )
+        assert final_identity == {"firstChanged": True, "secondPreserved": True}
+        page.close()

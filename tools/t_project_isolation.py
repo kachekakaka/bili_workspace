@@ -16,8 +16,11 @@ PROJECT_ID = "bili_workspace"
 ROOT_MARKER_NAME = ".bili-workspace-test-root.json"
 RUN_MARKER_NAME = ".bili-workspace-test-run.json"
 RESULT_RELATIVE_PATH = Path("results") / "result.json"
-MARKER_SCHEMA_VERSION = 1
-RESULT_SCHEMA_VERSION = 1
+ROOT_MARKER_SCHEMA_VERSION = 1
+LEGACY_RUN_SCHEMA_VERSION = 1
+RUN_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 2
+TEST_ID = "T-PROJECT"
 RESULT_STATUSES = (
     "passed",
     "failed",
@@ -129,7 +132,7 @@ def _validate_root_marker(test_root: Path, workspace_root: Path) -> dict[str, An
         raise IsolationError(f"测试根目录所有权标记不得是符号链接: {marker_path}")
     marker = _read_json(marker_path, "测试根目录所有权标记")
     expected = {
-        "schema_version": MARKER_SCHEMA_VERSION,
+        "schema_version": ROOT_MARKER_SCHEMA_VERSION,
         "kind": "bili-workspace-test-root",
         "project_id": PROJECT_ID,
         "workspace_root": str(workspace_root),
@@ -169,7 +172,7 @@ def ensure_test_root(
     _write_json_atomic(
         root / ROOT_MARKER_NAME,
         {
-            "schema_version": MARKER_SCHEMA_VERSION,
+            "schema_version": ROOT_MARKER_SCHEMA_VERSION,
             "kind": "bili-workspace-test-root",
             "project_id": PROJECT_ID,
             "workspace_root": str(workspace),
@@ -207,9 +210,10 @@ def create_run(
     _write_json_atomic(
         run_root / RUN_MARKER_NAME,
         {
-            "schema_version": MARKER_SCHEMA_VERSION,
+            "schema_version": RUN_SCHEMA_VERSION,
             "kind": "bili-workspace-test-run",
             "project_id": PROJECT_ID,
+            "test_id": TEST_ID,
             "workspace_root": str(workspace),
             "test_root": str(root),
             "run_root": str(run_root),
@@ -258,8 +262,12 @@ def validate_run(
     if run.parent != test_root:
         raise IsolationError("测试运行目录必须是测试根目录的直接子目录")
 
+    schema_version = marker.get("schema_version")
+    if schema_version not in {LEGACY_RUN_SCHEMA_VERSION, RUN_SCHEMA_VERSION}:
+        raise IsolationError(
+            f"测试运行所有权标记使用不支持的 schema_version: {schema_version}"
+        )
     expected = {
-        "schema_version": MARKER_SCHEMA_VERSION,
         "kind": "bili-workspace-test-run",
         "project_id": PROJECT_ID,
         "workspace_root": str(workspace),
@@ -270,6 +278,8 @@ def validate_run(
     for key, value in expected.items():
         if not _marker_value_matches(key, marker.get(key), value):
             raise IsolationError(f"测试运行所有权标记字段不匹配: {key}")
+    if schema_version == RUN_SCHEMA_VERSION and marker.get("test_id") != TEST_ID:
+        raise IsolationError("测试运行所有权标记字段不匹配: test_id")
     if not isinstance(marker.get("created_at"), str) or not marker[
         "created_at"
     ].strip():
@@ -295,8 +305,9 @@ def record_result(
     run = validate_run(run_root, workspace_root)
     marker = _read_json(run / RUN_MARKER_NAME, "测试运行所有权标记")
     result_path = run / RESULT_RELATIVE_PATH
+    schema_version = marker["schema_version"]
     result: dict[str, Any] = {
-        "schema_version": RESULT_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "project_id": PROJECT_ID,
         "run_id": marker["run_id"],
         "status": status,
@@ -304,6 +315,8 @@ def record_result(
         "workspace_root": marker["workspace_root"],
         "run_root": str(run),
     }
+    if schema_version == RESULT_SCHEMA_VERSION:
+        result["test_id"] = TEST_ID
     if exit_code is not None:
         result["exit_code"] = exit_code
     if message:

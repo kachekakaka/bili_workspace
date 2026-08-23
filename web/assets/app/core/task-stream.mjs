@@ -1,14 +1,40 @@
 import { once } from './lifecycle.mjs';
 
-export function reduceTaskStreamPayload(previous, payload, receivedAt = Date.now()) {
+const MODES = new Set(['full', 'summary']);
+
+function emptySnapshot(mode) {
+  if (mode === 'summary') {
+    return Object.freeze({ summary: Object.freeze({}), receivedAt: 0 });
+  }
+  return Object.freeze({
+    tasks: Object.freeze([]),
+    summary: Object.freeze({}),
+    grouped: Object.freeze([]),
+    receivedAt: 0,
+  });
+}
+
+export function reduceTaskStreamPayload(previous, payload, receivedAt = Date.now(), mode = 'full') {
   const current = previous && typeof previous === 'object' ? previous : {};
   const value = payload && typeof payload === 'object' ? payload : {};
+  if (mode === 'summary') {
+    return Object.freeze({
+      summary: Object.freeze({ ...(value.summary || current.summary || {}) }),
+      receivedAt: Number(receivedAt || 0),
+    });
+  }
   return Object.freeze({
     tasks: Object.freeze([...(value.tasks || value.data || current.tasks || [])]),
     summary: Object.freeze({ ...(value.summary || current.summary || {}) }),
     grouped: Object.freeze([...(value.grouped || current.grouped || [])]),
     receivedAt: Number(receivedAt || 0),
   });
+}
+
+function modeUrl(url, mode) {
+  if (mode === 'full') return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}view=summary`;
 }
 
 export function createTaskStream({
@@ -18,34 +44,69 @@ export function createTaskStream({
   now = Date.now,
 } = {}) {
   let source = null;
+  let sourceMode = '';
   let connection = 'idle';
-  let snapshot = reduceTaskStreamPayload(null, {}, 0);
-  const listeners = new Set();
+  let legacyRelease = null;
+  const snapshots = new Map([
+    ['full', emptySnapshot('full')],
+    ['summary', emptySnapshot('summary')],
+  ]);
+  const listeners = new Map([
+    ['full', new Set()],
+    ['summary', new Set()],
+  ]);
   const connectionListeners = new Set();
+  const leases = new Map();
 
-  const emitSnapshot = () => {
-    for (const listener of [...listeners]) listener(snapshot);
+  const emitSnapshot = mode => {
+    const snapshot = snapshots.get(mode);
+    for (const listener of [...listeners.get(mode)]) listener(snapshot);
   };
   const setConnection = value => {
     if (connection === value) return;
     connection = value;
     for (const listener of [...connectionListeners]) listener(connection);
   };
+  const desiredMode = () => {
+    const modes = new Set(leases.values());
+    if (modes.has('full')) return 'full';
+    if (modes.has('summary')) return 'summary';
+    return '';
+  };
+  const closeSource = () => {
+    source?.close();
+    source = null;
+    sourceMode = '';
+  };
 
-  const start = () => {
-    if (source) return source;
+  const reconcile = () => {
+    const desired = desiredMode();
+    if (!desired) {
+      closeSource();
+      setConnection('closed');
+      return null;
+    }
+    if (source && sourceMode === desired) return source;
+    closeSource();
     if (typeof EventSourceImpl !== 'function') throw new TypeError('EventSource is unavailable');
-    source = new EventSourceImpl(url);
+    snapshots.set(desired, emptySnapshot(desired));
+    emitSnapshot(desired);
+    sourceMode = desired;
+    source = new EventSourceImpl(modeUrl(url, desired));
     setConnection('connecting');
     const current = source;
+    const currentMode = desired;
     current.addEventListener?.('open', () => {
       if (source === current) setConnection('open');
     });
     current.addEventListener?.('tasks', event => {
-      if (source !== current) return;
+      if (source !== current || sourceMode !== currentMode) return;
       try {
-        snapshot = reduceTaskStreamPayload(snapshot, parse(event.data), now());
-        emitSnapshot();
+        snapshots.set(
+          currentMode,
+          reduceTaskStreamPayload(snapshots.get(currentMode), parse(event.data), now(), currentMode),
+        );
+        emitSnapshot(currentMode);
       } catch {
         setConnection('error');
       }
@@ -56,37 +117,72 @@ export function createTaskStream({
     return source;
   };
 
+  const acquire = (mode = 'full', { signal } = {}) => {
+    if (!MODES.has(mode)) throw new TypeError(`unsupported task stream mode: ${mode}`);
+    if (signal?.aborted) return once();
+    const token = Symbol(mode);
+    leases.set(token, mode);
+    let release = null;
+    const onAbort = () => release?.();
+    release = once(() => {
+      signal?.removeEventListener?.('abort', onAbort);
+      leases.delete(token);
+      reconcile();
+    });
+    signal?.addEventListener?.('abort', onAbort, { once: true });
+    reconcile();
+    return release;
+  };
+
   const stop = ({ clear = false } = {}) => {
-    if (source) source.close();
-    source = null;
+    legacyRelease = null;
+    leases.clear();
+    closeSource();
     setConnection('closed');
     if (clear) {
-      snapshot = reduceTaskStreamPayload(null, {}, 0);
-      emitSnapshot();
+      for (const mode of MODES) {
+        snapshots.set(mode, emptySnapshot(mode));
+        emitSnapshot(mode);
+      }
     }
   };
 
   return Object.freeze({
-    start,
-    stop,
-    clear() {
-      snapshot = reduceTaskStreamPayload(null, {}, 0);
-      emitSnapshot();
+    acquire,
+    start(mode = 'full') {
+      if (!legacyRelease) legacyRelease = acquire(mode);
+      return source;
     },
-    get() {
-      return snapshot;
+    stop,
+    clear(mode = null) {
+      const modes = mode ? [mode] : [...MODES];
+      for (const item of modes) {
+        if (!MODES.has(item)) continue;
+        snapshots.set(item, emptySnapshot(item));
+        emitSnapshot(item);
+      }
+    },
+    get(mode = 'full') {
+      return snapshots.get(mode) || emptySnapshot(mode);
     },
     connection() {
       return connection;
     },
+    activeMode() {
+      return sourceMode;
+    },
     activeSourceCount() {
       return source ? 1 : 0;
     },
-    subscribe(listener, { immediate = false } = {}) {
+    leaseCount() {
+      return leases.size;
+    },
+    subscribe(listener, { immediate = false, mode = 'full' } = {}) {
       if (typeof listener !== 'function') throw new TypeError('listener must be a function');
-      listeners.add(listener);
-      if (immediate) listener(snapshot);
-      return once(() => listeners.delete(listener));
+      if (!MODES.has(mode)) throw new TypeError(`unsupported task stream mode: ${mode}`);
+      listeners.get(mode).add(listener);
+      if (immediate) listener(snapshots.get(mode));
+      return once(() => listeners.get(mode).delete(listener));
     },
     subscribeConnection(listener, { immediate = false } = {}) {
       if (typeof listener !== 'function') throw new TypeError('listener must be a function');

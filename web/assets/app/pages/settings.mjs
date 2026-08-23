@@ -1,12 +1,9 @@
 import { esc, qualityOptions } from './shared.mjs';
 
 export async function mount(root, context) {
-  const [configResponse, statusResponse] = await Promise.all([
-    context.api('/api/config', { signal: context.signal }),
-    context.api('/api/status', { signal: context.signal }),
-  ]);
+  const configResponse = await context.api('/api/config', { signal: context.signal });
   const cfg = configResponse.data || {};
-  const status = statusResponse.data || {};
+  const status = context.shared.get().status || {};
   const server = Boolean(status.server_mode);
   const protectedFields = new Set(configResponse.protected_fields || []);
   const portProtected = protectedFields.has('port');
@@ -44,7 +41,7 @@ export async function mount(root, context) {
     try {
       const result = await context.api('/api/config', { method: 'PUT', body, signal: context.signal });
       context.toast.show(result.restart_required ? '已保存，端口变更需重启' : '设置已保存', 'good');
-      await context.refreshShared();
+      await context.refreshShared({ force: true });
     } catch (error) {
       if (error?.name !== 'AbortError') context.toast.show(error.message, 'bad');
     } finally {

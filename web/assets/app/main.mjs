@@ -3,6 +3,7 @@ import { createSessionStore } from './core/auth-session.mjs';
 import { createContextStore } from './core/context-store.mjs';
 import { resolveRoute } from './core/route-policy.mjs';
 import { createRouter } from './core/router.mjs';
+import { createResourceCache, resourceKey } from './core/resource-cache.mjs';
 import { createTaskStream } from './core/task-stream.mjs';
 import { createVersionChecker } from './core/version-check.mjs';
 import { createModalService } from './components/modal.mjs';
@@ -63,7 +64,11 @@ const toast = createToastService(document.querySelector('#toastRoot'));
 const confirmDialog = createConfirmDialog(modal);
 const session = createSessionStore();
 const shared = createContextStore();
+const resources = createResourceCache();
 const taskStream = createTaskStream();
+const STATUS_RESOURCE = resourceKey('status');
+const TAGS_RESOURCE = resourceKey('tags');
+const GROUPS_RESOURCE = resourceKey('groups');
 const versionChecker = createVersionChecker({
   badge: document.querySelector('#browserVersionBadge'),
   brandNode: document.querySelector('#brandMode'),
@@ -74,6 +79,25 @@ let router = null;
 let authController = null;
 let chromeController = null;
 let expiring = false;
+
+resources.subscribe(STATUS_RESOURCE, entry => {
+  if (!entry?.value || !session.get().authenticated) return;
+  shared.patch({
+    status: entry.value,
+    groups: session.isAdmin()
+      ? entry.value.group_records || shared.get().groups || []
+      : [],
+  });
+  renderStatusBadges();
+});
+resources.subscribe(TAGS_RESOURCE, entry => {
+  if (!entry?.value || !session.get().authenticated || !session.isAdmin()) return;
+  shared.patch({ tags: entry.value });
+});
+resources.subscribe(GROUPS_RESOURCE, entry => {
+  if (!entry?.value || !session.get().authenticated || !session.isAdmin()) return;
+  shared.patch({ groups: entry.value });
+});
 
 const api = createApiClient({
   getCsrfToken: () => session.get().csrfToken,
@@ -86,21 +110,47 @@ function escapeHtml(value) {
   }[character]));
 }
 
-async function refreshShared({ signal } = {}) {
-  const statusResponse = await api('/api/status', { signal });
-  let groups = [];
-  let tags = [];
-  if (session.isAdmin()) {
-    const [groupsResponse, tagsResponse] = await Promise.all([
-      api('/api/groups', { signal }),
-      api('/api/enhancements/tags', { signal }),
-    ]);
-    groups = groupsResponse.data?.records || [];
-    tags = tagsResponse.data?.items || [];
+async function refreshShared({ signal, force = false } = {}) {
+  const cachedStatus = resources.peek(STATUS_RESOURCE)?.value || null;
+  const cachedTags = resources.peek(TAGS_RESOURCE)?.value || [];
+  const apply = (status, tags) => {
+    const nextStatus = status || {};
+    shared.replace({
+      status: nextStatus,
+      groups: session.isAdmin() ? nextStatus.group_records || [] : [],
+      tags: session.isAdmin() ? tags || [] : [],
+    });
+    renderStatusBadges();
+    return shared.get();
+  };
+  if (cachedStatus) apply(cachedStatus, cachedTags);
+
+  const statusPromise = resources.refresh(
+    STATUS_RESOURCE,
+    async ({ signal: cacheSignal }) => (await api('/api/status', { signal: cacheSignal })).data || {},
+    { signal },
+  );
+  const tagsPromise = session.isAdmin()
+    ? resources.refresh(
+      TAGS_RESOURCE,
+      async ({ signal: cacheSignal }) => (
+        (await api('/api/enhancements/tags', { signal: cacheSignal })).data?.items || []
+      ),
+      { signal },
+    )
+    : Promise.resolve([]);
+  if (cachedStatus && !force) {
+    void Promise.all([statusPromise, tagsPromise])
+      .then(([status, tags]) => apply(status, tags))
+      .catch(error => {
+        if (error?.name !== 'AbortError' && !(error instanceof AuthExpiredError)) {
+          resources.invalidate(STATUS_RESOURCE, { abort: false });
+        }
+      });
+    return shared.get();
   }
-  shared.replace({ status: statusResponse.data || {}, groups, tags });
-  renderStatusBadges();
-  return shared.get();
+  const [status, tags] = await Promise.all([statusPromise, tagsPromise]);
+  return apply(status, tags);
 }
 
 function stopApp({ clear = false } = {}) {
@@ -111,6 +161,10 @@ function stopApp({ clear = false } = {}) {
   taskStream.stop({ clear });
   modal.dispose();
   if (clear) {
+    resources.clear();
+    searchPage.clearSearchSessionState();
+    libraryPage.clearLibrarySessionState();
+    tasksPage.clearTaskPageSessionState();
     shared.clear();
     pageRoot.replaceChildren();
   }
@@ -198,7 +252,7 @@ function renderChrome() {
     const button = document.querySelector('#refreshButton');
     button.disabled = true;
     try {
-      await Promise.all([refreshShared({ signal }), versionChecker.refresh()]);
+      await Promise.all([refreshShared({ signal, force: true }), versionChecker.refresh()]);
       await remount();
       toast.show('已刷新', 'good');
     } catch (error) {
@@ -221,6 +275,7 @@ function appContext(routeContext) {
     api,
     session,
     shared,
+    resources,
     taskStream,
     modal,
     toast,

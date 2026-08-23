@@ -31,7 +31,10 @@ def test_create_run_marks_owned_external_tree_and_records_result(tmp_path: Path)
         (run_root / isolation.RUN_MARKER_NAME).read_text(encoding="utf-8")
     )
     assert root_marker["project_id"] == isolation.PROJECT_ID
+    assert root_marker["schema_version"] == isolation.ROOT_MARKER_SCHEMA_VERSION
     assert run_marker["run_id"] == "run-001"
+    assert run_marker["schema_version"] == isolation.RUN_SCHEMA_VERSION
+    assert run_marker["test_id"] == isolation.TEST_ID
     for name in isolation.RUN_DIRECTORIES:
         assert (run_root / name).is_dir()
 
@@ -43,10 +46,61 @@ def test_create_run_marks_owned_external_tree_and_records_result(tmp_path: Path)
         message="ok",
     )
     result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["schema_version"] == isolation.RESULT_SCHEMA_VERSION
+    assert result["test_id"] == isolation.TEST_ID
     assert result["status"] == "passed"
     assert result["exit_code"] == 0
     assert result["message"] == "ok"
     assert run_root.is_dir()
+
+
+def test_legacy_v1_run_remains_t_project_and_record_preserves_schema(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    run_root = isolation.create_run(workspace, tmp_path / "test-root", "legacy-v1")
+    marker_path = run_root / isolation.RUN_MARKER_NAME
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["schema_version"] = isolation.LEGACY_RUN_SCHEMA_VERSION
+    marker.pop("test_id")
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    assert isolation.validate_run(run_root, workspace) == run_root.resolve()
+    result_path = isolation.record_result(run_root, workspace, "passed")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["schema_version"] == isolation.LEGACY_RUN_SCHEMA_VERSION
+    assert "test_id" not in result
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "test_id", "message"),
+    [
+        (3, isolation.TEST_ID, "不支持的 schema_version"),
+        (isolation.RUN_SCHEMA_VERSION, None, "test_id"),
+        (isolation.RUN_SCHEMA_VERSION, "T-DOCKER", "test_id"),
+    ],
+)
+def test_validate_run_rejects_unknown_schema_or_wrong_identity(
+    tmp_path: Path,
+    schema_version: int,
+    test_id: str | None,
+    message: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    run_root = isolation.create_run(workspace, tmp_path / "test-root", "invalid-run")
+    marker_path = run_root / isolation.RUN_MARKER_NAME
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["schema_version"] = schema_version
+    if test_id is None:
+        marker.pop("test_id", None)
+    else:
+        marker["test_id"] = test_id
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    with pytest.raises(isolation.IsolationError, match=message):
+        isolation.validate_run(run_root, workspace)
 
 
 @pytest.mark.parametrize("placement", ["same", "child", "parent"])
@@ -101,6 +155,9 @@ def test_normative_entrypoints_keep_all_outputs_in_owned_run() -> None:
         assert "BILI_PLAYWRIGHT_CHROMIUM" in content
         assert "playwright_runtime.py" in content
         assert "--probe" in content
+        assert 'export TEMP="$RUN_ROOT/tmp"' in content
+        assert 'export TMP="$RUN_ROOT/tmp"' in content
+        assert "tr -d '\\r'" in content
         assert "playwright install" not in content
     assert "results" in content
     assert "export BILI_DATABASE_PATH=" not in source

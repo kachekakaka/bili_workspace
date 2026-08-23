@@ -1,4 +1,7 @@
+import { resourceKey } from '../core/resource-cache.mjs';
 import { bindDialogCancel, esc, formatDate, modalActions, statusClass, statusLabel } from './shared.mjs';
+
+const STATUS_RESOURCE = resourceKey('status');
 
 function accountUser(session) {
   const value = session.get();
@@ -10,17 +13,54 @@ function accountUser(session) {
 }
 
 export async function mount(root, context) {
-  const statusResponse = await context.api('/api/status?refresh_login=true', { signal: context.signal });
-  const status = statusResponse.data || {};
-  context.shared.patch({ status });
+  const cachedStatus = context.resources.peek(STATUS_RESOURCE);
+  let status = cachedStatus?.value || context.shared.get().status || {};
+  let statusError = cachedStatus?.stale
+    ? cachedStatus.error || new Error('登录状态缓存已过期')
+    : null;
   const user = accountUser(context.session);
   const host = document.createElement('div');
   host.innerHTML = `<div id="v062AccountTabs" class="v062-account-tabs" role="tablist"><button type="button" class="active" data-v062-account-tab="bilibili" role="tab" aria-selected="true">Bilibili 登录</button><button type="button" data-v062-account-tab="website" role="tab" aria-selected="false">网站账号与设备</button></div>
     <div class="v062-account-grid">
-      <section class="card" data-v062-account-panel="bilibili"><div class="card-head"><div><h2>Bilibili 账号</h2><p>用于会员画质与登录搜索。完整 Cookie 只保存在服务器 BBDown.data，不返回浏览器。</p></div><span class="badge ${statusClass(status.login_state)}">${statusLabel(status.login_state)}</span></div><div class="notice">${esc(status.message || '')}</div><div class="toolbar" style="margin-top:15px"><button type="button" id="qrLoginButton" class="btn primary">网页扫码登录</button><button type="button" id="refreshBiliButton" class="btn">重新验证</button><button type="button" id="biliLogoutButton" class="btn danger">退出 B站登录</button></div></section>
+      <section class="card" data-v062-account-panel="bilibili"><div class="card-head"><div><h2>Bilibili 账号</h2><p>用于会员画质与登录搜索。完整 Cookie 只保存在服务器 BBDown.data，不返回浏览器。</p></div><span id="biliStatusBadge" class="badge ${statusClass(status.login_state)}">${statusLabel(status.login_state)}</span></div><div id="biliStatusMessage" class="notice">${esc(status.message || '')}</div><div class="toolbar" style="margin-top:15px"><button type="button" id="qrLoginButton" class="btn primary">网页扫码登录</button><button type="button" id="refreshBiliButton" class="btn">重新验证</button><button type="button" id="biliLogoutButton" class="btn danger">退出 B站登录</button></div></section>
       <section class="card hidden" data-v062-account-panel="website"><div class="card-head"><div><h2>网站账号</h2><p>管理当前网站账号、密码和登录设备；与 Bilibili 登录完全独立。</p></div></div><div class="v062-account-summary"><div><span class="metric-foot">当前网站账号</span><strong>${esc(user.display_name || user.username || '用户')}</strong><small>${esc(user.username || '')}</small></div><button type="button" class="btn" id="v062EditOwnDisplayName">修改显示名</button></div><form id="passwordForm" class="form-grid"><div class="field full"><label>当前密码</label><input id="currentPassword" class="input" type="password" autocomplete="current-password" required></div><div class="field"><label>新密码</label><input id="newPassword" class="input" type="password" autocomplete="new-password" minlength="10" maxlength="64" required></div><div class="field"><label>确认新密码</label><input id="confirmPassword" class="input" type="password" autocomplete="new-password" minlength="10" maxlength="64" required></div><div class="field full"><button class="btn primary" type="submit">更换密码并撤销其他会话</button></div></form><button type="button" id="accountLogout" class="btn" style="margin-top:15px">退出网站</button><div id="v062SessionPanel" class="v062-session-panel"><div class="metric-foot">切换到此页签后读取登录设备…</div></div></section>
     </div>`;
   context.commit(() => root.replaceChildren(host));
+
+  const renderBiliStatus = () => {
+    const badge = host.querySelector('#biliStatusBadge');
+    const message = host.querySelector('#biliStatusMessage');
+    badge.className = `badge ${statusClass(status.login_state)}`;
+    badge.textContent = statusLabel(status.login_state);
+    message.className = `notice ${statusError ? 'warn' : ''}`.trim();
+    message.textContent = statusError
+      ? `${status.message || '保留最近一次状态'}；后台验证失败，可稍后重试`
+      : status.message || '';
+  };
+
+  const refreshBiliStatus = async () => {
+    statusError = null;
+    try {
+      status = await context.resources.refresh(
+        STATUS_RESOURCE,
+        async ({ signal }) => (
+          (await context.api('/api/status?refresh_login=true', { signal })).data || {}
+        ),
+        { signal: context.signal },
+      );
+      context.shared.patch({
+        status,
+        groups: status.group_records || context.shared.get().groups || [],
+      });
+      renderBiliStatus();
+    } catch (error) {
+      if (error?.name === 'AbortError') return;
+      statusError = error;
+      renderBiliStatus();
+    }
+  };
+  renderBiliStatus();
+  void refreshBiliStatus();
 
   let sessionsLoaded = false;
   const sessionsPanel = host.querySelector('#v062SessionPanel');
@@ -139,14 +179,15 @@ export async function mount(root, context) {
   }, { signal: context.signal });
 
   host.querySelector('#accountLogout').addEventListener('click', () => void context.logout(), { signal: context.signal });
-  host.querySelector('#refreshBiliButton').addEventListener('click', () => void context.remount(), { signal: context.signal });
+  host.querySelector('#refreshBiliButton').addEventListener('click', () => void refreshBiliStatus(), { signal: context.signal });
   host.querySelector('#biliLogoutButton').addEventListener('click', async () => {
     const accepted = await context.confirm({ title: '退出 Bilibili 登录', message: '确定删除服务器上的 Bilibili 登录会话吗？', confirmLabel: '退出', danger: true });
     if (!accepted) return;
     try {
       await context.api('/api/account/bilibili', { method: 'DELETE' });
       context.toast.show('已退出 Bilibili 登录', 'good');
-      void context.remount();
+      context.resources.invalidate(STATUS_RESOURCE);
+      void refreshBiliStatus();
     } catch (error) {
       context.toast.show(error.message, 'bad');
     }
@@ -171,7 +212,8 @@ export async function mount(root, context) {
             stop();
             context.toast.show('Bilibili 登录成功', 'good');
             modal.close('success');
-            void context.remount();
+            context.resources.invalidate(STATUS_RESOURCE);
+            void refreshBiliStatus();
           } else if (value.status === 'expired') {
             stop();
             node.className = 'notice bad';
