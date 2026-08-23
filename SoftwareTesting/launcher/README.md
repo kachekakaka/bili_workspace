@@ -39,22 +39,22 @@ build\launcher-candidate\bili-workspace-launcher-0.7.0.exe --self-check
 
 产品验收按以下边界分别记录：
 
-- 全新仓库外数据根、本机模式、局域网监听、非法安全组合、端口冲突、托盘和 Windows 会话关闭；
+- 全新仓库外数据根、本机模式、局域网服务器模式、非法安全组合、端口冲突、托盘和 Windows 会话关闭；
 - 没有系统 Python、BBDown、FFmpeg 且启动时断网时，EXE 仍能启动并使用内置工具；
 - 真实 Docker Engine 生成规定的 `linux/amd64` tar、`.tar.sha256`、JSON，三者身份一致；中断恢复和精确临时镜像清理不调用通用 prune。
 
-这些是产品或外部进程验证，不能作为普通测试擅自运行，也不能使用真实用户数据根、Cookie、数据库或媒体。这里的 Docker 阶段只承接启动器固定 `linux/amd64` 离线三件套的事务、身份与恢复协议；当前项目镜像的一般 amd64／arm64 实际构建由 [T-DOCKER](../docker/README.md) 承接。
+这些是产品或外部进程验证，不能作为普通测试擅自运行，也不能使用真实用户数据根、Cookie、数据库或媒体。这里的 Docker 阶段只承接启动器面向 `linux/amd64` 的 Docker 导出三件套及其事务、身份与恢复协议；当前项目镜像的一般 amd64／arm64 实际构建由 [T-DOCKER](../docker/README.md) 承接。
 
 ## 关键断言
 
 - `launcher.json` 与 EXE 同级且只保存 schema、数据根和最近导出目录；删除后重新选择原数据根恢复网络与业务状态。
 - 数据根必须在源码仓库和 EXE 控制根外，固定包含 `config/`、`userdata/`、`downloads/`，并让任务日志、通用缓存、.NET 展开缓存、HOME 与临时目录全部落在 `userdata/`；GUI 在写入标记、默认配置或网络设置前即持有数据根锁，并持续持有到退出；重解析逃逸、异常备份目标、损坏配置和未来 schema 失败关闭。
 - BBDown/FFmpeg 工具位于已校验的 `resources/<build_id>/windows-tools/`，`BBDown.data` 只位于数据根 `config/bbdown/`；后端内部环境不回落到仓库路径。
-- 本机模式只监听回环；局域网模式显式管理监听、端口、可信 Host/代理、公开 URL、Secure Cookie、HSTS 和 IP Host，任何通配或非法联动都阻止启动；Web 设置页按 API 返回的 `protected_fields` 禁用并省略启动入口托管字段。
+- 本机模式只监听回环；局域网服务器模式显式管理监听、端口、可信 Host/代理、公开 URL、Secure Cookie、HSTS 和 IP Host，任何通配或非法联动都阻止启动；Web 设置页按 API 返回的 `protected_fields` 禁用并省略启动入口托管字段。
 - 后端健康探测绕过系统代理，并同时匹配 HTTP 状态、`ok`、`build_id`、运行模式和仍存活的当前子进程；停止只操作当前 `Popen`、Job Object 与停止文件，调用方持有的数据根锁由 GUI 继续持有；端口冲突不结束其他进程，也不静默换端口。
 - GUI 保留 500ms 子进程状态检测，但后端就绪后 HTTP 健康探测降为每 10 秒一次；异常退出后的 `work/backend-*` 只有在目录名、journal、固定文件集和已死亡 PID 全部匹配时才逐文件回收，任何额外条目、重解析点、活 PID 或不可判定状态均保留。
 - 构建器发布已有 EXE 前使用 Windows Restart Manager 检查文件占用；占用时在改名或写记录之前失败，不产生“新 EXE 已发布但旧备份删不掉”的半成功状态。
-- Docker 用户入口固定 `linux/amd64`，覆盖确认绑定旧三件套的精确大小和 SHA-256，三件套以 JSON 最后提交并能从 journal 恢复；Docker 不可达不能冒充“镜像不存在”，只清理同时匹配 journal、作业 label 与 build label 的自有临时 tag。
+- Docker 用户入口固定为 `linux/amd64`，覆盖确认绑定旧 Docker 导出三件套的精确大小和 SHA-256，三件套以 JSON 最后提交并能从 journal 恢复；Docker 不可达不能冒充“镜像不存在”，只清理同时匹配 journal、作业 label 与 build label 的自有临时 tag。
 - 候选固定名为 `dist/bili-workspace-launcher-0.7.0.exe`，仓库最终只跟踪这一份当前 EXE；达到 100 MiB 时停止重新决策。
 
 ## 结果

@@ -14,7 +14,7 @@
 | `.github/workflows/ci.yml` 的 `docker-validation` 作业 | 使用 `docker/Dockerfile` 和当前根构建上下文执行单架构 `linux/amd64` 构建，再从本地验证镜像运行版本冒烟 | 镜像构建成功，容器内 `app.__version__` 为当前版本；镜像只使用任务内标签，不推送 |
 | `.github/workflows/docker-image.yml` | 使用 Buildx 与 QEMU 构建 `linux/amd64,linux/arm64`，`push: false` | 两个声明架构均完成构建求值，不创建或推送正式镜像 |
 
-CI 作业中先行执行的持久化、迁移和发布契约 pytest 仍属于 T-PROJECT；它们不能替代真实 Docker 构建。T-LAUNCHER 负责启动器生成固定 `linux/amd64` 离线三件套的事务、身份与恢复协议，也不替代本项的一般项目镜像构建。
+CI 作业中先行执行的持久化、迁移和发布契约 pytest 仍属于 T-PROJECT；它们不能替代真实 Docker 构建。T-LAUNCHER 负责启动器面向 `linux/amd64` 的 Docker 导出三件套及其事务、身份与恢复协议，也不替代本项的一般项目镜像构建。
 
 ## 选择与环境
 
