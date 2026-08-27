@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [ValidateSet('Create', 'Record')]
     [string]$Action = 'Create',
@@ -223,6 +223,7 @@ if ($Action -eq 'Create') {
         run_id = $RunId
         status = 'inconclusive'
         updated_at = [DateTime]::UtcNow.ToString('o')
+        finalized_at = $null
         workspace_root = $WorkspaceRoot
         run_root = $RunRoot
         message = '验证已创建，但尚未写入最终结果。'
@@ -236,12 +237,14 @@ if ($Action -eq 'Create') {
 
 if ([string]::IsNullOrWhiteSpace($RunRoot)) { throw 'Record 操作必须提供 -RunRoot' }
 $validated = Assert-Run $RunRoot $WorkspaceRoot $TestId
+$finalizedAt = [DateTime]::UtcNow.ToString('o')
 $result = [ordered]@{
     schema_version = $validated.SchemaVersion
     project_id = $ProjectId
     run_id = $validated.Marker.run_id
     status = $Status
-    updated_at = [DateTime]::UtcNow.ToString('o')
+    updated_at = $finalizedAt
+    finalized_at = $finalizedAt
     workspace_root = $WorkspaceRoot
     run_root = $validated.Path
 }

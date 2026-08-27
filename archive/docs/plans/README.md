@@ -8,6 +8,7 @@
 
 ## 已完成计划
 
+- [DOC-GOV-20260827 轻量计划与测试证据治理方案](DOC-GOV-20260827-轻量计划与测试证据治理.md)：已完成轻量方案路径、四态生命周期、T-DOC/T-ARCHIVE 拆分、最小性质证明、证据期限和摘要绑定精确 GC 收口；
 - [DOC-TEST-GOV-20260820 归档索引与 Docker 测试证据归属收口方案](DOC-TEST-GOV-20260820-归档索引与Docker测试证据归属收口.md)：已补齐归档根索引，将新运行证据升级为带 Registry `test_id` 的 schema v2，保留 T-PROJECT v1 兼容，并把 Docker 本地手工验证接入现有 T-DOCKER；
 - [TASK-CANCEL-20260823 任务实时状态与预检取消一致性修复方案](TASK-CANCEL-20260823-任务实时状态与预检取消一致性修复.md)：已恢复 OwnedTaskQueue 与阶段/进度通知，收口 cancelling/pausing/paused、取消幂等和 BBDown 信息预检停止，并通过隔离浏览器任务卡差量更新验证；
 - [PERF-20260823 全站页面性能收口方案](PERF-20260823-全站页面性能收口.md)：已完成媒体索引未变化快路径、会话资源缓存、TaskStream 租约与摘要模式、共享页面读取、Library 局部 DOM 更新和 Search LRU，并通过确定性工作量及隔离浏览器验证；

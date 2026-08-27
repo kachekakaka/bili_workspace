@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from test_doc_consistency import collect_doc_consistency
+from test_doc_consistency import collect_archive_consistency, collect_doc_consistency
 
 
 SCRIPT = Path(__file__).with_name("test_doc_consistency.py")
@@ -56,7 +56,7 @@ BASE_FILES = {
 
 ## FEATURE-001：示例能力
 
-- 状态：待实施
+- 状态：待确认
 """,
     "docs/软件测试.md": """\
 # 软件测试
@@ -64,6 +64,7 @@ BASE_FILES = {
 | ID | 执行类别 | 入口 | 唯一职责 |
 | --- | --- | --- | --- |
 | T-DOC | full | [文档一致性](../SoftwareTesting/doc_consistency/README.md) | 检查文档骨架与入口 |
+| T-ARCHIVE | affected_only | [归档一致性](../SoftwareTesting/archive_consistency/README.md) | 检查完整归档区 |
 """,
     "SoftwareTesting/README.md": """\
 # 测试入口
@@ -71,6 +72,7 @@ BASE_FILES = {
 - [通用协议](PROTOCOL.md)
 - [安全约束](SAFETY.md)
 - [活动测试项 Registry](../docs/软件测试.md)
+- [归档一致性](archive_consistency/README.md)
 - [文档一致性](doc_consistency/README.md)
 """,
     "SoftwareTesting/PROTOCOL.md": """\
@@ -83,6 +85,11 @@ BASE_FILES = {
 
 示例项目不涉及真实数据或产品进程，相关规则不适用。
 """,
+    "SoftwareTesting/archive_consistency/README.md": """\
+# 归档一致性
+
+该测试项只在归档受影响时检查完整归档区。
+""",
     "SoftwareTesting/doc_consistency/README.md": """\
 # 文档一致性
 
@@ -90,6 +97,12 @@ BASE_FILES = {
 """,
     "archive/docs/README.md": """\
 # 文档归档
+
+| 归档文档 | 历史职责 | 当前承接真源 |
+| --- | --- | --- |
+""",
+    "archive/SoftwareTesting/README.md": """\
+# 测试资料归档
 
 | 归档文档 | 历史职责 | 当前承接真源 |
 | --- | --- | --- |
@@ -125,6 +138,9 @@ class DocConsistencyRulesTest(unittest.TestCase):
     def issues(self) -> tuple[list[str], list[str]]:
         return collect_doc_consistency(self.root)
 
+    def archive_issues(self) -> tuple[list[str], list[str]]:
+        return collect_archive_consistency(self.root)
+
     def assert_has(self, issues: list[str], expected: str) -> None:
         self.assertTrue(
             any(expected in issue for issue in issues),
@@ -133,6 +149,11 @@ class DocConsistencyRulesTest(unittest.TestCase):
 
     def assert_clean(self) -> None:
         errors, warnings = self.issues()
+        self.assertEqual([], errors)
+        self.assertEqual([], warnings)
+
+    def assert_archive_clean(self) -> None:
+        errors, warnings = self.archive_issues()
         self.assertEqual([], errors)
         self.assertEqual([], warnings)
 
@@ -190,6 +211,7 @@ class DocConsistencyRulesTest(unittest.TestCase):
 
     def test_minimal_fixture_passes(self) -> None:
         self.assert_clean()
+        self.assert_archive_clean()
 
     def test_required_file_and_exact_case_are_enforced(self) -> None:
         (self.root / "docs" / "需求文档.md").unlink()
@@ -228,7 +250,7 @@ class DocConsistencyRulesTest(unittest.TestCase):
 
         errors, _ = self.issues()
 
-        self.assert_has(errors, "docs/需求文档.md: 活动 Markdown 和归档索引必须使用 LF")
+        self.assert_has(errors, "docs/需求文档.md: 受检 Markdown 必须使用 LF")
         self.assert_has(errors, "docs/设计文档.md: 必须是有效 UTF-8")
 
     def test_project_skill_assets_are_excluded_without_broadening_scope(self) -> None:
@@ -441,10 +463,17 @@ C:\\Users\\example\\project
         self.assert_clean()
 
     def test_pending_item_may_have_no_plan_or_one_plan(self) -> None:
-        self.replace("docs/已知问题与待做需求.md", "待实施", "待确认")
         self.assert_clean()
 
         self.add_valid_plan("待确认")
+        self.assert_clean()
+
+    def test_ready_item_requires_one_plan(self) -> None:
+        self.replace("docs/已知问题与待做需求.md", "待确认", "待实施")
+        errors, _ = self.issues()
+        self.assert_has(errors, "待实施待办 FEATURE-001 必须有且只有一份活动方案")
+
+        self.add_valid_plan("待实施")
         self.assert_clean()
 
     def test_pending_item_must_not_have_multiple_plans(self) -> None:
@@ -470,7 +499,7 @@ C:\\Users\\example\\project
         self.assert_has(errors, "待办 FEATURE-001 存在多份活动方案")
 
     def test_plan_lifecycle_link_and_fields_are_enforced(self) -> None:
-        self.replace("docs/已知问题与待做需求.md", "待实施", "实施中")
+        self.replace("docs/已知问题与待做需求.md", "待确认", "实施中")
         errors, _ = self.issues()
         self.assert_has(errors, "实施中待办 FEATURE-001 必须有且只有一份活动方案")
 
@@ -513,21 +542,19 @@ C:\\Users\\example\\project
 
         self.assert_has(errors, "必须由对应待办条目实际链接")
 
-    def test_waiting_or_paused_item_must_not_have_active_plan(self) -> None:
-        for status in ("待实施", "暂缓"):
-            with self.subTest(status=status):
-                self.add_valid_plan(status)
+    def test_paused_item_must_not_have_active_plan(self) -> None:
+        self.add_valid_plan("暂缓")
 
-                errors, _ = self.issues()
+        errors, _ = self.issues()
 
-                self.assert_has(
-                    errors,
-                    f"对应待办 FEATURE-001 的状态“{status}”不允许活动方案",
-                )
-                self.assert_has(
-                    errors,
-                    f"状态为“{status}”的待办 FEATURE-001 不得有活动方案",
-                )
+        self.assert_has(
+            errors,
+            "对应待办 FEATURE-001 的状态“暂缓”不允许活动方案",
+        )
+        self.assert_has(
+            errors,
+            "状态为“暂缓”的待办 FEATURE-001 不得有活动方案",
+        )
 
     def test_registry_requires_valid_unique_ids_categories_and_t_doc(self) -> None:
         self.write(
@@ -553,21 +580,23 @@ C:\\Users\\example\\project
             errors,
             "T-DOC 必须指向 SoftwareTesting/doc_consistency/README.md",
         )
+        self.assert_has(errors, "Registry 缺少必需测试项 T-ARCHIVE")
 
     def test_archive_document_requires_one_valid_index_entry(self) -> None:
         self.write("archive/docs/旧设计.md", "# 旧设计\n")
-        errors, _ = self.issues()
+        self.assert_clean()
+        errors, _ = self.archive_issues()
         self.assert_has(errors, "archive/docs/旧设计.md: 必须由归档索引恰好登记一次，实际 0")
 
         self.add_valid_archive()
-        self.assert_clean()
+        self.assert_archive_clean()
 
         self.write(
             "archive/docs/README.md",
             self.read("archive/docs/README.md")
             + "| [旧设计副本](旧设计.md) | 重复记录 | 无，仅保留历史证据 |\n",
         )
-        errors, _ = self.issues()
+        errors, _ = self.archive_issues()
         self.assert_has(errors, "archive/docs/旧设计.md: 归档索引重复登记 2 次")
 
     def test_archive_current_source_must_be_active_project_markdown(self) -> None:
@@ -583,7 +612,7 @@ C:\\Users\\example\\project
 """,
         )
 
-        errors, _ = self.issues()
+        errors, _ = self.archive_issues()
 
         self.assert_has(
             errors,
@@ -593,6 +622,7 @@ C:\\Users\\example\\project
     def test_active_navigation_may_link_archive_index_but_not_body(self) -> None:
         self.add_valid_archive()
         self.assert_clean()
+        self.assert_archive_clean()
 
         self.write(
             "AGENTS.md",
@@ -600,6 +630,39 @@ C:\\Users\\example\\project
         )
         errors, _ = self.issues()
         self.assert_has(errors, "AGENTS.md: 活动导航不得直接链接归档正文")
+
+    def test_active_scope_ignores_archive_body_errors(self) -> None:
+        self.write(
+            "archive/docs/未登记.md",
+            "# 未登记\n\n[缺失历史附件](不存在.md)\n",
+        )
+
+        self.assert_clean()
+        errors, _ = self.archive_issues()
+        self.assert_has(errors, "archive/docs/未登记.md: 链接目标不存在")
+        self.assert_has(errors, "archive/docs/未登记.md: 必须由归档索引恰好登记一次")
+
+    def test_testing_archive_area_is_checked_in_full(self) -> None:
+        self.write("archive/SoftwareTesting/旧测试.md", "# 旧测试\n")
+
+        self.assert_clean()
+        errors, _ = self.archive_issues()
+        self.assert_has(
+            errors,
+            "archive/SoftwareTesting/旧测试.md: 必须由归档索引恰好登记一次",
+        )
+
+        self.write(
+            "archive/SoftwareTesting/README.md",
+            """\
+# 测试资料归档
+
+| 归档文档 | 历史职责 | 当前承接真源 |
+| --- | --- | --- |
+| [旧测试](旧测试.md) | 历史测试规则 | [当前测试入口](../../SoftwareTesting/README.md) |
+""",
+        )
+        self.assert_archive_clean()
 
     def test_root_and_docs_index_duplicate_direct_links_are_warning(self) -> None:
         self.write(
@@ -697,6 +760,28 @@ C:\\Users\\example\\project
             text=True,
         )
         self.assertEqual(0, passed.returncode, passed.stdout + passed.stderr)
+
+        archive_passed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-X",
+                "utf8",
+                str(SCRIPT),
+                "--workspace-root",
+                str(self.root),
+                "--scope",
+                "archive",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            0,
+            archive_passed.returncode,
+            archive_passed.stdout + archive_passed.stderr,
+        )
 
         (self.root / "docs" / "需求文档.md").unlink()
         failed = subprocess.run(

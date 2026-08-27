@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读检查项目文档骨架、实际导航、生命周期、Registry 和归档。"""
+"""只读检查活动文档骨架或归档完整性。"""
 
 from __future__ import annotations
 
@@ -49,8 +49,10 @@ REQUIRED_FILES = (
     "SoftwareTesting/README.md",
     "SoftwareTesting/PROTOCOL.md",
     "SoftwareTesting/SAFETY.md",
+    "SoftwareTesting/archive_consistency/README.md",
     "SoftwareTesting/doc_consistency/README.md",
     "archive/docs/README.md",
+    "archive/SoftwareTesting/README.md",
 )
 REQUIRED_NAVIGATION = {
     "AGENTS.md": (
@@ -73,6 +75,7 @@ REQUIRED_NAVIGATION = {
         ("SoftwareTesting/PROTOCOL.md", None),
         ("SoftwareTesting/SAFETY.md", None),
         ("docs/软件测试.md", None),
+        ("SoftwareTesting/archive_consistency/README.md", None),
         ("SoftwareTesting/doc_consistency/README.md", None),
     ),
 }
@@ -89,11 +92,14 @@ MACHINE_FILES = (
     "docs/已知问题与待做需求.md",
     "docs/软件测试.md",
     "SoftwareTesting/README.md",
+)
+ARCHIVE_AREAS = ("archive/docs", "archive/SoftwareTesting")
+ARCHIVE_MACHINE_FILES = (
     "archive/docs/README.md",
     "archive/SoftwareTesting/README.md",
 )
 ALLOWED_BACKLOG_STATUSES = {"待确认", "待实施", "实施中", "暂缓"}
-ALLOWED_PLAN_STATUSES = {"待确认", "实施中"}
+ALLOWED_PLAN_STATUSES = {"待确认", "待实施", "实施中"}
 PLAN_FIELDS = ("测试层级", "验证影响域", "具体验证项")
 TEST_CATEGORIES = {"full", "affected_only", "explicit"}
 BACKLOG_HEADING_RE = re.compile(
@@ -171,6 +177,7 @@ def _markdown_inventory(root: Path) -> MarkdownInventory:
             name
             for name in directory_names
             if not _ignored(current_path / name, root)
+            and not (current_path == root and name == "archive")
         )
         files.extend(
             current_path / name
@@ -180,18 +187,41 @@ def _markdown_inventory(root: Path) -> MarkdownInventory:
         )
 
     all_files = tuple(sorted(files))
-    active_files = tuple(
-        path for path in all_files if not _is_archive(path, root)
-    )
-    checked_files = set(active_files)
-    for relative in ("archive/docs/README.md", "archive/SoftwareTesting/README.md"):
-        path = root / relative
-        if path.is_file():
-            checked_files.add(path)
     return MarkdownInventory(
         all_files=all_files,
-        active_files=active_files,
-        checked_files=tuple(sorted(checked_files)),
+        active_files=all_files,
+        checked_files=all_files,
+    )
+
+
+def _archive_markdown_inventory(root: Path) -> MarkdownInventory:
+    files: list[Path] = []
+    for relative in ARCHIVE_AREAS:
+        archive_root = root / relative
+        if not archive_root.is_dir():
+            continue
+        for current, directory_names, file_names in os.walk(
+            archive_root,
+            topdown=True,
+            onerror=_raise_walk_error,
+        ):
+            current_path = Path(current)
+            directory_names[:] = sorted(
+                name
+                for name in directory_names
+                if not _ignored(current_path / name, root)
+            )
+            files.extend(
+                current_path / name
+                for name in sorted(file_names)
+                if (current_path / name).suffix.lower() == ".md"
+                and not _ignored(current_path / name, root)
+            )
+    all_files = tuple(sorted(files))
+    return MarkdownInventory(
+        all_files=all_files,
+        active_files=(),
+        checked_files=all_files,
     )
 
 
@@ -345,7 +375,7 @@ def _check_markdown_files(
             errors.append(f"{relative}: 无法读取 Markdown: {exc}")
             continue
         if b"\r" in raw:
-            errors.append(f"{relative}: 活动 Markdown 和归档索引必须使用 LF")
+            errors.append(f"{relative}: 受检 Markdown 必须使用 LF")
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError:
@@ -674,9 +704,9 @@ def _check_plans(
             errors.append(f"docs/方案/: 待办 {item_id} 存在多份活动方案")
     for item_id, status in sorted(backlog.items()):
         count = len(by_id.get(item_id, []))
-        if status == "实施中" and count != 1:
+        if status in {"待实施", "实施中"} and count != 1:
             errors.append(
-                f"docs/方案/: 实施中待办 {item_id} 必须有且只有一份活动方案"
+                f"docs/方案/: {status}待办 {item_id} 必须有且只有一份活动方案"
             )
         if status not in ALLOWED_PLAN_STATUSES and count:
             errors.append(
@@ -752,7 +782,7 @@ def _parse_registry(
         row_count += 1
 
     if row_count == 0:
-        errors.append("docs/软件测试.md: Registry 至少登记 T-DOC")
+        errors.append("docs/软件测试.md: Registry 至少登记 T-DOC 和 T-ARCHIVE")
 
     doc_entry = entries.get("T-DOC")
     expected_doc_target = (
@@ -767,6 +797,23 @@ def _parse_registry(
             errors.append(
                 "docs/软件测试.md: T-DOC 必须指向 "
                 "SoftwareTesting/doc_consistency/README.md"
+            )
+
+    archive_entry = entries.get("T-ARCHIVE")
+    expected_archive_target = (
+        root / "SoftwareTesting" / "archive_consistency" / "README.md"
+    ).resolve(strict=False)
+    if archive_entry is None:
+        errors.append("docs/软件测试.md: Registry 缺少必需测试项 T-ARCHIVE")
+    else:
+        if archive_entry[0] != "affected_only":
+            errors.append(
+                "docs/软件测试.md: T-ARCHIVE 的执行类别必须是 affected_only"
+            )
+        if archive_entry[1].resolve(strict=False) != expected_archive_target:
+            errors.append(
+                "docs/软件测试.md: T-ARCHIVE 必须指向 "
+                "SoftwareTesting/archive_consistency/README.md"
             )
 
     return entries
@@ -934,8 +981,12 @@ def _check_archive_navigation(root: Path, errors: list[str]) -> None:
                 )
 
 
-def _check_machine_syntax(root: Path, warnings: list[str]) -> None:
-    for relative in MACHINE_FILES:
+def _check_machine_syntax(
+    root: Path,
+    warnings: list[str],
+    files: tuple[str, ...] = MACHINE_FILES,
+) -> None:
+    for relative in files:
         path = root / relative
         content = _read_text(path)
         if content is None:
@@ -946,11 +997,7 @@ def _check_machine_syntax(root: Path, warnings: list[str]) -> None:
                 f"{relative}:{_line_number(stripped, match.start())}: "
                 "机器入口使用引用式链接，无法保证机械解析"
             )
-        if relative in {
-            "docs/软件测试.md",
-            "archive/docs/README.md",
-            "archive/SoftwareTesting/README.md",
-        }:
+        if relative in {"docs/软件测试.md", *ARCHIVE_MACHINE_FILES}:
             for number, line in enumerate(stripped.splitlines(), start=1):
                 if line.strip().startswith("|") and r"\|" in line:
                     warnings.append(
@@ -1018,8 +1065,6 @@ def collect_doc_consistency(
     _check_plans(workspace, backlog, backlog_plan_targets, errors)
     entries = _parse_registry(workspace, errors)
     _check_suite_registry(workspace, inventory, entries, errors)
-    _check_archive_area(workspace, "archive/docs", inventory, errors)
-    _check_archive_area(workspace, "archive/SoftwareTesting", inventory, errors)
     _check_archive_navigation(workspace, errors)
     _check_machine_syntax(workspace, warnings)
     _check_absolute_paths(workspace, inventory, warnings)
@@ -1027,11 +1072,39 @@ def collect_doc_consistency(
     return errors, warnings
 
 
+def collect_archive_consistency(
+    root: Path | None = None,
+) -> tuple[list[str], list[str]]:
+    workspace = (root or Path(__file__).resolve().parents[2]).resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
+    for relative in ARCHIVE_MACHINE_FILES:
+        if not _is_exact_file(workspace, relative):
+            errors.append(f"{relative}: 归档目录缺少索引")
+    inventory = _archive_markdown_inventory(workspace)
+    _check_markdown_files(workspace, inventory, errors)
+    for relative in ARCHIVE_AREAS:
+        _check_archive_area(workspace, relative, inventory, errors)
+    _check_machine_syntax(workspace, warnings, ARCHIVE_MACHINE_FILES)
+    return errors, warnings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root", type=Path)
+    parser.add_argument(
+        "--scope",
+        choices=("active", "archive"),
+        default="active",
+        help="检查活动文档或完整归档区",
+    )
     args = parser.parse_args()
-    errors, warnings = collect_doc_consistency(args.workspace_root)
+    collector = (
+        collect_doc_consistency
+        if args.scope == "active"
+        else collect_archive_consistency
+    )
+    errors, warnings = collector(args.workspace_root)
     for warning in warnings:
         print(f"[WARN] {warning}")
     if errors:
@@ -1039,7 +1112,8 @@ def main() -> int:
             print(f"[FAIL] {error}")
         print(f"FAILED: {len(errors)} issue(s), {len(warnings)} warning(s)")
         return 1
-    print(f"文档机械一致性检查通过（{len(warnings)} warning(s)）。")
+    label = "活动文档机械一致性" if args.scope == "active" else "归档机械一致性"
+    print(f"{label}检查通过（{len(warnings)} warning(s)）。")
     return 0
 
 
