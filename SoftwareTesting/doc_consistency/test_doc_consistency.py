@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
-import sys
 import unicodedata
 from collections import Counter, deque
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -113,6 +114,13 @@ ABSOLUTE_USER_PATH_RE = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class MarkdownInventory:
+    all_files: tuple[Path, ...]
+    active_files: tuple[Path, ...]
+    checked_files: tuple[Path, ...]
+
+
 def _is_project_skill_asset(path: Path, root: Path) -> bool:
     try:
         parts = path.relative_to(root).parts
@@ -147,27 +155,44 @@ def _is_within(path: Path, parent: Path) -> bool:
     return candidate == boundary or boundary in candidate.parents
 
 
-def _all_markdown(root: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in root.rglob("*")
-        if path.is_file()
-        and path.suffix.lower() == ".md"
-        and not _ignored(path, root)
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _markdown_inventory(root: Path) -> MarkdownInventory:
+    files: list[Path] = []
+    for current, directory_names, file_names in os.walk(
+        root,
+        topdown=True,
+        onerror=_raise_walk_error,
+    ):
+        current_path = Path(current)
+        directory_names[:] = sorted(
+            name
+            for name in directory_names
+            if not _ignored(current_path / name, root)
+        )
+        files.extend(
+            current_path / name
+            for name in sorted(file_names)
+            if (current_path / name).suffix.lower() == ".md"
+            and not _ignored(current_path / name, root)
+        )
+
+    all_files = tuple(sorted(files))
+    active_files = tuple(
+        path for path in all_files if not _is_archive(path, root)
     )
-
-
-def _active_markdown(root: Path) -> list[Path]:
-    return [path for path in _all_markdown(root) if not _is_archive(path, root)]
-
-
-def _checked_markdown(root: Path) -> list[Path]:
-    files = _active_markdown(root)
+    checked_files = set(active_files)
     for relative in ("archive/docs/README.md", "archive/SoftwareTesting/README.md"):
         path = root / relative
         if path.is_file():
-            files.append(path)
-    return sorted(set(files))
+            checked_files.add(path)
+    return MarkdownInventory(
+        all_files=all_files,
+        active_files=active_files,
+        checked_files=tuple(sorted(checked_files)),
+    )
 
 
 def _strip_fenced_code(content: str) -> str:
@@ -287,15 +312,18 @@ def _check_required(root: Path, errors: list[str]) -> None:
             errors.append(f"{relative}: 缺少名称与大小写完全匹配的必需文件")
 
 
-def _check_context_shape(root: Path, errors: list[str]) -> None:
+def _check_context_shape(
+    root: Path,
+    inventory: MarkdownInventory,
+    errors: list[str],
+) -> None:
     if (root / "CONTEXT-MAP.md").exists():
         errors.append("CONTEXT-MAP.md: 本骨架只支持单一上下文项目")
     nested = sorted(
         path
-        for path in root.rglob("CONTEXT.md")
-        if path.is_file()
+        for path in inventory.all_files
+        if path.name == "CONTEXT.md"
         and path != root / "CONTEXT.md"
-        and not _ignored(path, root)
     )
     for path in nested:
         errors.append(
@@ -303,9 +331,13 @@ def _check_context_shape(root: Path, errors: list[str]) -> None:
         )
 
 
-def _check_markdown_files(root: Path, errors: list[str]) -> None:
+def _check_markdown_files(
+    root: Path,
+    inventory: MarkdownInventory,
+    errors: list[str],
+) -> None:
     slug_cache: dict[Path, set[str]] = {}
-    for path in _checked_markdown(root):
+    for path in inventory.checked_files:
         relative = path.relative_to(root).as_posix()
         try:
             raw = path.read_bytes()
@@ -378,8 +410,11 @@ def _check_navigation(root: Path, errors: list[str]) -> None:
                 )
 
 
-def _markdown_graph(root: Path) -> dict[Path, set[Path]]:
-    active = {path.resolve(strict=False) for path in _active_markdown(root)}
+def _markdown_graph(
+    root: Path,
+    inventory: MarkdownInventory,
+) -> dict[Path, set[Path]]:
+    active = {path.resolve(strict=False) for path in inventory.active_files}
     graph: dict[Path, set[Path]] = {}
     for path in sorted(active):
         content = _read_text(path)
@@ -416,15 +451,19 @@ def _reachable_within(
     return reached
 
 
-def _check_docs_reachability(root: Path, errors: list[str]) -> None:
+def _check_docs_reachability(
+    root: Path,
+    inventory: MarkdownInventory,
+    errors: list[str],
+) -> None:
     index = root / "docs" / "README.md"
     docs_root = root / "docs"
     if not index.is_file() or not docs_root.is_dir():
         return
-    graph = _markdown_graph(root)
+    graph = _markdown_graph(root, inventory)
     reached = _reachable_within(graph, index, 2)
-    for path in sorted(docs_root.rglob("*.md")):
-        if path == index or _ignored(path, root):
+    for path in inventory.active_files:
+        if path == index or not path.is_relative_to(docs_root):
             continue
         if path.resolve(strict=False) not in reached:
             errors.append(
@@ -433,11 +472,15 @@ def _check_docs_reachability(root: Path, errors: list[str]) -> None:
             )
 
 
-def _check_top_level_markdown_ownership(root: Path, errors: list[str]) -> None:
+def _check_top_level_markdown_ownership(
+    root: Path,
+    inventory: MarkdownInventory,
+    errors: list[str],
+) -> None:
     candidates = sorted(
         {
             path.relative_to(root).parts[0]
-            for path in _active_markdown(root)
+            for path in inventory.active_files
             if len(path.relative_to(root).parts) > 1
             and path.relative_to(root).parts[0] not in STANDARD_TOP_LEVEL_ROOTS
         }
@@ -464,23 +507,32 @@ def _check_top_level_markdown_ownership(root: Path, errors: list[str]) -> None:
         )
 
 
-def _suite_readmes(root: Path) -> list[Path]:
+def _suite_readmes(
+    root: Path,
+    inventory: MarkdownInventory,
+) -> list[Path]:
     testing_root = root / "SoftwareTesting"
     if not testing_root.is_dir():
         return []
     return sorted(
         path
-        for path in testing_root.rglob("README.md")
-        if path != testing_root / "README.md" and not _ignored(path, root)
+        for path in inventory.active_files
+        if path.name == "README.md"
+        and path != testing_root / "README.md"
+        and path.is_relative_to(testing_root)
     )
 
 
-def _check_suite_navigation(root: Path, errors: list[str]) -> None:
+def _check_suite_navigation(
+    root: Path,
+    inventory: MarkdownInventory,
+    errors: list[str],
+) -> None:
     index = root / "SoftwareTesting" / "README.md"
     if not index.is_file():
         return
     direct = _direct_targets(index)
-    for path in _suite_readmes(root):
+    for path in _suite_readmes(root, inventory):
         if path.resolve(strict=False) not in direct:
             errors.append(
                 f"{path.relative_to(root).as_posix()}: "
@@ -722,6 +774,7 @@ def _parse_registry(
 
 def _check_suite_registry(
     root: Path,
+    inventory: MarkdownInventory,
     entries: dict[str, tuple[str, Path, str]],
     errors: list[str],
 ) -> None:
@@ -729,7 +782,7 @@ def _check_suite_registry(
         target.resolve(strict=False)
         for _, target, _ in entries.values()
     }
-    for path in _suite_readmes(root):
+    for path in _suite_readmes(root, inventory):
         if path.resolve(strict=False) not in registry_targets:
             errors.append(
                 f"{path.relative_to(root).as_posix()}: "
@@ -774,7 +827,12 @@ def _archive_table(
     return rows
 
 
-def _check_archive_area(root: Path, relative: str, errors: list[str]) -> None:
+def _check_archive_area(
+    root: Path,
+    relative: str,
+    inventory: MarkdownInventory,
+    errors: list[str],
+) -> None:
     archive_root = root / relative
     if not archive_root.exists():
         return
@@ -834,8 +892,8 @@ def _check_archive_area(root: Path, relative: str, errors: list[str]) -> None:
     counts = Counter(target.resolve(strict=False) for target in targets)
     archived = sorted(
         path
-        for path in archive_root.rglob("*.md")
-        if path != index and not _ignored(path, root)
+        for path in inventory.all_files
+        if path != index and path.is_relative_to(archive_root)
     )
     for path in archived:
         count = counts[path.resolve(strict=False)]
@@ -901,8 +959,12 @@ def _check_machine_syntax(root: Path, warnings: list[str]) -> None:
                     )
 
 
-def _check_absolute_paths(root: Path, warnings: list[str]) -> None:
-    for path in _active_markdown(root):
+def _check_absolute_paths(
+    root: Path,
+    inventory: MarkdownInventory,
+    warnings: list[str],
+) -> None:
+    for path in inventory.active_files:
         content = _read_text(path)
         if content is None:
             continue
@@ -945,21 +1007,22 @@ def collect_doc_consistency(
     errors: list[str] = []
     warnings: list[str] = []
     _check_required(workspace, errors)
-    _check_context_shape(workspace, errors)
-    _check_markdown_files(workspace, errors)
+    inventory = _markdown_inventory(workspace)
+    _check_context_shape(workspace, inventory, errors)
+    _check_markdown_files(workspace, inventory, errors)
     _check_navigation(workspace, errors)
-    _check_docs_reachability(workspace, errors)
-    _check_top_level_markdown_ownership(workspace, errors)
-    _check_suite_navigation(workspace, errors)
+    _check_docs_reachability(workspace, inventory, errors)
+    _check_top_level_markdown_ownership(workspace, inventory, errors)
+    _check_suite_navigation(workspace, inventory, errors)
     backlog, backlog_plan_targets = _parse_backlog(workspace, errors)
     _check_plans(workspace, backlog, backlog_plan_targets, errors)
     entries = _parse_registry(workspace, errors)
-    _check_suite_registry(workspace, entries, errors)
-    _check_archive_area(workspace, "archive/docs", errors)
-    _check_archive_area(workspace, "archive/SoftwareTesting", errors)
+    _check_suite_registry(workspace, inventory, entries, errors)
+    _check_archive_area(workspace, "archive/docs", inventory, errors)
+    _check_archive_area(workspace, "archive/SoftwareTesting", inventory, errors)
     _check_archive_navigation(workspace, errors)
     _check_machine_syntax(workspace, warnings)
-    _check_absolute_paths(workspace, warnings)
+    _check_absolute_paths(workspace, inventory, warnings)
     _check_navigation_overlap(workspace, warnings)
     return errors, warnings
 

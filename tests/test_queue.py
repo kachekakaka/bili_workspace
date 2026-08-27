@@ -121,16 +121,18 @@ def test_history_limit_never_drops_queued_tasks(tmp_env):
         (work / "demo.mp4").write_bytes(b"x")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    queue = TaskQueue(store, index, runner=runner, max_history=100, max_pending=200)
+    queue = TaskQueue(store, index, runner=runner, max_history=3, max_pending=10)
     try:
-        created = queue.enqueue([_target(i) for i in range(105)])
-        assert len(created) == 105
+        created = queue.enqueue([_target(i) for i in range(5)])
+        assert len(created) == 5
         assert started.wait(timeout=2)
-        assert len(queue.list_tasks()) == 105
+        assert len(queue.list_tasks()) == 5
         assert all(queue.get_task(task["id"]) is not None for task in created)
         release.set()
         assert wait_terminal(queue, created[-1]["id"], timeout=60)["status"] == "success"
-        assert len(calls) == 105
+        assert len(calls) == 5
+        assert len(queue.list_tasks()) <= 3
+        assert queue.get_task(created[-1]["id"]) is not None
     finally:
         release.set()
         queue.stop()
