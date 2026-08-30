@@ -4,7 +4,7 @@ Windows 日常用户入口只有仓库跟踪的 `dist/bili-workspace-launcher-0.
 
 ```text
 scripts/windows/build-launcher.bat   使用根目录唯一 .venv 构建并自检规范 EXE
-scripts/windows/new-test-run.ps1     创建并记账带 Registry TestId 的仓库外共享运行目录
+scripts/windows/new-test-run.ps1     创建并记录 T-DOCKER 手工验证的仓库外运行目录
 scripts/dev/verify-source.sh         Linux/macOS/CI 源码完整自检入口
 scripts/dev/run-playwright-phase.sh  CI 内部 T-PROJECT 浏览器阶段消费者
 ```
@@ -16,6 +16,6 @@ python -m pip install -r requirements/dev.lock
 sh scripts/dev/verify-source.sh
 ```
 
-PowerShell 共享帮助器的 `Create` 和 `Record` 都必须显式传入 `-TestId`，例如 T-PROJECT 使用 `-TestId T-PROJECT`，Docker 手工验证使用 `-TestId T-DOCKER`。新建证据使用 schema v2；旧 schema v1 只能继续按隐式 `T-PROJECT` 记录。T-PROJECT 的 Linux/macOS/CI 入口继续使用专用 Python 帮助器，调用参数不变。
+PowerShell 帮助器的 `Create` 和 `Record` 保留既有调用形状，但只接受 `-TestId T-DOCKER`，用于 Docker 手工验证的最小交接；它不读取或迁移旧运行记录。T-PROJECT 使用专用 Python 帮助器创建、校验和精确清理临时 run。
 
-源码完整自检和 CI 内部浏览器消费者都默认保留隔离运行目录，并在 `results/result.json` 记录最终状态；它们不会自动下载安装浏览器。Windows 启动器测试及构建入口见 [T-LAUNCHER](../SoftwareTesting/launcher/README.md)，其他权威调用、路径和清理边界见[项目完整自检](../SoftwareTesting/project/README.md)与[测试安全](../SoftwareTesting/SAFETY.md)。
+源码完整自检在输出结果和诊断后清理自己的隔离 run；CI 浏览器消费者把 run 保留到 Artifact 上传完成。两者都不会自动安装或下载浏览器。Windows 启动器测试及构建入口见 [T-LAUNCHER](../SoftwareTesting/launcher/README.md)，其他权威调用、路径和清理边界见[项目完整自检](../SoftwareTesting/project/README.md)与[测试安全](../SoftwareTesting/SAFETY.md)。

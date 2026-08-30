@@ -92,7 +92,7 @@ docker port bili-workspace-image-check 3398/tcp
 docker stop --timeout 45 bili-workspace-image-check
 ```
 
-仓库外测试目录默认保留作为证据，不自动删除。
+该 PowerShell 入口只接受 `T-DOCKER`。运行目录保留到手工交接和产物转移完成；它不属于 T-PROJECT 临时 run，也不读取或迁移旧测试证据。
 
 ## 5. 生成离线包与校验和
 
@@ -133,7 +133,7 @@ docker image inspect bili-workspace:qnap-amd64-YYYYMMDD \
 
 复载后的镜像 ID 必须与打包前一致。不要为了复载测试删除仍承担验证或回退用途的本地镜像。
 
-完成整轮验证后，通过同一隔离入口把最终状态写入 `results/result.json`：
+完成整轮验证后，通过同一入口把最小 Docker 交接状态写入 `results/result.json`：
 
 ```powershell
 & .\scripts\windows\new-test-run.ps1 `
@@ -145,7 +145,7 @@ docker image inspect bili-workspace:qnap-amd64-YYYYMMDD \
   -Message '镜像构建、隔离运行、离线打包与复载验证通过。'
 ```
 
-只有镜像构建、元数据检查、隔离运行、离线打包和复载等本轮必要阶段均实际成功时才能记录 `passed`；跳过、失败或证据不完整时必须按 [T-DOCKER 结果语义](../../SoftwareTesting/docker/README.md#结果语义)记录实际状态。
+记录只包含 Docker 验证身份、状态、时间、运行路径和可选退出码/说明，不形成通用测试 schema。只有镜像构建、元数据检查、隔离运行、离线打包和复载等本轮必要阶段均实际成功时才能记录 `passed`；跳过、失败或证据不完整时必须按 [T-DOCKER 结果语义](../../SoftwareTesting/docker/README.md#结果语义)记录实际状态。
 
 ## 7. Container Station 导入边界
 

@@ -4,27 +4,26 @@
 - 执行类别：`full`
 - 工作目录：仓库根目录
 - 输入：当前候选源码、既有兼容浏览器和隔离测试数据
-- 唯一职责：执行项目现有源码边界、Python、Ruff、pytest、Node 和 Playwright 自检入口
+- 唯一职责：执行源码安全边界、Python、Ruff、pytest、Node 和 Playwright 自检
 
-## 受管路径与阶段
+## 阶段
 
-| 阶段 | 受管路径或入口 | 选择规则 |
+| 阶段 | 入口 | 选择规则 |
 | --- | --- | --- |
-| 源码与 Python | `app/`、`tests/`、`tools/`、`docker/` | 源码结构、compileall、Ruff 和 `pyproject.toml` 定义的 pytest 根 |
-| Node | `web/**/*.js`、`web/**/*.mjs`、`tests/frontend/*.test.mjs` | 全部脚本语法和依赖无关 Node tests |
-| Playwright | `tests/` 中的 `playwright` marker | T-PROJECT full 必需阶段；runner 在前置满足后设置 `BILI_RUN_PLAYWRIGHT=1` |
-Playwright 不单独登记。`.github/workflows/ci.yml` 通过内部 `scripts/dev/run-playwright-phase.sh` 执行唯一 CI 浏览器阶段；Windows EXE、内置资源与启动器 GUI 的验证由 T-LAUNCHER 承接。
+| 源码与 Python | `tools/verify_source.py`、compileall、Ruff、pytest | 源码安全边界和完整非 integration Python 行为测试 |
+| Node | `web/**/*.js`、`web/**/*.mjs`、`tests/frontend/*.test.mjs` | 全部脚本语法和 Node 行为测试 |
+| Playwright | `pytest -m playwright` | T-PROJECT full 必需阶段；只在隔离前置满足后设置 `BILI_RUN_PLAYWRIGHT=1` |
 
-## 源码环境规范命令
+Playwright 不单独登记。`.github/workflows/ci.yml` 的 `playwright` job 是 T-PROJECT 浏览器阶段；Windows EXE、内置资源和启动器 GUI 由 T-LAUNCHER 承接。T-PROJECT 不执行 T-DOC、T-ARCHIVE、真实 Docker 构建或启动器打包。
+
+## 规范命令
 
 ```bash
 sh scripts/dev/verify-source.sh
 ```
 
-源码入口始终要求 Node、Playwright Python 包和一个既有兼容浏览器。可以用 `BILI_PLAYWRIGHT_CHROMIUM` 指向既有 Chromium、Chrome 或 Edge；未设置时 runner 只探测已经存在的候选，不执行安装或下载。
+入口要求 Python 3.11、Node、项目锁定的开发依赖、Playwright Python 包和一个既有兼容浏览器。可以用 `BILI_PLAYWRIGHT_CHROMIUM` 指向既有 Chromium、Chrome 或 Edge；未设置时只探测已有候选，不安装或下载。
 
-入口会先在仓库外测试根创建带所有权标记的独立 run-id，将配置、浏览器 profile、缓存和临时输出重定向到该目录，并默认保留。T-PROJECT 专用 Python 帮助器的新运行标记和结果使用 schema v2，并固定写入 `test_id: T-PROJECT`；既有 schema v1 运行只按隐式 `T-PROJECT` 读取和记录，保留 v1 结构。源码环境需要项目锁定的开发依赖；日志和 `results/result.json` 位于命令最后显示的绝对路径中。
+入口在仓库外创建带最小所有权标记的独立 run，将配置、浏览器 profile、缓存、日志和临时输出重定向到其中。每个阶段的失败诊断输出到控制台；本地入口退出时精确清理 run。CI 浏览器阶段为 Artifact 上传暂时保留同样的隔离目录，上传后由临时 runner 回收。
 
-T-PROJECT 不执行 T-DOC，也不执行 T-DOCKER 的真实镜像构建；其中的 Docker 配置与 Python 静态／逻辑检查不能替代这两个独立测试项。完整测试应按 Registry 和协议分别选择。缺少运行时、Node、Playwright 包或可用浏览器且尚未进入检查阶段时为 `blocked`；必需阶段被跳过为 `inconclusive`；进入检查阶段后的断言、静态检查或行为失败为 `failed`；中断或运行器异常为 `inconclusive`。测试根可通过 `BILI_TEST_ROOT` 覆盖，但必须满足[测试安全](../SAFETY.md)中的外部路径与所有权规则。
-
-测试不得访问真实持久化目录、外部网络、用户浏览器 profile 或凭据，也不会自动清理运行目录。进程、浏览器和清理约束见[测试安全](../SAFETY.md)。
+缺少运行时、Node、开发依赖或浏览器且尚未进入检查阶段时为 `blocked`；必需阶段被跳过为 `inconclusive`；进入检查后的断言或行为失败为 `failed`。完整语义和隔离边界见[测试协议](../PROTOCOL.md)与[测试安全](../SAFETY.md)。

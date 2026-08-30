@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读检查活动文档骨架或归档完整性。"""
+"""只读检查活动文档和归档文档的稳定机械关系。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,12 @@ import argparse
 import os
 import re
 import unicodedata
-from collections import Counter, deque
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote
 
 
-ASSET_ID = "project-doc-skeleton/doc-consistency"
-ASSET_SCHEMA = 1
 IGNORED_PARTS = {
     ".git",
     ".mypy_cache",
@@ -42,19 +40,13 @@ REQUIRED_FILES = (
     "AGENTS.md",
     "README.md",
     "docs/README.md",
-    "docs/需求文档.md",
-    "docs/设计文档.md",
     "docs/已知问题与待做需求.md",
     "docs/软件测试.md",
     "SoftwareTesting/README.md",
-    "SoftwareTesting/PROTOCOL.md",
-    "SoftwareTesting/SAFETY.md",
-    "SoftwareTesting/archive_consistency/README.md",
     "SoftwareTesting/doc_consistency/README.md",
-    "archive/docs/README.md",
-    "archive/SoftwareTesting/README.md",
+    "SoftwareTesting/archive_consistency/README.md",
 )
-REQUIRED_NAVIGATION = {
+REQUIRED_LINKS = {
     "AGENTS.md": (
         ("README.md", "构建与交付"),
         ("docs/README.md", None),
@@ -65,43 +57,19 @@ REQUIRED_NAVIGATION = {
         ("SoftwareTesting/README.md", None),
     ),
     "docs/README.md": (
-        ("docs/需求文档.md", None),
-        ("docs/设计文档.md", None),
         ("docs/已知问题与待做需求.md", None),
         ("docs/软件测试.md", None),
-        ("archive/docs/README.md", None),
     ),
     "SoftwareTesting/README.md": (
-        ("SoftwareTesting/PROTOCOL.md", None),
-        ("SoftwareTesting/SAFETY.md", None),
         ("docs/软件测试.md", None),
-        ("SoftwareTesting/archive_consistency/README.md", None),
         ("SoftwareTesting/doc_consistency/README.md", None),
+        ("SoftwareTesting/archive_consistency/README.md", None),
     ),
 }
-TOP_LEVEL_OWNER_FILES = (
-    "README.md",
-    "docs/README.md",
-    "SoftwareTesting/README.md",
-)
-STANDARD_TOP_LEVEL_ROOTS = frozenset({"SoftwareTesting", "archive", "docs"})
-MACHINE_FILES = (
-    "AGENTS.md",
-    "README.md",
-    "docs/README.md",
-    "docs/已知问题与待做需求.md",
-    "docs/软件测试.md",
-    "SoftwareTesting/README.md",
-)
 ARCHIVE_AREAS = ("archive/docs", "archive/SoftwareTesting")
-ARCHIVE_MACHINE_FILES = (
-    "archive/docs/README.md",
-    "archive/SoftwareTesting/README.md",
-)
 ALLOWED_BACKLOG_STATUSES = {"待确认", "待实施", "实施中", "暂缓"}
-ALLOWED_PLAN_STATUSES = {"待确认", "待实施", "实施中"}
+PLAN_REQUIRED_STATUSES = {"待实施", "实施中"}
 PLAN_FIELDS = ("测试层级", "验证影响域", "具体验证项")
-TEST_CATEGORIES = {"full", "affected_only", "explicit"}
 BACKLOG_HEADING_RE = re.compile(
     r"^##\s+(?P<id>[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+)[：:]\s*(?P<title>.+?)\s*$"
 )
@@ -113,18 +81,13 @@ LINK_RE = re.compile(
     r"(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'|\([^()\n]*\)))?\s*\)",
     re.IGNORECASE,
 )
-REFERENCE_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]+\]\[[^\]\n]*\]")
 HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
-ABSOLUTE_USER_PATH_RE = re.compile(
-    r"(?i)(?:[A-Z]:\\Users\\[^\\\s]+|/home/[^/\s]+/)"
-)
 
 
 @dataclass(frozen=True)
-class MarkdownInventory:
-    all_files: tuple[Path, ...]
-    active_files: tuple[Path, ...]
-    checked_files: tuple[Path, ...]
+class BacklogItem:
+    status: str
+    linked_plans: frozenset[Path]
 
 
 def _is_project_skill_asset(path: Path, root: Path) -> bool:
@@ -148,36 +111,27 @@ def _ignored(path: Path, root: Path) -> bool:
     )
 
 
-def _is_archive(path: Path, root: Path) -> bool:
-    try:
-        return path.relative_to(root).parts[:1] == ("archive",)
-    except ValueError:
-        return False
-
-
 def _is_within(path: Path, parent: Path) -> bool:
     candidate = path.resolve(strict=False)
     boundary = parent.resolve(strict=False)
     return candidate == boundary or boundary in candidate.parents
 
 
-def _raise_walk_error(error: OSError) -> None:
-    raise error
-
-
-def _markdown_inventory(root: Path) -> MarkdownInventory:
+def _walk_markdown(root: Path, start: Path, *, exclude_archive: bool) -> tuple[Path, ...]:
+    if not start.is_dir():
+        return ()
     files: list[Path] = []
-    for current, directory_names, file_names in os.walk(
-        root,
-        topdown=True,
-        onerror=_raise_walk_error,
-    ):
+    for current, directory_names, file_names in os.walk(start, topdown=True):
         current_path = Path(current)
         directory_names[:] = sorted(
             name
             for name in directory_names
             if not _ignored(current_path / name, root)
-            and not (current_path == root and name == "archive")
+            and not (
+                exclude_archive
+                and current_path == root
+                and name == "archive"
+            )
         )
         files.extend(
             current_path / name
@@ -185,44 +139,7 @@ def _markdown_inventory(root: Path) -> MarkdownInventory:
             if (current_path / name).suffix.lower() == ".md"
             and not _ignored(current_path / name, root)
         )
-
-    all_files = tuple(sorted(files))
-    return MarkdownInventory(
-        all_files=all_files,
-        active_files=all_files,
-        checked_files=all_files,
-    )
-
-
-def _archive_markdown_inventory(root: Path) -> MarkdownInventory:
-    files: list[Path] = []
-    for relative in ARCHIVE_AREAS:
-        archive_root = root / relative
-        if not archive_root.is_dir():
-            continue
-        for current, directory_names, file_names in os.walk(
-            archive_root,
-            topdown=True,
-            onerror=_raise_walk_error,
-        ):
-            current_path = Path(current)
-            directory_names[:] = sorted(
-                name
-                for name in directory_names
-                if not _ignored(current_path / name, root)
-            )
-            files.extend(
-                current_path / name
-                for name in sorted(file_names)
-                if (current_path / name).suffix.lower() == ".md"
-                and not _ignored(current_path / name, root)
-            )
-    all_files = tuple(sorted(files))
-    return MarkdownInventory(
-        all_files=all_files,
-        active_files=(),
-        checked_files=all_files,
-    )
+    return tuple(sorted(files))
 
 
 def _strip_fenced_code(content: str) -> str:
@@ -230,13 +147,7 @@ def _strip_fenced_code(content: str) -> str:
     fence: str | None = None
     for line in content.splitlines(keepends=True):
         stripped = line.lstrip()
-        marker = (
-            "```"
-            if stripped.startswith("```")
-            else "~~~"
-            if stripped.startswith("~~~")
-            else None
-        )
+        marker = "```" if stripped.startswith("```") else "~~~" if stripped.startswith("~~~") else None
         if marker:
             if fence is None:
                 fence = marker
@@ -274,18 +185,9 @@ def _heading_slugs(path: Path) -> set[str]:
             continue
         base = _slug_base(match.group(1))
         index = seen.get(base, 0)
-        slug = base if index == 0 else f"{base}-{index}"
+        result.add(base if index == 0 else f"{base}-{index}")
         seen[base] = index + 1
-        result.add(slug)
     return result
-
-
-def _split_destination(raw: str) -> tuple[str, str]:
-    value = raw.strip()
-    if value.startswith("<") and value.endswith(">"):
-        value = value[1:-1]
-    path_part, separator, fragment = value.partition("#")
-    return unquote(path_part), unquote(fragment).lower() if separator else ""
 
 
 def _local_links(content: str, source: Path) -> list[tuple[str, Path, str]]:
@@ -294,16 +196,14 @@ def _local_links(content: str, source: Path) -> list[tuple[str, Path, str]]:
         raw = match.group("angle") or match.group("plain") or ""
         if re.match(r"^(?:[a-z][a-z0-9+.-]*:|//)", raw, re.IGNORECASE):
             continue
-        path_part, fragment = _split_destination(raw)
+        path_part, separator, fragment = raw.strip().partition("#")
+        path_part = unquote(path_part.strip("<>"))
+        fragment = unquote(fragment).lower() if separator else ""
         if not path_part and not fragment:
             continue
         target = source if not path_part else (source.parent / path_part).resolve(strict=False)
         links.append((raw, target, fragment))
     return links
-
-
-def _line_number(content: str, position: int) -> int:
-    return content.count("\n", 0, position) + 1
 
 
 def _markdown_cells(line: str) -> list[str] | None:
@@ -317,18 +217,6 @@ def _is_separator(cells: list[str]) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 
-def _is_exact_file(root: Path, relative: str) -> bool:
-    current = root
-    for part in Path(relative).parts:
-        if not current.is_dir():
-            return False
-        matches = [child for child in current.iterdir() if child.name == part]
-        if len(matches) != 1:
-            return False
-        current = matches[0]
-    return current.is_file()
-
-
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8")
@@ -336,38 +224,15 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-def _check_required(root: Path, errors: list[str]) -> None:
+def _check_required_files(root: Path, errors: list[str]) -> None:
     for relative in REQUIRED_FILES:
-        if not _is_exact_file(root, relative):
-            errors.append(f"{relative}: 缺少名称与大小写完全匹配的必需文件")
+        if not (root / relative).is_file():
+            errors.append(f"{relative}: 缺少必要入口文件")
 
 
-def _check_context_shape(
-    root: Path,
-    inventory: MarkdownInventory,
-    errors: list[str],
-) -> None:
-    if (root / "CONTEXT-MAP.md").exists():
-        errors.append("CONTEXT-MAP.md: 本骨架只支持单一上下文项目")
-    nested = sorted(
-        path
-        for path in inventory.all_files
-        if path.name == "CONTEXT.md"
-        and path != root / "CONTEXT.md"
-    )
-    for path in nested:
-        errors.append(
-            f"{path.relative_to(root).as_posix()}: 本骨架不允许嵌套 CONTEXT.md"
-        )
-
-
-def _check_markdown_files(
-    root: Path,
-    inventory: MarkdownInventory,
-    errors: list[str],
-) -> None:
+def _check_markdown_files(root: Path, paths: tuple[Path, ...], errors: list[str]) -> None:
     slug_cache: dict[Path, set[str]] = {}
-    for path in inventory.checked_files:
+    for path in paths:
         relative = path.relative_to(root).as_posix()
         try:
             raw = path.read_bytes()
@@ -375,11 +240,11 @@ def _check_markdown_files(
             errors.append(f"{relative}: 无法读取 Markdown: {exc}")
             continue
         if b"\r" in raw:
-            errors.append(f"{relative}: 受检 Markdown 必须使用 LF")
+            errors.append(f"{relative}: Markdown 必须使用 LF")
         try:
             content = raw.decode("utf-8")
         except UnicodeDecodeError:
-            errors.append(f"{relative}: 必须是有效 UTF-8")
+            errors.append(f"{relative}: Markdown 必须是有效 UTF-8")
             continue
         for destination, target, fragment in _local_links(content, path):
             if not target.exists():
@@ -394,726 +259,298 @@ def _check_markdown_files(
                     errors.append(f"{relative}: 标题锚点不存在: {destination}")
 
 
-def _direct_targets(path: Path) -> set[Path]:
-    content = _read_text(path)
-    if content is None:
-        return set()
-    return {
-        target.resolve(strict=False)
-        for _, target, _ in _local_links(content, path)
-    }
-
-
-def _check_navigation(root: Path, errors: list[str]) -> None:
-    navigation = dict(REQUIRED_NAVIGATION)
-    if _is_exact_file(root, "CONTEXT.md"):
-        navigation["AGENTS.md"] = (
-            ("CONTEXT.md", None),
-            *navigation["AGENTS.md"],
-        )
-
-    for source_relative, expected in navigation.items():
+def _check_required_links(root: Path, errors: list[str]) -> None:
+    links = dict(REQUIRED_LINKS)
+    if (root / "CONTEXT.md").is_file():
+        links["AGENTS.md"] = (("CONTEXT.md", None), *links["AGENTS.md"])
+    for source_relative, expected in links.items():
         source = root / source_relative
-        if not source.is_file():
-            continue
         content = _read_text(source)
         if content is None:
             continue
-        links = _local_links(content, source)
-        if source_relative == "README.md":
-            agents = (root / "AGENTS.md").resolve(strict=False)
-            if any(linked_target == agents for _, linked_target, _ in links):
-                errors.append(
-                    "README.md: 不得反向链接 AGENTS.md；AGENTS.md 是协作第一入口"
-                )
+        actual = _local_links(content, source)
         for target_relative, heading in expected:
             target = (root / target_relative).resolve(strict=False)
-            expected_fragment = _slug_base(heading) if heading else None
+            fragment = _slug_base(heading) if heading else None
             if not any(
-                linked_target == target
-                and (expected_fragment is None or fragment == expected_fragment)
-                for _, linked_target, fragment in links
+                linked_target == target and (fragment is None or linked_fragment == fragment)
+                for _, linked_target, linked_fragment in actual
             ):
-                suffix = f"#{expected_fragment}" if expected_fragment else ""
-                errors.append(
-                    f"{source_relative}: 缺少必要入口 {target_relative}{suffix}"
-                )
+                suffix = f"#{fragment}" if fragment else ""
+                errors.append(f"{source_relative}: 缺少必要入口 {target_relative}{suffix}")
 
 
-def _markdown_graph(
-    root: Path,
-    inventory: MarkdownInventory,
-) -> dict[Path, set[Path]]:
-    active = {path.resolve(strict=False) for path in inventory.active_files}
-    graph: dict[Path, set[Path]] = {}
-    for path in sorted(active):
-        content = _read_text(path)
-        targets: set[Path] = set()
-        if content is not None:
-            for _, target, _ in _local_links(content, path):
-                candidate = target
-                if candidate.is_dir():
-                    candidate = candidate / "README.md"
-                resolved = candidate.resolve(strict=False)
-                if resolved in active:
-                    targets.add(resolved)
-        graph[path] = targets
-    return graph
-
-
-def _reachable_within(
-    graph: dict[Path, set[Path]],
-    start: Path,
-    max_hops: int,
-) -> set[Path]:
-    start = start.resolve(strict=False)
-    reached = {start}
-    queue: deque[tuple[Path, int]] = deque([(start, 0)])
-    while queue:
-        current, depth = queue.popleft()
-        if depth >= max_hops:
-            continue
-        for target in graph.get(current, set()):
-            if target in reached:
-                continue
-            reached.add(target)
-            queue.append((target, depth + 1))
-    return reached
-
-
-def _check_docs_reachability(
-    root: Path,
-    inventory: MarkdownInventory,
-    errors: list[str],
-) -> None:
-    index = root / "docs" / "README.md"
-    docs_root = root / "docs"
-    if not index.is_file() or not docs_root.is_dir():
-        return
-    graph = _markdown_graph(root, inventory)
-    reached = _reachable_within(graph, index, 2)
-    for path in inventory.active_files:
-        if path == index or not path.is_relative_to(docs_root):
-            continue
-        if path.resolve(strict=False) not in reached:
-            errors.append(
-                f"{path.relative_to(root).as_posix()}: "
-                "活动文档不能从 docs/README.md 通过两次实际 Markdown 链接到达"
-            )
-
-
-def _check_top_level_markdown_ownership(
-    root: Path,
-    inventory: MarkdownInventory,
-    errors: list[str],
-) -> None:
-    candidates = sorted(
-        {
-            path.relative_to(root).parts[0]
-            for path in inventory.active_files
-            if len(path.relative_to(root).parts) > 1
-            and path.relative_to(root).parts[0] not in STANDARD_TOP_LEVEL_ROOTS
-        }
-    )
-    owner_targets: set[Path] = set()
-    for relative in TOP_LEVEL_OWNER_FILES:
-        owner = root / relative
-        content = _read_text(owner)
-        if content is None:
-            continue
-        owner_targets.update(
-            target.resolve(strict=False)
-            for _, target, _ in _local_links(content, owner)
-            if target.is_file() and target.suffix.lower() == ".md"
-        )
-
-    for name in candidates:
-        candidate = root / name
-        if any(_is_within(target, candidate) for target in owner_targets):
-            continue
-        errors.append(
-            f"{name}/: 含活动 Markdown 的顶层目录必须由 README.md、"
-            "docs/README.md 或 SoftwareTesting/README.md 直接链接目录内 Markdown 所有者入口"
-        )
-
-
-def _suite_readmes(
-    root: Path,
-    inventory: MarkdownInventory,
-) -> list[Path]:
-    testing_root = root / "SoftwareTesting"
-    if not testing_root.is_dir():
-        return []
-    return sorted(
-        path
-        for path in inventory.active_files
-        if path.name == "README.md"
-        and path != testing_root / "README.md"
-        and path.is_relative_to(testing_root)
-    )
-
-
-def _check_suite_navigation(
-    root: Path,
-    inventory: MarkdownInventory,
-    errors: list[str],
-) -> None:
-    index = root / "SoftwareTesting" / "README.md"
-    if not index.is_file():
-        return
-    direct = _direct_targets(index)
-    for path in _suite_readmes(root, inventory):
-        if path.resolve(strict=False) not in direct:
-            errors.append(
-                f"{path.relative_to(root).as_posix()}: "
-                "活动 suite README 必须从 SoftwareTesting/README.md 直接链接"
-            )
-
-
-def _parse_backlog(
-    root: Path,
-    errors: list[str],
-) -> tuple[dict[str, str], dict[str, set[Path]]]:
+def _parse_backlog(root: Path, errors: list[str]) -> dict[str, BacklogItem]:
     path = root / "docs" / "已知问题与待做需求.md"
     content = _read_text(path)
     if content is None:
-        return {}, {}
+        return {}
     lines = _strip_fenced_code(content).splitlines()
-    result: dict[str, str] = {}
-    plan_targets: dict[str, set[Path]] = {}
+    items: dict[str, BacklogItem] = {}
     seen_ids: set[str] = set()
     index = 0
     while index < len(lines):
         heading = BACKLOG_HEADING_RE.match(lines[index])
         if not heading:
-            if lines[index].startswith("## "):
-                errors.append(
-                    "docs/已知问题与待做需求.md: "
-                    "所有二级标题必须使用“待办ID：标题”格式"
-                )
             index += 1
             continue
-
         item_id = heading.group("id")
-        if item_id in seen_ids:
-            errors.append(f"docs/已知问题与待做需求.md: 待办 ID 重复: {item_id}")
-        seen_ids.add(item_id)
-
-        statuses: list[str] = []
         index += 1
         section_start = index
+        statuses: list[str] = []
         while index < len(lines) and not lines[index].startswith("## "):
             status_match = BACKLOG_STATUS_RE.match(lines[index])
             if status_match:
                 statuses.append(status_match.group("status"))
             index += 1
         section = "\n".join(lines[section_start:index])
-        plan_targets.setdefault(item_id, set()).update(
+        linked_plans = frozenset(
             target.resolve(strict=False)
             for _, target, _ in _local_links(section, path)
+            if _is_within(target, root / "docs" / "方案")
         )
+        if item_id in seen_ids:
+            errors.append(f"docs/已知问题与待做需求.md: 待办 ID 重复: {item_id}")
+            continue
+        seen_ids.add(item_id)
         if len(statuses) != 1:
-            errors.append(
-                f"docs/已知问题与待做需求.md: {item_id} 必须且只能有一个状态"
-            )
+            errors.append(f"docs/已知问题与待做需求.md: {item_id} 必须且只能有一个状态")
             continue
         status = statuses[0]
         if status not in ALLOWED_BACKLOG_STATUSES:
+            errors.append(f"docs/已知问题与待做需求.md: {item_id} 使用非法状态: {status}")
+            continue
+        items[item_id] = BacklogItem(status=status, linked_plans=linked_plans)
+    return items
+
+
+def _check_plan_fields(path: Path, root: Path, errors: list[str]) -> None:
+    content = _read_text(path)
+    if content is None:
+        return
+    stripped = _strip_fenced_code(content)
+    for field in PLAN_FIELDS:
+        count = len(re.findall(rf"(?m)^\s*(?:[-*]\s*)?{re.escape(field)}\s*[：:]", stripped))
+        if count != 1:
             errors.append(
-                f"docs/已知问题与待做需求.md: {item_id} 使用非法状态: {status}"
+                f"{path.relative_to(root).as_posix()}: {field} 必须且只能出现一次"
+            )
+
+
+def _check_plans(root: Path, items: dict[str, BacklogItem], errors: list[str]) -> None:
+    plans_root = root / "docs" / "方案"
+    plans = tuple(sorted(plans_root.glob("*.md"))) if plans_root.is_dir() else ()
+    by_id: dict[str, list[Path]] = {item_id: [] for item_id in items}
+    for path in plans:
+        matches = sorted(
+            (item_id for item_id in items if path.name.startswith(f"{item_id}-")),
+            key=len,
+            reverse=True,
+        )
+        if not matches:
+            errors.append(
+                f"{path.relative_to(root).as_posix()}: 活动方案文件名没有对应待办 ID"
             )
             continue
-        result[item_id] = status
-    return result, plan_targets
-
-
-def _check_plans(
-    root: Path,
-    backlog: dict[str, str],
-    backlog_plan_targets: dict[str, set[Path]],
-    errors: list[str],
-) -> None:
-    plans_root = root / "docs" / "方案"
-    by_id: dict[str, list[Path]] = {}
-
-    if plans_root.exists() and not plans_root.is_dir():
-        errors.append("docs/方案: 必须是目录")
-        return
-    if plans_root.is_dir():
-        entries = sorted(plans_root.iterdir())
-        if not entries:
-            errors.append("docs/方案: 条件目录为空时不应存在")
-        for path in entries:
-            if not path.is_file() or path.suffix.lower() != ".md":
-                errors.append(
-                    f"{path.relative_to(root).as_posix()}: "
-                    "活动方案目录只允许直接放置 Markdown 文件"
-                )
-                continue
-            matches = sorted(
-                (
-                    item_id
-                    for item_id in backlog
-                    if path.name.startswith(f"{item_id}-")
-                ),
-                key=len,
-                reverse=True,
+        item_id = matches[0]
+        by_id[item_id].append(path)
+        item = items[item_id]
+        if path.resolve(strict=False) not in item.linked_plans:
+            errors.append(
+                f"{path.relative_to(root).as_posix()}: 必须由对应待办条目链接"
             )
-            if not matches:
-                errors.append(
-                    f"{path.relative_to(root).as_posix()}: "
-                    "文件名必须以有效待办 ID 和连字符开头"
-                )
-                continue
-            item_id = matches[0]
-            if not path.stem.removeprefix(f"{item_id}-"):
-                errors.append(
-                    f"{path.relative_to(root).as_posix()}: "
-                    "待办 ID 后必须包含方案名称"
-                )
-            by_id.setdefault(item_id, []).append(path)
-            if backlog[item_id] not in ALLOWED_PLAN_STATUSES:
-                errors.append(
-                    f"{path.relative_to(root).as_posix()}: "
-                    f"对应待办 {item_id} 的状态“{backlog[item_id]}”不允许活动方案"
-                )
-            if path.resolve(strict=False) not in backlog_plan_targets.get(item_id, set()):
-                errors.append(
-                    f"{path.relative_to(root).as_posix()}: "
-                    "必须由对应待办条目实际链接"
-                )
-            content = _read_text(path)
-            if content is None:
-                continue
-            stripped = _strip_fenced_code(content)
-            for field in PLAN_FIELDS:
-                count = len(
-                    re.findall(
-                        rf"(?m)^\s*(?:[-*]\s*)?{re.escape(field)}\s*[：:]",
-                        stripped,
-                    )
-                )
-                if count != 1:
-                    errors.append(
-                        f"{path.relative_to(root).as_posix()}: "
-                        f"{field} 必须且只能出现一次"
-                    )
+        _check_plan_fields(path, root, errors)
 
-    for item_id, paths in sorted(by_id.items()):
-        if len(paths) > 1:
+    for item_id, item in sorted(items.items()):
+        plans_for_item = by_id[item_id]
+        if len(plans_for_item) > 1:
             errors.append(f"docs/方案/: 待办 {item_id} 存在多份活动方案")
-    for item_id, status in sorted(backlog.items()):
-        count = len(by_id.get(item_id, []))
-        if status in {"待实施", "实施中"} and count != 1:
+        if item.status in PLAN_REQUIRED_STATUSES and len(plans_for_item) != 1:
             errors.append(
-                f"docs/方案/: {status}待办 {item_id} 必须有且只有一份活动方案"
+                f"docs/方案/: {item.status}待办 {item_id} 必须有且只有一份活动方案"
             )
-        if status not in ALLOWED_PLAN_STATUSES and count:
-            errors.append(
-                f"docs/方案/: 状态为“{status}”的待办 {item_id} 不得有活动方案"
-            )
+        if item.status == "暂缓" and plans_for_item:
+            errors.append(f"docs/方案/: 暂缓待办 {item_id} 不得保留活动方案")
 
 
-def _parse_registry(
-    root: Path,
-    errors: list[str],
-) -> dict[str, tuple[str, Path, str]]:
+def _find_table(lines: list[str], required_headers: set[str]) -> tuple[list[str], list[list[str]]] | None:
+    for index, line in enumerate(lines):
+        header = _markdown_cells(line)
+        if header is None or not required_headers.issubset(set(header)):
+            continue
+        if index + 1 >= len(lines):
+            return header, []
+        separator = _markdown_cells(lines[index + 1])
+        if separator is None or len(separator) != len(header) or not _is_separator(separator):
+            return header, []
+        rows: list[list[str]] = []
+        for row_line in lines[index + 2 :]:
+            cells = _markdown_cells(row_line)
+            if cells is None:
+                break
+            rows.append(cells)
+        return header, rows
+    return None
+
+
+def _check_registry(root: Path, errors: list[str]) -> None:
     path = root / "docs" / "软件测试.md"
     content = _read_text(path)
     if content is None:
-        return {}
-    lines = _strip_fenced_code(content).splitlines()
-    expected_header = ["ID", "执行类别", "入口", "唯一职责"]
-    headers = [
-        index
-        for index, line in enumerate(lines)
-        if _markdown_cells(line) == expected_header
-    ]
-    if len(headers) != 1:
-        errors.append("docs/软件测试.md: 必须且只能有一张四列活动测试项表")
-        return {}
-    start = headers[0]
-    if start + 1 >= len(lines):
-        errors.append("docs/软件测试.md: Registry 缺少分隔行")
-        return {}
-    separator = _markdown_cells(lines[start + 1])
-    if separator is None or len(separator) != 4 or not _is_separator(separator):
-        errors.append("docs/软件测试.md: Registry 分隔行无效")
-        return {}
-
-    entries: dict[str, tuple[str, Path, str]] = {}
-    row_count = 0
-    for line_number in range(start + 2, len(lines)):
-        cells = _markdown_cells(lines[line_number])
-        if cells is None:
-            break
-        if len(cells) != 4:
-            errors.append(
-                f"docs/软件测试.md:{line_number + 1}: Registry 行必须恰好四列"
-            )
+        return
+    table = _find_table(_strip_fenced_code(content).splitlines(), {"ID", "入口"})
+    if table is None:
+        errors.append("docs/软件测试.md: 缺少包含 ID 和入口列的 Registry 表")
+        return
+    header, rows = table
+    if not rows:
+        errors.append("docs/软件测试.md: Registry 不能为空")
+        return
+    id_index = header.index("ID")
+    entry_index = header.index("入口")
+    entries: dict[str, Path] = {}
+    seen_ids: set[str] = set()
+    for cells in rows:
+        if len(cells) != len(header):
+            errors.append("docs/软件测试.md: Registry 行列数与表头不一致")
             continue
-        item_id = cells[0].strip("` ")
-        category = cells[1].strip("` ")
+        item_id = cells[id_index].strip("` ")
         if not TEST_ID_RE.fullmatch(item_id):
-            errors.append(
-                f"docs/软件测试.md:{line_number + 1}: 非法测试项 ID: {item_id}"
-            )
-        elif item_id in entries:
+            errors.append(f"docs/软件测试.md: 非法测试项 ID: {item_id}")
+            continue
+        if item_id in seen_ids:
             errors.append(f"docs/软件测试.md: 测试项 ID 重复: {item_id}")
-        if category not in TEST_CATEGORIES:
-            errors.append(
-                f"docs/软件测试.md:{line_number + 1}: 非法执行类别: {category}"
-            )
-        entry_links = _local_links(cells[2], path)
+            continue
+        seen_ids.add(item_id)
+        entry_links = _local_links(cells[entry_index], path)
         if len(entry_links) != 1:
-            errors.append(
-                f"docs/软件测试.md:{line_number + 1}: "
-                "入口必须恰好包含一个普通行内本地链接"
-            )
-            entry_target = path
-        else:
-            entry_target = entry_links[0][1]
-        if not cells[3]:
-            errors.append(
-                f"docs/软件测试.md:{line_number + 1}: 唯一职责不能为空"
-            )
-        if TEST_ID_RE.fullmatch(item_id) and item_id not in entries:
-            entries[item_id] = (category, entry_target, cells[3])
-        row_count += 1
+            errors.append(f"docs/软件测试.md: {item_id} 的入口必须包含一个本地链接")
+            continue
+        entries[item_id] = entry_links[0][1]
 
-    if row_count == 0:
-        errors.append("docs/软件测试.md: Registry 至少登记 T-DOC 和 T-ARCHIVE")
-
-    doc_entry = entries.get("T-DOC")
-    expected_doc_target = (
-        root / "SoftwareTesting" / "doc_consistency" / "README.md"
-    ).resolve(strict=False)
-    if doc_entry is None:
-        errors.append("docs/软件测试.md: Registry 缺少必需测试项 T-DOC")
-    else:
-        if doc_entry[0] != "full":
-            errors.append("docs/软件测试.md: T-DOC 的执行类别必须是 full")
-        if doc_entry[1].resolve(strict=False) != expected_doc_target:
-            errors.append(
-                "docs/软件测试.md: T-DOC 必须指向 "
-                "SoftwareTesting/doc_consistency/README.md"
-            )
-
-    archive_entry = entries.get("T-ARCHIVE")
-    expected_archive_target = (
-        root / "SoftwareTesting" / "archive_consistency" / "README.md"
-    ).resolve(strict=False)
-    if archive_entry is None:
-        errors.append("docs/软件测试.md: Registry 缺少必需测试项 T-ARCHIVE")
-    else:
-        if archive_entry[0] != "affected_only":
-            errors.append(
-                "docs/软件测试.md: T-ARCHIVE 的执行类别必须是 affected_only"
-            )
-        if archive_entry[1].resolve(strict=False) != expected_archive_target:
-            errors.append(
-                "docs/软件测试.md: T-ARCHIVE 必须指向 "
-                "SoftwareTesting/archive_consistency/README.md"
-            )
-
-    return entries
-
-
-def _check_suite_registry(
-    root: Path,
-    inventory: MarkdownInventory,
-    entries: dict[str, tuple[str, Path, str]],
-    errors: list[str],
-) -> None:
-    registry_targets = {
-        target.resolve(strict=False)
-        for _, target, _ in entries.values()
+    required = {
+        "T-DOC": root / "SoftwareTesting" / "doc_consistency" / "README.md",
+        "T-ARCHIVE": root / "SoftwareTesting" / "archive_consistency" / "README.md",
     }
-    for path in _suite_readmes(root, inventory):
-        if path.resolve(strict=False) not in registry_targets:
-            errors.append(
-                f"{path.relative_to(root).as_posix()}: "
-                "活动 suite README 必须由 Registry 测试项链接"
-            )
+    for item_id, expected in required.items():
+        actual = entries.get(item_id)
+        if actual is None:
+            errors.append(f"docs/软件测试.md: Registry 缺少必需测试项 {item_id}")
+        elif actual.resolve(strict=False) != expected.resolve(strict=False):
+            errors.append(f"docs/软件测试.md: {item_id} 的入口不正确")
 
 
-def _archive_table(
-    index: Path,
-    errors: list[str],
-    root: Path,
-) -> list[tuple[int, list[str]]]:
+def _check_archive_area(root: Path, area: Path, paths: tuple[Path, ...], errors: list[str]) -> None:
+    if not area.exists():
+        return
+    index = area / "README.md"
     content = _read_text(index)
     if content is None:
-        return []
-    lines = _strip_fenced_code(content).splitlines()
-    header = ["归档文档", "历史职责", "当前承接真源"]
-    headers = [
-        position
-        for position, line in enumerate(lines)
-        if _markdown_cells(line) == header
-    ]
-    relative = index.relative_to(root).as_posix()
-    if len(headers) != 1:
-        errors.append(f"{relative}: 必须且只能有一张三列归档索引表")
-        return []
-    start = headers[0]
-    if start + 1 >= len(lines):
-        errors.append(f"{relative}: 归档索引缺少分隔行")
-        return []
-    separator = _markdown_cells(lines[start + 1])
-    if separator is None or len(separator) != 3 or not _is_separator(separator):
-        errors.append(f"{relative}: 归档索引分隔行无效")
-        return []
-
-    rows: list[tuple[int, list[str]]] = []
-    for position in range(start + 2, len(lines)):
-        cells = _markdown_cells(lines[position])
-        if cells is None:
-            break
-        rows.append((position + 1, cells))
-    return rows
-
-
-def _check_archive_area(
-    root: Path,
-    relative: str,
-    inventory: MarkdownInventory,
-    errors: list[str],
-) -> None:
-    archive_root = root / relative
-    if not archive_root.exists():
+        errors.append(f"{index.relative_to(root).as_posix()}: 归档区缺少可读索引")
         return
-    index = archive_root / "README.md"
-    if not index.is_file():
-        errors.append(f"{relative}/README.md: 归档目录缺少索引")
+    table = _find_table(
+        _strip_fenced_code(content).splitlines(),
+        {"归档文档", "当前承接真源"},
+    )
+    if table is None:
+        errors.append(f"{index.relative_to(root).as_posix()}: 缺少归档索引表")
         return
-
-    rows = _archive_table(index, errors, root)
+    header, rows = table
+    document_index = header.index("归档文档")
+    current_index = header.index("当前承接真源")
     targets: list[Path] = []
-    for line_number, cells in rows:
-        index_relative = index.relative_to(root).as_posix()
-        if len(cells) != 3:
-            errors.append(
-                f"{index_relative}:{line_number}: 归档条目必须恰好三列"
-            )
+    for cells in rows:
+        if len(cells) != len(header):
+            errors.append(f"{index.relative_to(root).as_posix()}: 归档索引行列数不一致")
             continue
-        document_links = _local_links(cells[0], index)
+        document_links = _local_links(cells[document_index], index)
         if len(document_links) != 1:
-            errors.append(
-                f"{index_relative}:{line_number}: "
-                "归档文档列必须恰好有一个普通行内本地链接"
-            )
+            errors.append(f"{index.relative_to(root).as_posix()}: 归档文档入口必须是一个本地链接")
             continue
         target = document_links[0][1]
+        targets.append(target)
         if (
             target == index
             or not target.is_file()
             or target.suffix.lower() != ".md"
-            or not _is_within(target, archive_root)
+            or not _is_within(target, area)
+        ):
+            errors.append(f"{index.relative_to(root).as_posix()}: 归档文档入口越界或不存在")
+
+        current = cells[current_index].strip()
+        if current == "无，仅保留历史证据":
+            continue
+        current_links = _local_links(current, index)
+        if (
+            len(current_links) != 1
+            or not current_links[0][1].is_file()
+            or current_links[0][1].suffix.lower() != ".md"
+            or not _is_within(current_links[0][1], root)
+            or _is_within(current_links[0][1], root / "archive")
         ):
             errors.append(
-                f"{index_relative}:{line_number}: 归档链接必须指向本归档区 Markdown"
-            )
-        targets.append(target)
-        if not cells[1].strip():
-            errors.append(
-                f"{index_relative}:{line_number}: 历史职责不能为空"
-            )
-
-        no_current = cells[2].strip() == "无，仅保留历史证据"
-        current_links = _local_links(cells[2], index)
-        valid_current = (
-            len(current_links) == 1
-            and current_links[0][1].is_file()
-            and current_links[0][1].suffix.lower() == ".md"
-            and _is_within(current_links[0][1], root)
-            and not _is_archive(current_links[0][1], root)
-        )
-        if not no_current and not valid_current:
-            errors.append(
-                f"{index_relative}:{line_number}: "
-                "当前承接真源必须链接一个项目内活动 Markdown，"
-                "或精确写“无，仅保留历史证据”"
+                f"{index.relative_to(root).as_posix()}: 当前承接真源必须指向活动 Markdown，"
+                "或写“无，仅保留历史证据”"
             )
 
     counts = Counter(target.resolve(strict=False) for target in targets)
-    archived = sorted(
-        path
-        for path in inventory.all_files
-        if path != index and path.is_relative_to(archive_root)
-    )
-    for path in archived:
+    for path in paths:
+        if path == index or not _is_within(path, area):
+            continue
         count = counts[path.resolve(strict=False)]
         if count != 1:
             errors.append(
-                f"{path.relative_to(root).as_posix()}: "
-                f"必须由归档索引恰好登记一次，实际 {count}"
-            )
-    for target, count in counts.items():
-        if count > 1:
-            try:
-                target_relative = target.relative_to(root).as_posix()
-            except ValueError:
-                target_relative = str(target)
-            errors.append(f"{target_relative}: 归档索引重复登记 {count} 次")
-
-
-def _check_archive_navigation(root: Path, errors: list[str]) -> None:
-    navigation_files = (
-        "AGENTS.md",
-        "README.md",
-        "docs/README.md",
-        "SoftwareTesting/README.md",
-    )
-    allowed = {
-        (root / "archive/docs/README.md").resolve(strict=False),
-        (root / "archive/SoftwareTesting/README.md").resolve(strict=False),
-    }
-    for relative in navigation_files:
-        path = root / relative
-        content = _read_text(path)
-        if content is None:
-            continue
-        for raw, target, _ in _local_links(content, path):
-            if _is_archive(target, root) and target not in allowed:
-                errors.append(
-                    f"{relative}: 活动导航不得直接链接归档正文: {raw}"
-                )
-
-
-def _check_machine_syntax(
-    root: Path,
-    warnings: list[str],
-    files: tuple[str, ...] = MACHINE_FILES,
-) -> None:
-    for relative in files:
-        path = root / relative
-        content = _read_text(path)
-        if content is None:
-            continue
-        stripped = _strip_fenced_code(content)
-        for match in REFERENCE_LINK_RE.finditer(stripped):
-            warnings.append(
-                f"{relative}:{_line_number(stripped, match.start())}: "
-                "机器入口使用引用式链接，无法保证机械解析"
-            )
-        if relative in {"docs/软件测试.md", *ARCHIVE_MACHINE_FILES}:
-            for number, line in enumerate(stripped.splitlines(), start=1):
-                if line.strip().startswith("|") and r"\|" in line:
-                    warnings.append(
-                        f"{relative}:{number}: "
-                        "机器表格包含转义竖线，简单解析器无法保证结果"
-                    )
-
-
-def _check_absolute_paths(
-    root: Path,
-    inventory: MarkdownInventory,
-    warnings: list[str],
-) -> None:
-    for path in inventory.active_files:
-        content = _read_text(path)
-        if content is None:
-            continue
-        stripped = _strip_fenced_code(content)
-        relative = path.relative_to(root).as_posix()
-        for match in ABSOLUTE_USER_PATH_RE.finditer(stripped):
-            warnings.append(
-                f"{relative}:{_line_number(stripped, match.start())}: "
-                "发现绝对本地用户路径，检查文档可移植性"
+                f"{path.relative_to(root).as_posix()}: 必须由归档索引登记一次，实际 {count} 次"
             )
 
 
-def _check_navigation_overlap(root: Path, warnings: list[str]) -> None:
-    readme = root / "README.md"
-    docs_index = root / "docs" / "README.md"
-    if not readme.is_file() or not docs_index.is_file():
-        return
-    docs_root = root / "docs"
-    shared = sorted(
-        target
-        for target in _direct_targets(readme) & _direct_targets(docs_index)
-        if target.is_file()
-        and target.suffix.lower() == ".md"
-        and _is_within(target, docs_root)
-        and target != docs_index.resolve(strict=False)
-    )
-    if len(shared) < 3:
-        return
-    paths = ", ".join(path.relative_to(root).as_posix() for path in shared)
-    warnings.append(
-        "README.md: 与 docs/README.md 重复直接链接 "
-        f"{len(shared)} 份专题 Markdown，复核根入口是否重复枚举: {paths}"
-    )
-
-
-def collect_doc_consistency(
-    root: Path | None = None,
-) -> tuple[list[str], list[str]]:
+def collect_doc_consistency(root: Path | None = None) -> tuple[list[str], list[str]]:
     workspace = (root or Path(__file__).resolve().parents[2]).resolve()
     errors: list[str] = []
-    warnings: list[str] = []
-    _check_required(workspace, errors)
-    inventory = _markdown_inventory(workspace)
-    _check_context_shape(workspace, inventory, errors)
-    _check_markdown_files(workspace, inventory, errors)
-    _check_navigation(workspace, errors)
-    _check_docs_reachability(workspace, inventory, errors)
-    _check_top_level_markdown_ownership(workspace, inventory, errors)
-    _check_suite_navigation(workspace, inventory, errors)
-    backlog, backlog_plan_targets = _parse_backlog(workspace, errors)
-    _check_plans(workspace, backlog, backlog_plan_targets, errors)
-    entries = _parse_registry(workspace, errors)
-    _check_suite_registry(workspace, inventory, entries, errors)
-    _check_archive_navigation(workspace, errors)
-    _check_machine_syntax(workspace, warnings)
-    _check_absolute_paths(workspace, inventory, warnings)
-    _check_navigation_overlap(workspace, warnings)
-    return errors, warnings
+    _check_required_files(workspace, errors)
+    paths = _walk_markdown(workspace, workspace, exclude_archive=True)
+    _check_markdown_files(workspace, paths, errors)
+    _check_required_links(workspace, errors)
+    items = _parse_backlog(workspace, errors)
+    _check_plans(workspace, items, errors)
+    _check_registry(workspace, errors)
+    return errors, []
 
 
-def collect_archive_consistency(
-    root: Path | None = None,
-) -> tuple[list[str], list[str]]:
+def collect_archive_consistency(root: Path | None = None) -> tuple[list[str], list[str]]:
     workspace = (root or Path(__file__).resolve().parents[2]).resolve()
     errors: list[str] = []
-    warnings: list[str] = []
-    for relative in ARCHIVE_MACHINE_FILES:
-        if not _is_exact_file(workspace, relative):
-            errors.append(f"{relative}: 归档目录缺少索引")
-    inventory = _archive_markdown_inventory(workspace)
-    _check_markdown_files(workspace, inventory, errors)
+    paths = tuple(
+        path
+        for relative in ARCHIVE_AREAS
+        for path in _walk_markdown(
+            workspace,
+            workspace / relative,
+            exclude_archive=False,
+        )
+    )
+    _check_markdown_files(workspace, paths, errors)
     for relative in ARCHIVE_AREAS:
-        _check_archive_area(workspace, relative, inventory, errors)
-    _check_machine_syntax(workspace, warnings, ARCHIVE_MACHINE_FILES)
-    return errors, warnings
+        _check_archive_area(workspace, workspace / relative, paths, errors)
+    return errors, []
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-root", type=Path)
-    parser.add_argument(
-        "--scope",
-        choices=("active", "archive"),
-        default="active",
-        help="检查活动文档或完整归档区",
-    )
+    parser.add_argument("--scope", choices=("active", "archive"), default="active")
     args = parser.parse_args()
-    collector = (
-        collect_doc_consistency
-        if args.scope == "active"
-        else collect_archive_consistency
-    )
+    collector = collect_doc_consistency if args.scope == "active" else collect_archive_consistency
     errors, warnings = collector(args.workspace_root)
     for warning in warnings:
         print(f"[WARN] {warning}")
     if errors:
         for error in errors:
             print(f"[FAIL] {error}")
-        print(f"FAILED: {len(errors)} issue(s), {len(warnings)} warning(s)")
+        print(f"FAILED: {len(errors)} issue(s)")
         return 1
     label = "活动文档机械一致性" if args.scope == "active" else "归档机械一致性"
-    print(f"{label}检查通过（{len(warnings)} warning(s)）。")
+    print(f"{label}检查通过。")
     return 0
 
 

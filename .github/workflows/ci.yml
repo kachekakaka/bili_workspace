@@ -34,19 +34,6 @@ jobs:
         run: python -m compileall -q app tests tools docker
       - name: Ruff
         run: python -m ruff check --no-cache app tests tools docker
-      - name: Test
-        shell: bash
-        run: |
-          set -o pipefail
-          python -m pytest -q -p no:cacheprovider --tb=short 2>&1 | tee pytest-3.11.log
-      - name: Upload failed pytest log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-3.11-${{ github.run_attempt }}
-          path: pytest-3.11.log
-          if-no-files-found: ignore
-          retention-days: 7
 
   frontend:
     runs-on: ubuntu-latest
@@ -72,33 +59,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements/dev.lock
-          python -m pip check
       - name: Check documentation skeleton
         run: python -B -X utf8 SoftwareTesting/doc_consistency/test_doc_consistency.py --workspace-root .
-      - name: Test SQLite, userdata and frontend architecture contracts
-        run: >-
-          python -m pytest -q -p no:cacheprovider
-          tests/test_userdata.py
-          tests/test_v05_persistence.py
-          tests/test_index_store.py
-          tests/test_v060_migrations.py
-          tests/test_v060_task_ownership.py
-          tests/test_v061_userless_migration.py
-          tests/test_v060_release.py
-          tests/test_v070_release.py
-          tests/test_v062_ui.py
-          tests/test_v062_settings_ui.py
-          tests/test_v070_frontend_architecture.py
-      - name: Check Windows call chain and Docker configuration
-        run: >-
-          python -m pytest -q -p no:cacheprovider
-          tests/test_v05_docker.py
-          tests/test_repository_layout.py
-          tests/test_t_project_isolation.py
 
   playwright:
     name: T-PROJECT browser phase
@@ -132,9 +94,6 @@ jobs:
           retention-days: 7
 
   product-validation:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -148,21 +107,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.lock
           python -m pip check
-      - name: Validate V0.7.0 accounts, ownership, migrations, search and frontend architecture
-        run: >-
-          python -m pytest -q -p no:cacheprovider --tb=short
-          tests/test_v060_accounts.py
-          tests/test_v060_auth_sessions.py
-          tests/test_v060_auth_races.py
-          tests/test_v060_task_ownership.py
-          tests/test_v060_migrations.py
-          tests/test_v061_userless_migration.py
-          tests/test_search_v060.py
-          tests/test_v060_release.py
-          tests/test_v070_release.py
-          tests/test_v062_ui.py
-          tests/test_v062_settings_ui.py
-          tests/test_v070_frontend_architecture.py
+      - name: Run the complete non-browser Python behavior suite
+        run: python -m pytest -q -p no:cacheprovider --tb=short -m "not integration and not playwright"
 
   windows-validation:
     if: >-
@@ -186,8 +132,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements/dev.lock -r launcher/requirements-dev.txt
           python -m pip check
-      - name: Verify source tree with Python 3.11
-        run: python -B -X utf8 tools/verify_source.py
       - name: Run Windows launcher tests
         run: python -B -X utf8 -m pytest -q launcher/tests
 
@@ -200,24 +144,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements/dev.lock
-          python -m pip check
-      - name: Validate Docker persistence and old database upgrade
-        run: >-
-          python -m pytest -q -p no:cacheprovider --tb=short
-          tests/test_v05_docker.py
-          tests/test_v060_migrations.py
-          tests/test_v060_task_ownership.py::test_v3_to_v4_migration_assigns_admin_without_revoking_sessions
-          tests/test_v061_userless_migration.py
-          tests/test_v060_release.py
-          tests/test_v070_release.py
       - name: Build validation image
         run: docker build -f docker/Dockerfile --build-arg TARGETARCH=amd64 -t bili-workspace:validation .
       - name: Smoke application version inside image

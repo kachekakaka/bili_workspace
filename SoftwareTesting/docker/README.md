@@ -13,9 +13,9 @@
 | --- | --- | --- |
 | `.github/workflows/ci.yml` 的 `docker-validation` 作业 | 使用 `docker/Dockerfile` 和当前根构建上下文执行单架构 `linux/amd64` 构建，再从本地验证镜像运行版本冒烟 | 镜像构建成功，容器内 `app.__version__` 为当前版本；镜像只使用任务内标签，不推送 |
 | `.github/workflows/docker-image.yml` | 使用 Buildx 与 QEMU 构建 `linux/amd64,linux/arm64`，`push: false` | 两个声明架构均完成构建求值，不创建或推送正式镜像 |
-| [Docker 镜像打包与离线交付手册](../../docs/运维/Docker镜像打包与离线交付.md) | 本地按目标平台执行构建、隔离运行、离线打包和复载 | 作为 `T-DOCKER` 手工执行入口，新证据使用 `test_id: T-DOCKER`；只有手册列明的必要阶段实际成功后才能记录 `passed` |
+| [Docker 镜像打包与离线交付手册](../../docs/运维/Docker镜像打包与离线交付.md) | 本地按目标平台执行构建、隔离运行、离线打包和复载 | `Create`/`Record` 只接受 `T-DOCKER` 并写最小 Docker 交接记录；只有必要阶段实际成功后才能记录 `passed` |
 
-CI 作业中先行执行的持久化、迁移和发布契约 pytest 仍属于 T-PROJECT；它们不能替代真实 Docker 构建。T-LAUNCHER 负责启动器面向 `linux/amd64` 的 Docker 导出三件套及其事务、身份与恢复协议，也不替代本项的一般项目镜像构建。
+Python 持久化、迁移和发布策略测试属于 T-PROJECT，不在 Docker job 中重复；它们不能替代真实 Docker 构建。T-LAUNCHER 负责启动器面向 `linux/amd64` 的 Docker 导出三件套及其事务、身份与恢复协议，也不替代本项的一般项目镜像构建。
 
 ## 选择与环境
 
@@ -35,7 +35,7 @@ T-DOCKER 不属于每次完整检查都固定执行的 `full` 项。候选命中
 - `inconclusive`：执行被中断、运行器异常，或适用架构／断言被跳过而证据不完整。
 - `not_run`：没有执行；workflow 定义存在、静态 Docker 测试通过或其他平台构建成功都不能替代本项结果。
 
-动态镜像 ID、运行时间、缓存身份和候选摘要只保存在仓库外运行证据中，不写入本活动入口。
+动态镜像 ID、运行时间、缓存身份和候选摘要由 CI 输出或本地最小交接记录承接，不写入本活动入口。
 
 ## 清理边界
 
