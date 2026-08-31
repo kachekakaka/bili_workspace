@@ -35,11 +35,12 @@ export function filterSearchItems(items, filterText, mode = 'raw') {
   ));
 }
 
-export function searchPageKey({ keyword = '', order = 'totalrank', page = 1 } = {}) {
+export function searchPageKey({ keyword = '', order = 'totalrank', page = 1, destination = 'library' } = {}) {
   return JSON.stringify([
     normalizeSearchText(String(keyword).trim()),
     String(order || 'totalrank'),
     Math.max(1, Number.parseInt(page, 10) || 1),
+    destination === 'device' ? 'device' : 'library',
   ]);
 }
 
@@ -58,21 +59,4 @@ export function writeLru(cache, key, value, limit = SEARCH_PAGE_LRU_LIMIT) {
   cache.set(key, value);
   while (cache.size > capacity) cache.delete(cache.keys().next().value);
   return value;
-}
-
-export function shouldPrefetchNextPage({
-  page = 1,
-  pages = 0,
-  saveData = false,
-  currentPageSucceeded = false,
-  queryIsCurrent = false,
-} = {}) {
-  const current = Math.max(1, Number.parseInt(page, 10) || 1);
-  const total = Math.max(0, Number.parseInt(pages, 10) || 0);
-  return Boolean(
-    currentPageSucceeded
-      && queryIsCurrent
-      && !saveData
-      && total > current,
-  );
 }

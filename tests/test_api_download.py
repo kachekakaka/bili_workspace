@@ -49,3 +49,37 @@ def test_batch_limit_is_explicit(client):
     response = client.post("/api/download", json={"urls": ["\n".join(values)]})
     assert response.status_code == 400
     assert "最多" in response.json()["error"]
+
+
+def test_strict_selection_rejects_entire_admin_batch_on_library_conflict(client):
+    first = client.post("/api/download", json={"bvids": ["BV1STRICT001"]})
+    first_task = _wait_terminal(client, first.json()["data"][0]["id"])
+    assert first_task["status"] == "success"
+
+    rejected = client.post(
+        "/api/download/selection",
+        json={"bvids": ["BV1STRICT001", "BV1STRICT002"]},
+    )
+    assert rejected.status_code == 409
+    body = rejected.json()
+    assert body["code"] == "batch_conflict"
+    assert body["data"]["items"] == [
+        {
+            "source_key": "BV1STRICT001",
+            "code": "already_downloaded",
+            "message": "作品已存在有效文件，需要确认重新下载",
+        }
+    ]
+    assert client.state_ref.task_store.database.one(
+        "SELECT id FROM task_records WHERE source_key='BV1STRICT002'"
+    ) is None
+
+    accepted = client.post(
+        "/api/download/selection",
+        json={
+            "bvids": ["BV1STRICT001", "BV1STRICT002"],
+            "force": True,
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["total"] == 2

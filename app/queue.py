@@ -49,6 +49,12 @@ class QueueFullError(ValueError):
     pass
 
 
+class BatchConflictError(ValueError):
+    def __init__(self, reasons: list[dict[str, str]]) -> None:
+        super().__init__("所选作品中存在冲突，未创建任何任务")
+        self.reasons = reasons
+
+
 @dataclass
 class Task:
     id: str
@@ -485,19 +491,28 @@ class TaskQueue:
             positions = self._queue_positions_locked()
             return task.to_dict(queue_position=positions.get(task_id))
 
-    def key_statuses(self, keys: list[str]) -> dict[str, dict[str, Any]]:
+    def key_statuses(
+        self,
+        keys: list[str],
+        owner_user_id: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
         wanted = set(keys)
+        owner_filter = None if owner_user_id is None else str(owner_user_id)
         result: dict[str, dict[str, Any]] = {}
         with self._lock:
             positions = self._queue_positions_locked()
             # Active state is more useful than a newer "duplicate skipped" record.
             for task in self._tasks.values():
+                if owner_filter is not None and task.owner_user_id != owner_filter:
+                    continue
                 source_key = task.source_key or task.key
                 if source_key in wanted and task.status in ("queued", "running"):
                     result[source_key] = task.to_dict(queue_position=positions.get(task.id))
             for task_id in reversed(self._order):
                 task = self._tasks.get(task_id)
                 if task is None:
+                    continue
+                if owner_filter is not None and task.owner_user_id != owner_filter:
                     continue
                 source_key = task.source_key or task.key
                 if source_key not in wanted or source_key in result:
@@ -615,6 +630,8 @@ class TaskQueue:
         retry_of: str = "",
         owner_user_id: str = "",
         owner_active_limit: int | None = None,
+        strict: bool = False,
+        before_publish: Callable[[list[dict[str, Any]]], None] | None = None,
     ) -> list[dict[str, Any]]:
         owner = str(owner_user_id or self.default_owner_user_id)
         if not owner:
@@ -664,6 +681,30 @@ class TaskQueue:
                 queue_needed += 1
                 active_keys.add(target.key)
 
+            if strict:
+                conflicts = []
+                for target, action, _entry in plans:
+                    if action == "queue":
+                        continue
+                    source_key = source_by_queue_key.get(target.key, target.key)
+                    conflicts.append(
+                        {
+                            "source_key": source_key,
+                            "code": (
+                                "active_task_conflict"
+                                if action == "active-duplicate"
+                                else "already_downloaded"
+                            ),
+                            "message": (
+                                "同一作品已有排队或下载中的任务"
+                                if action == "active-duplicate"
+                                else "作品已存在有效文件，需要确认重新下载"
+                            ),
+                        }
+                    )
+                if conflicts:
+                    raise BatchConflictError(conflicts)
+
             active = sum(
                 1 for task in self._tasks.values() if task.status in ("queued", "running")
             )
@@ -685,6 +726,7 @@ class TaskQueue:
                         f"上限 {int(owner_active_limit)} 个"
                     )
 
+            pending_logs: list[tuple[Task, str]] = []
             for target, action, entry in plans:
                 submitted = dict(metadata.get(target.key) or {})
                 if entry:
@@ -811,22 +853,55 @@ class TaskQueue:
                         finished_at=now,
                         last_heartbeat=now,
                     )
-                    self._remember_locked(task)
                     created.append(task)
-                    self._append_log(task, f"[任务] {message}\n")
+                    pending_logs.append((task, f"[任务] {message}\n"))
                     continue
 
                 task = Task(**common)
-                self._remember_locked(task)
-                self._cancel_events[task.id] = threading.Event()
-                self._pending.append(task.id)
                 created.append(task)
-                self._append_log(
-                    task,
-                    f"[任务] 已创建：{task.url}\n[分组] {task.group}\n"
-                    f"[清晰度] 最低 {height_label(task.min_height)}"
-                    f"{f'；指定 {task.preferred_quality}' if task.preferred_quality else '；自动最高'}\n",
+                pending_logs.append(
+                    (
+                        task,
+                        f"[任务] 已创建：{task.url}\n[分组] {task.group}\n"
+                        f"[清晰度] 最低 {height_label(task.min_height)}"
+                        f"{f'；指定 {task.preferred_quality}' if task.preferred_quality else '；自动最高'}\n",
+                    )
                 )
+
+            if before_publish is not None:
+                before_publish([task.to_dict() for task in created])
+
+            published_ids = [task.id for task in created]
+            try:
+                # Publish only after the optional durable transaction succeeds. Workers
+                # cannot observe this state until the condition lock is released.
+                for task in created:
+                    self._tasks[task.id] = task
+                    self._order.append(task.id)
+                    self._notify_locked(task)
+                    if task.status == "queued":
+                        self._cancel_events[task.id] = threading.Event()
+                        self._pending.append(task.id)
+            except BaseException:
+                published = set(published_ids)
+                for task_id in published_ids:
+                    self._tasks.pop(task_id, None)
+                    self._cancel_events.pop(task_id, None)
+                    self._pause_requested.discard(task_id)
+                    try:
+                        self._order.remove(task_id)
+                    except ValueError:
+                        pass
+                self._pending = deque(
+                    task_id for task_id in self._pending if task_id not in published
+                )
+                self._pending_notifications = deque(
+                    item for item in self._pending_notifications if item[0] not in published
+                )
+                raise
+            self._trim_history_locked()
+            for task, message in pending_logs:
+                self._append_log(task, message)
             self._cv.notify_all()
             positions = self._queue_positions_locked()
             result = [task.to_dict(queue_position=positions.get(task.id)) for task in created]

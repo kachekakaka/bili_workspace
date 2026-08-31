@@ -13,6 +13,12 @@ def test_normal_user_frontend_scope_is_device_only() -> None:
     download = (
         ROOT / "web" / "assets" / "app" / "pages" / "download.mjs"
     ).read_text(encoding="utf-8")
+    search = (
+        ROOT / "web" / "assets" / "app" / "pages" / "search.mjs"
+    ).read_text(encoding="utf-8")
+    creator = (
+        ROOT / "web" / "assets" / "app" / "pages" / "submission-browser.mjs"
+    ).read_text(encoding="utf-8")
     index = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
 
     assert "const USER_NAV = Object.freeze([['download', '↓', '下载'], ['tasks', '≡', '任务']]);" in main
@@ -24,5 +30,11 @@ def test_normal_user_frontend_scope_is_device_only() -> None:
     assert "group_id: destination === 'library'" in download
     assert "group: ''" in download
     assert "下载完成后导出到当前设备，不会进入管理员媒体库。" in download
+    assert "allowNameSearch: false" in download
+    assert "普通用户不开放名称搜索" in creator
+    assert "allowNameSearch: true" in search
+    assert "/api/bilibili/creators/resolve" in creator
+    assert "/api/download/selection" in creator
+    assert "自动选择最高可用画质" in download
     assert 'id="userMenuRoot"' in index
     assert 'id="userMenuButton"' in index

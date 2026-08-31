@@ -9,12 +9,18 @@ from typing import Any
 
 import httpx
 
-from app.constants import SEARCH_PAGE_CACHE_SECONDS, WBI_KEY_CACHE_SECONDS
+from app.constants import (
+    DISCOVERY_PAGE_SIZE,
+    SEARCH_PAGE_CACHE_SECONDS,
+    WBI_KEY_CACHE_SECONDS,
+)
 from app.cookie import read_cookie_string
 from app.wbi import sign_params
 
 NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 SEARCH_URL = "https://api.bilibili.com/x/web-interface/wbi/search/type"
+CREATOR_PROFILE_URL = "https://api.bilibili.com/x/web-interface/card"
+CREATOR_SUBMISSIONS_URL = "https://api.bilibili.com/x/space/wbi/arc/search"
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -30,12 +36,23 @@ ORDER_MAP = {
 _TAG_RE = re.compile(r"<[^>]+>")
 _CACHE_LIMIT = 160
 _CACHE_LOCK = threading.RLock()
-_SEARCH_CACHE: dict[tuple[str, str, int, str], tuple[float, dict[str, Any]]] = {}
+_SEARCH_CACHE: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
 _WBI_KEY_CACHE: dict[str, tuple[float, tuple[str, str]]] = {}
 
 
 class SearchError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "bilibili_unavailable",
+        status_code: int = 502,
+        public_message: str = "Bilibili 暂时不可用，请稍后重试",
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.public_message = public_message
 
 
 def _headers(cookie: str) -> dict[str, str]:
@@ -113,7 +130,7 @@ def _cookie_token(cookie: str) -> str:
     return hashlib.sha256(cookie.encode("utf-8")).hexdigest()[:16] if cookie else "guest"
 
 
-def _cached(key: tuple[str, str, int, str]) -> dict[str, Any] | None:
+def _cached(key: tuple[str, ...]) -> dict[str, Any] | None:
     now = time.monotonic()
     with _CACHE_LOCK:
         row = _SEARCH_CACHE.get(key)
@@ -126,7 +143,7 @@ def _cached(key: tuple[str, str, int, str]) -> dict[str, Any] | None:
         return copy.deepcopy(value)
 
 
-def _store_cache(key: tuple[str, str, int, str], value: dict[str, Any]) -> None:
+def _store_cache(key: tuple[str, ...], value: dict[str, Any]) -> None:
     now = time.monotonic()
     with _CACHE_LOCK:
         _SEARCH_CACHE[key] = (now, copy.deepcopy(value))
@@ -137,7 +154,7 @@ def _store_cache(key: tuple[str, str, int, str], value: dict[str, Any]) -> None:
                 _SEARCH_CACHE.pop(old_key, None)
 
 
-def _invalidate_search_page(key: tuple[str, str, int, str]) -> None:
+def _invalidate_search_page(key: tuple[str, ...]) -> None:
     with _CACHE_LOCK:
         _SEARCH_CACHE.pop(key, None)
 
@@ -189,6 +206,82 @@ def _is_wbi_signature_error(payload: dict[str, Any]) -> bool:
     )
 
 
+def _payload_error(
+    payload: dict[str, Any],
+    *,
+    not_found: bool = False,
+) -> SearchError:
+    code = payload.get("code")
+    message = str(payload.get("message") or payload.get("msg") or f"code={code}")
+    if not_found and code in {-400, -404}:
+        return SearchError(
+            message,
+            code="creator_not_found",
+            status_code=404,
+            public_message="未找到这个 UP 主",
+        )
+    if code in {-352, -412}:
+        return SearchError(
+            message,
+            code="bilibili_risk_control",
+            status_code=503,
+            public_message="Bilibili 风控暂时阻止了读取，请稍后重试或联系管理员检查 Bilibili 登录",
+        )
+    if code in {-101, -111}:
+        return SearchError(
+            message,
+            code="bilibili_login_required",
+            status_code=503,
+            public_message="服务端 Bilibili 登录已失效，请联系管理员重新登录",
+        )
+    return SearchError(message)
+
+
+def _request_json(
+    client: httpx.Client,
+    url: str,
+    *,
+    cookie: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        response = client.get(url, params=params, headers=_headers(cookie))
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise SearchError(str(exc)) from exc
+    if not isinstance(payload, dict):
+        raise SearchError("Bilibili 返回了无法识别的数据")
+    return payload
+
+
+def _signed_payload(
+    client: httpx.Client,
+    url: str,
+    *,
+    cookie: str,
+    cookie_token: str,
+    params: dict[str, Any],
+    wbi_keys: tuple[str, str] | None = None,
+) -> dict[str, Any]:
+    keys = wbi_keys or _get_wbi_keys(client, cookie, cookie_token)
+    for attempt in range(2):
+        payload = _request_json(
+            client,
+            url,
+            cookie=cookie,
+            params=sign_params(params, keys[0], keys[1]),
+        )
+        if payload.get("code") == 0:
+            return payload
+        if attempt == 0 and _is_wbi_signature_error(payload):
+            _invalidate_wbi_keys(cookie_token)
+            keys = _get_wbi_keys(client, cookie, cookie_token, force=True)
+            continue
+        raise _payload_error(payload)
+    raise SearchError("搜索签名重试失败")
+
+
 def _result_from_payload(
     payload: dict[str, Any],
     *,
@@ -198,7 +291,7 @@ def _result_from_payload(
 ) -> dict[str, Any]:
     data = payload.get("data") or {}
     results = []
-    for item in (data.get("result") or [])[:20]:
+    for item in (data.get("result") or [])[:DISCOVERY_PAGE_SIZE]:
         normalized = _normalize_item(item)
         if normalized:
             results.append(normalized)
@@ -214,7 +307,7 @@ def _result_from_payload(
         "numResults": total,
         "num_pages": pages,
         "num_results": total,
-        "page_size": 20,
+        "page_size": DISCOVERY_PAGE_SIZE,
         "items": results,
         "cached": False,
     }
@@ -250,7 +343,7 @@ def search_videos(
 
     cookie = read_cookie_string(bbdown_dir)
     cookie_token = _cookie_token(cookie)
-    cache_key = (keyword.casefold(), order_key, page, cookie_token)
+    cache_key = ("video", keyword.casefold(), order_key, str(page), cookie_token)
     if fresh:
         _invalidate_search_page(cache_key)
     else:
@@ -262,47 +355,255 @@ def search_videos(
     owns_client = client is None
     http_client = client or httpx.Client(timeout=20.0, trust_env=False)
     try:
-        keys = wbi_keys or _get_wbi_keys(http_client, cookie, cookie_token)
         params = {
             "search_type": "video",
             "keyword": keyword,
             "order": order_key,
             "page": page,
-            "page_size": 20,
+            "page_size": DISCOVERY_PAGE_SIZE,
         }
-        payload: dict[str, Any] | None = None
-        for attempt in range(2):
-            signed = sign_params(params, keys[0], keys[1])
-            response = http_client.get(
-                SEARCH_URL,
-                params=signed,
-                headers=_headers(cookie),
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if payload.get("code") == 0:
-                break
-            if attempt == 0 and _is_wbi_signature_error(payload):
-                _invalidate_wbi_keys(cookie_token)
-                keys = _get_wbi_keys(http_client, cookie, cookie_token, force=True)
-                continue
-            raise SearchError(
-                payload.get("message") or f"搜索失败 code={payload.get('code')}"
-            )
-        else:  # pragma: no cover - loop always returns or raises
-            raise SearchError("搜索签名重试失败")
-
-        assert payload is not None
-        if payload.get("code") != 0:
-            raise SearchError(
-                payload.get("message") or f"搜索失败 code={payload.get('code')}"
-            )
+        payload = _signed_payload(
+            http_client,
+            SEARCH_URL,
+            cookie=cookie,
+            cookie_token=cookie_token,
+            params=params,
+            wbi_keys=wbi_keys,
+        )
         result = _result_from_payload(
             payload,
             keyword=keyword,
             order=order_key,
             page=page,
         )
+        _store_cache(cache_key, result)
+        return result
+    finally:
+        if owns_client:
+            http_client.close()
+
+
+def _https_image(value: Any) -> str:
+    text = str(value or "").strip()
+    return "https:" + text if text.startswith("//") else text
+
+
+def _normalize_creator(item: dict[str, Any]) -> dict[str, Any] | None:
+    uid = str(item.get("mid") or item.get("uid") or "").strip()
+    if not uid.isdigit() or int(uid) <= 0:
+        return None
+    name = _strip_html(str(item.get("uname") or item.get("name") or "")).strip()
+    return {
+        "uid": str(int(uid)),
+        "name": name,
+        "avatar": _https_image(item.get("upic") or item.get("face")),
+        "bio": str(item.get("usign") or item.get("sign") or "").strip(),
+        "followers": int(item.get("fans") or item.get("follower") or 0),
+        "submission_count": int(
+            item.get("videos") or item.get("archive_count") or item.get("video") or 0
+        ),
+        "profile_url": f"https://space.bilibili.com/{int(uid)}",
+    }
+
+
+def search_creators(
+    keyword: str,
+    *,
+    page: int = 1,
+    bbdown_dir,
+    client: httpx.Client | None = None,
+    fresh: bool = False,
+) -> dict[str, Any]:
+    keyword = str(keyword or "").strip()
+    if not keyword:
+        raise SearchError(
+            "请输入 UP 主名称",
+            code="invalid_creator_query",
+            status_code=400,
+            public_message="请输入 UP 主名称",
+        )
+    page = max(1, int(page))
+    cookie = read_cookie_string(bbdown_dir)
+    cookie_token = _cookie_token(cookie)
+    cache_key = ("creator-name", keyword.casefold(), str(page), cookie_token)
+    if fresh:
+        _invalidate_search_page(cache_key)
+    else:
+        cached = _cached(cache_key)
+        if cached is not None:
+            cached["cached"] = True
+            return cached
+
+    owns_client = client is None
+    http_client = client or httpx.Client(timeout=20.0, trust_env=False)
+    try:
+        payload = _signed_payload(
+            http_client,
+            SEARCH_URL,
+            cookie=cookie,
+            cookie_token=cookie_token,
+            params={
+                "search_type": "bili_user",
+                "keyword": keyword,
+                "page": page,
+                "page_size": DISCOVERY_PAGE_SIZE,
+            },
+        )
+        data = payload.get("data") or {}
+        items = []
+        for raw in (data.get("result") or [])[:DISCOVERY_PAGE_SIZE]:
+            if isinstance(raw, dict):
+                normalized = _normalize_creator(raw)
+                if normalized:
+                    items.append(normalized)
+        pages = int(data.get("numPages") or data.get("num_pages") or 0)
+        total = int(data.get("numResults") or data.get("num_results") or len(items))
+        result = {
+            "keyword": keyword,
+            "page": page,
+            "pages": pages,
+            "total": total,
+            "page_size": DISCOVERY_PAGE_SIZE,
+            "items": items,
+            "cached": False,
+        }
+        _store_cache(cache_key, result)
+        return result
+    finally:
+        if owns_client:
+            http_client.close()
+
+
+def creator_profile(
+    uid: str,
+    *,
+    bbdown_dir,
+    client: httpx.Client | None = None,
+    fresh: bool = False,
+) -> dict[str, Any]:
+    canonical_uid = str(int(str(uid)))
+    cookie = read_cookie_string(bbdown_dir)
+    cookie_token = _cookie_token(cookie)
+    cache_key = ("creator-profile", canonical_uid, cookie_token)
+    if fresh:
+        _invalidate_search_page(cache_key)
+    else:
+        cached = _cached(cache_key)
+        if cached is not None:
+            cached["cached"] = True
+            return cached
+
+    owns_client = client is None
+    http_client = client or httpx.Client(timeout=20.0, trust_env=False)
+    try:
+        payload = _request_json(
+            http_client,
+            CREATOR_PROFILE_URL,
+            cookie=cookie,
+            params={"mid": canonical_uid, "photo": "true"},
+        )
+        if payload.get("code") != 0:
+            raise _payload_error(payload, not_found=True)
+        data = payload.get("data") or {}
+        card = data.get("card") or data
+        if not isinstance(card, dict):
+            raise SearchError("UP 主资料格式无效")
+        merged = dict(card)
+        merged["archive_count"] = data.get("archive_count") or card.get("archive_count") or 0
+        result = _normalize_creator(merged)
+        if result is None:
+            raise SearchError(
+                "UP 主资料缺少 UID",
+                code="creator_not_found",
+                status_code=404,
+                public_message="未找到这个 UP 主",
+            )
+        result["cached"] = False
+        _store_cache(cache_key, result)
+        return result
+    finally:
+        if owns_client:
+            http_client.close()
+
+
+def creator_submissions(
+    uid: str,
+    *,
+    order: str = "pubdate",
+    page: int = 1,
+    bbdown_dir,
+    client: httpx.Client | None = None,
+    fresh: bool = False,
+) -> dict[str, Any]:
+    canonical_uid = str(int(str(uid)))
+    order_key = "click" if order == "click" else "pubdate"
+    page = max(1, int(page))
+    cookie = read_cookie_string(bbdown_dir)
+    cookie_token = _cookie_token(cookie)
+    cache_key = (
+        "creator-submissions",
+        canonical_uid,
+        order_key,
+        str(page),
+        cookie_token,
+    )
+    if fresh:
+        _invalidate_search_page(cache_key)
+    else:
+        cached = _cached(cache_key)
+        if cached is not None:
+            cached["cached"] = True
+            return cached
+
+    owns_client = client is None
+    http_client = client or httpx.Client(timeout=20.0, trust_env=False)
+    try:
+        payload = _signed_payload(
+            http_client,
+            CREATOR_SUBMISSIONS_URL,
+            cookie=cookie,
+            cookie_token=cookie_token,
+            params={
+                "mid": canonical_uid,
+                "pn": page,
+                "ps": DISCOVERY_PAGE_SIZE,
+                "order": order_key,
+                "keyword": "",
+            },
+        )
+        data = payload.get("data") or {}
+        list_data = data.get("list") or {}
+        raw_items = list_data.get("vlist") or data.get("vlist") or []
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in raw_items[:DISCOVERY_PAGE_SIZE]:
+            if not isinstance(raw, dict):
+                continue
+            mapped = dict(raw)
+            mapped["duration"] = raw.get("length") or raw.get("duration") or ""
+            mapped["pubdate"] = raw.get("created") or raw.get("pubdate") or 0
+            mapped["pic"] = raw.get("pic") or raw.get("cover") or ""
+            normalized = _normalize_item(mapped)
+            if not normalized:
+                continue
+            bvid = str(normalized["bvid"])
+            if bvid in seen:
+                continue
+            seen.add(bvid)
+            items.append(normalized)
+        page_info = data.get("page") or {}
+        total = int(page_info.get("count") or data.get("count") or len(items))
+        pages = (total + DISCOVERY_PAGE_SIZE - 1) // DISCOVERY_PAGE_SIZE if total else 0
+        result = {
+            "uid": canonical_uid,
+            "order": order_key,
+            "page": page,
+            "pages": pages,
+            "total": total,
+            "page_size": DISCOVERY_PAGE_SIZE,
+            "items": items,
+            "cached": False,
+        }
         _store_cache(cache_key, result)
         return result
     finally:

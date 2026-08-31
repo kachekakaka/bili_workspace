@@ -77,9 +77,15 @@ CREATE TABLE IF NOT EXISTS exports(
  title TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, relative_path TEXT NOT NULL DEFAULT '',
  filename TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0,
  created_at REAL NOT NULL, expires_at REAL NOT NULL, downloaded_at REAL,
- error TEXT NOT NULL DEFAULT '', task_payload_json TEXT NOT NULL DEFAULT '{}'
+ error TEXT NOT NULL DEFAULT '', task_payload_json TEXT NOT NULL DEFAULT '{}',
+ cleanup_target_state TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_exports_expiry ON exports(state,expires_at);
+CREATE TABLE IF NOT EXISTS device_download_history(
+ owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ source_key TEXT NOT NULL, downloaded_at REAL NOT NULL,
+ PRIMARY KEY(owner_user_id,source_key)
+);
 CREATE TABLE IF NOT EXISTS transcodes(
  id TEXT PRIMARY KEY, media_id TEXT NOT NULL, source_file_id TEXT NOT NULL,
  output_file_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
@@ -377,6 +383,7 @@ class Database:
                 ("audit_log", "session_id", "TEXT"),
                 ("audit_log", "target_user_id", "TEXT"),
                 ("exports", "owner_user_id", "TEXT"),
+                ("exports", "cleanup_target_state", "TEXT NOT NULL DEFAULT ''"),
             ):
                 self._add_column_locked(table, column, definition)
 
@@ -482,6 +489,28 @@ class Database:
                     "UPDATE exports SET owner_user_id=? "
                     "WHERE owner_user_id IS NULL OR TRIM(owner_user_id)=''",
                     (admin_id,),
+                )
+
+            if had_existing and old_version < 5:
+                # Legacy cleanup_pending did not retain whether cleanup followed a
+                # completed transfer or a discard.  Treat it conservatively as a
+                # non-delivery cleanup target and never invent download history.
+                self.connection.execute(
+                    "UPDATE exports SET cleanup_target_state='discarded' "
+                    "WHERE state='cleanup_pending' "
+                    "AND TRIM(COALESCE(cleanup_target_state,''))=''"
+                )
+                self.connection.execute(
+                    "INSERT INTO device_download_history(owner_user_id,source_key,downloaded_at) "
+                    "SELECT e.owner_user_id,e.source_key,MAX(e.downloaded_at) "
+                    "FROM exports e JOIN users u ON u.id=e.owner_user_id "
+                    "WHERE u.role=? AND e.state='downloaded' "
+                    "AND e.downloaded_at IS NOT NULL "
+                    "AND TRIM(e.source_key)<>'' GROUP BY e.owner_user_id,e.source_key "
+                    "ON CONFLICT(owner_user_id,source_key) DO UPDATE SET "
+                    "downloaded_at=MAX(device_download_history.downloaded_at,"
+                    "excluded.downloaded_at)",
+                    (ROLE_USER,),
                 )
 
             for statement in (

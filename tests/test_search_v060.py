@@ -8,7 +8,17 @@ import pytest
 
 from app import search as search_module
 from app.constants import SEARCH_PAGE_CACHE_SECONDS, WBI_KEY_CACHE_SECONDS
-from app.search import NAV_URL, SEARCH_URL, SearchError, search_videos
+from app.search import (
+    CREATOR_PROFILE_URL,
+    CREATOR_SUBMISSIONS_URL,
+    NAV_URL,
+    SEARCH_URL,
+    SearchError,
+    creator_profile,
+    creator_submissions,
+    search_creators,
+    search_videos,
+)
 
 
 IMG_KEY_1 = "7cd084941338484aae1ad9425b84077c"
@@ -277,3 +287,177 @@ def test_search_response_merges_tags_download_and_deleted_state(client, monkeypa
     assert item["local_status"] == "deleted"
     assert item["local_status_label"] == "已删除"
     assert item["deleted_record"] is True
+
+
+def test_search_activity_state_is_scoped_to_selected_destination(
+    client,
+    monkeypatch,
+) -> None:
+    bvid = "BV1TARGET0001"
+
+    monkeypatch.setattr(
+        "app.routes.search_videos",
+        lambda keyword, **kwargs: {
+            "keyword": keyword,
+            "order": kwargs["order"],
+            "page": kwargs["page"],
+            "pages": 1,
+            "total": 1,
+            "items": [
+                {
+                    "bvid": bvid,
+                    "title": "目标隔离",
+                    "author": "测试UP",
+                    "cover": "",
+                    "url": f"https://www.bilibili.com/video/{bvid}",
+                }
+            ],
+            "cached": False,
+        },
+    )
+    monkeypatch.setattr(client.state_ref.queue, "key_statuses", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        client.state_ref.export_queue,
+        "key_statuses",
+        lambda *args, **kwargs: {
+            bvid: {
+                "id": "device-active",
+                "source_key": bvid,
+                "status": "queued",
+                "created_at": 1,
+            }
+        },
+    )
+
+    library = client.get(
+        "/api/search",
+        params={"q": "目标", "destination": "library", "fresh": "true"},
+    ).json()["data"]
+    device = client.get(
+        "/api/search",
+        params={"q": "目标", "destination": "device", "fresh": "true"},
+    ).json()["data"]
+
+    assert library["destination"] == "library"
+    assert library["items"][0]["local_status"] == "not_downloaded"
+    assert library["items"][0]["selectable"] is True
+    assert device["destination"] == "device"
+    assert device["items"][0]["local_status"] == "queued"
+    assert device["items"][0]["selectable"] is False
+
+
+def test_creator_name_profile_and_submission_discovery_share_wbi_safely(tmp_env) -> None:
+    class FakeCreatorClient(FakeSearchClient):
+        def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            if url in {NAV_URL, SEARCH_URL}:
+                if url == SEARCH_URL:
+                    self.calls.append((url, kwargs))
+                    return FakeResponse(
+                        {
+                            "code": 0,
+                            "data": {
+                                "numPages": 2,
+                                "numResults": 21,
+                                "result": [
+                                    {
+                                        "mid": 123456,
+                                        "uname": '<em class="keyword">测试</em>UP',
+                                        "upic": "//i0.hdslb.com/bfs/face/test.jpg",
+                                        "usign": "公开简介",
+                                        "fans": 99,
+                                        "videos": 41,
+                                    }
+                                ],
+                            },
+                        }
+                    )
+                return super().get(url, **kwargs)
+            self.calls.append((url, kwargs))
+            if url == CREATOR_PROFILE_URL:
+                return FakeResponse(
+                    {
+                        "code": 0,
+                        "data": {
+                            "archive_count": 41,
+                            "card": {
+                                "mid": "123456",
+                                "name": "测试UP",
+                                "face": "//i0.hdslb.com/bfs/face/test.jpg",
+                                "sign": "公开简介",
+                                "fans": 99,
+                            },
+                        },
+                    }
+                )
+            if url == CREATOR_SUBMISSIONS_URL:
+                return FakeResponse(
+                    {
+                        "code": 0,
+                        "data": {
+                            "page": {"count": 41},
+                            "list": {
+                                "vlist": [
+                                    {
+                                        "bvid": "BV1CREATOR01",
+                                        "title": "公开投稿",
+                                        "author": "测试UP",
+                                        "play": 123,
+                                        "length": "02:03",
+                                        "created": 1_700_000_000,
+                                        "pic": "//i0.hdslb.com/bfs/cover/test.jpg",
+                                    }
+                                ]
+                            },
+                        },
+                    }
+                )
+            raise AssertionError(f"unexpected URL: {url}")
+
+    fake = FakeCreatorClient()
+    candidates = search_creators(
+        "测试", page=2, bbdown_dir=tmp_env.bbdown_dir, client=fake
+    )
+    profile = creator_profile(
+        "123456", bbdown_dir=tmp_env.bbdown_dir, client=fake
+    )
+    submissions = creator_submissions(
+        "123456",
+        order="click",
+        page=2,
+        bbdown_dir=tmp_env.bbdown_dir,
+        client=fake,
+    )
+
+    assert candidates["page_size"] == 20
+    assert candidates["items"][0] == {
+        "uid": "123456",
+        "name": "测试UP",
+        "avatar": "https://i0.hdslb.com/bfs/face/test.jpg",
+        "bio": "公开简介",
+        "followers": 99,
+        "submission_count": 41,
+        "profile_url": "https://space.bilibili.com/123456",
+    }
+    assert profile["uid"] == "123456"
+    assert profile["submission_count"] == 41
+    assert submissions["page"] == 2
+    assert submissions["pages"] == 3
+    assert submissions["items"][0]["bvid"] == "BV1CREATOR01"
+    assert submissions["items"][0]["duration_seconds"] == 123
+    assert _url_counts(fake) == Counter(
+        {
+            SEARCH_URL: 1,
+            CREATOR_PROFILE_URL: 1,
+            CREATOR_SUBMISSIONS_URL: 1,
+            NAV_URL: 1,
+        }
+    )
+    signed_submission = next(
+        kwargs["params"]
+        for url, kwargs in fake.calls
+        if url == CREATOR_SUBMISSIONS_URL
+    )
+    assert signed_submission["mid"] == "123456"
+    assert signed_submission["order"] == "click"
+    assert signed_submission["pn"] == 2
+    assert signed_submission["ps"] == 20

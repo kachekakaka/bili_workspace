@@ -80,6 +80,48 @@ class TaskStore:
         )
         return int((row or {}).get("n") or 0)
 
+    def device_download_history_for_sources(
+        self,
+        owner_user_id: str,
+        source_keys: list[str],
+    ) -> dict[str, float]:
+        keys = list(dict.fromkeys(str(key or "").strip() for key in source_keys))
+        keys = [key for key in keys if key]
+        if not keys:
+            return {}
+        placeholders = ",".join("?" for _ in keys)
+        rows = self.database.all(
+            "SELECT source_key,downloaded_at FROM device_download_history "
+            f"WHERE owner_user_id=? AND source_key IN ({placeholders})",
+            tuple([str(owner_user_id), *keys]),
+        )
+        return {
+            str(row["source_key"]): float(row["downloaded_at"])
+            for row in rows
+        }
+
+    def export_states_for_sources(
+        self,
+        owner_user_id: str,
+        source_keys: list[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        keys = list(dict.fromkeys(str(key or "").strip() for key in source_keys))
+        keys = [key for key in keys if key]
+        if not keys:
+            return {}
+        placeholders = ",".join("?" for _ in keys)
+        rows = self.database.all(
+            "SELECT e.*,tr.status AS task_status FROM exports e "
+            "LEFT JOIN task_records tr ON tr.id=e.task_id "
+            f"WHERE e.owner_user_id=? AND e.source_key IN ({placeholders}) "
+            "ORDER BY e.created_at DESC,e.task_id DESC",
+            tuple([str(owner_user_id), *keys]),
+        )
+        result: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            result.setdefault(str(row["source_key"]), []).append(row)
+        return result
+
     @staticmethod
     def _decode_payload(row: dict[str, Any]) -> dict[str, Any]:
         raw = row.get("payload_json")
@@ -330,6 +372,98 @@ class TaskStore:
                     task,
                 )
 
+    def register_task_batch(
+        self,
+        destination: str,
+        tasks: list[dict[str, Any]],
+    ) -> list[str]:
+        if destination not in {"library", "device"}:
+            raise ValueError("下载目标无效")
+        prepared: list[tuple[str, dict[str, Any], str, float, str]] = []
+        now = time.time()
+        for task in tasks:
+            task_id = str(task.get("id") or "")
+            owner = str(task.get("owner_user_id") or "")
+            if not task_id or not owner:
+                raise sqlite3.IntegrityError("批量任务 ID 和拥有者不能为空")
+            value = dict(task)
+            value["owner_user_id"] = owner
+            value["destination"] = destination
+            value["log_tail"] = str(value.get("log_tail") or "")[-12_000:]
+            created_at = float(value.get("created_at") or now)
+            value["created_at"] = created_at
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            prepared.append((task_id, value, owner, created_at, encoded))
+
+        with self.database.transaction() as connection:
+            for task_id, value, owner, created_at, encoded in prepared:
+                connection.execute(
+                    "INSERT INTO task_records(id,owner_user_id,destination,source_key,bvid,"
+                    "title,status,created_at,started_at,finished_at,updated_at,payload_json) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        task_id,
+                        owner,
+                        destination,
+                        str(value.get("source_key") or value.get("key") or ""),
+                        value.get("bvid"),
+                        str(value.get("title") or value.get("display_title") or "")[:500],
+                        str(value.get("status") or "queued"),
+                        created_at,
+                        value.get("started_at"),
+                        value.get("finished_at"),
+                        now,
+                        encoded,
+                    ),
+                )
+                if destination == "device":
+                    preparing_expiry = now + max(
+                        self.runtime.export_ttl_sec, 7 * 24 * 3600
+                    )
+                    source_key = str(value.get("source_key") or value.get("key") or "")
+                    connection.execute(
+                        "INSERT INTO exports(task_id,owner_user_id,source_key,title,state,"
+                        "relative_path,filename,size,created_at,expires_at,downloaded_at,error,"
+                        "task_payload_json,cleanup_target_state) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (
+                            task_id,
+                            owner,
+                            source_key,
+                            str(value.get("title") or value.get("bvid") or source_key)[:500],
+                            "preparing",
+                            "",
+                            "",
+                            0,
+                            now,
+                            preparing_expiry,
+                            None,
+                            "",
+                            encoded,
+                            "",
+                        ),
+                    )
+        return [item[0] for item in prepared]
+
+    def rollback_registered_batch(self, task_ids: list[str]) -> None:
+        ids = [str(task_id) for task_id in task_ids if str(task_id)]
+        if not ids:
+            return
+        placeholders = ",".join("?" for _ in ids)
+        with self.database.transaction() as connection:
+            connection.execute(
+                f"DELETE FROM exports WHERE task_id IN ({placeholders})",
+                tuple(ids),
+            )
+            connection.execute(
+                f"DELETE FROM task_records WHERE id IN ({placeholders})",
+                tuple(ids),
+            )
+            connection.execute(
+                f"DELETE FROM task_snapshots WHERE task_id IN ({placeholders})",
+                tuple(ids),
+            )
+
     def register_export_task(self, task: dict[str, Any]) -> None:
         now = time.time()
         owner = str(task.get("owner_user_id") or self.default_owner_user_id())
@@ -344,7 +478,7 @@ class TaskStore:
         self.database.execute(
             "INSERT OR REPLACE INTO exports(task_id,owner_user_id,source_key,title,state,"
             "relative_path,filename,size,created_at,expires_at,downloaded_at,error,"
-            "task_payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "task_payload_json,cleanup_target_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task["id"],
                 owner,
@@ -359,6 +493,7 @@ class TaskStore:
                 None,
                 "",
                 json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                "",
             ),
         )
 
@@ -385,7 +520,7 @@ class TaskStore:
             raise KeyError("设备导出记录不存在")
         if row["state"] == "ready":
             return row
-        if row["state"] in {"downloaded", "expired", "discarded"}:
+        if row["state"] in {"downloaded", "expired", "discarded", "cleanup_pending"}:
             raise ValueError("设备导出文件已清理")
         task = dict(task or self.export_task_payload(task_id) or {})
         if task.get("status") != "success":
@@ -532,20 +667,56 @@ class TaskStore:
         return errors
 
     def complete_export(self, task_id: str) -> None:
+        now = time.time()
+        with self.database.transaction() as connection:
+            raw = connection.execute(
+                "SELECT * FROM exports WHERE task_id=?", (task_id,)
+            ).fetchone()
+            if raw is None:
+                return
+            row = dict(raw)
+            state = str(row.get("state") or "")
+            target = str(row.get("cleanup_target_state") or "")
+            if state == "cleanup_pending" and target != "downloaded":
+                return
+            if state not in {"ready", "cleanup_pending"}:
+                return
+            delivered_at = float(row.get("downloaded_at") or now)
+            connection.execute(
+                "UPDATE exports SET state='cleanup_pending',"
+                "downloaded_at=COALESCE(downloaded_at,?),"
+                "cleanup_target_state='downloaded' WHERE task_id=?",
+                (delivered_at, task_id),
+            )
+            owner = str(row.get("owner_user_id") or "")
+            source_key = str(row.get("source_key") or "").strip()
+            user = connection.execute(
+                "SELECT role FROM users WHERE id=?", (owner,)
+            ).fetchone()
+            if user is not None and str(user[0]) == ROLE_USER and source_key:
+                connection.execute(
+                    "INSERT INTO device_download_history(owner_user_id,source_key,downloaded_at) "
+                    "VALUES(?,?,?) ON CONFLICT(owner_user_id,source_key) DO UPDATE SET "
+                    "downloaded_at=MAX(device_download_history.downloaded_at,"
+                    "excluded.downloaded_at)",
+                    (owner, source_key, delivered_at),
+                )
+
         row = self.export_record(task_id)
-        if not row or row["state"] not in {"ready", "cleanup_pending"}:
+        if not row:
             return
         errors = self._cleanup_export_files(row)
         if errors:
             self.database.execute(
-                "UPDATE exports SET state='cleanup_pending',error=? WHERE task_id=?",
+                "UPDATE exports SET state='cleanup_pending',"
+                "cleanup_target_state='downloaded',error=? WHERE task_id=?",
                 ("; ".join(errors)[-3000:], task_id),
             )
             return
         self.database.execute(
-            "UPDATE exports SET state='downloaded',downloaded_at=?,error='' "
+            "UPDATE exports SET state='downloaded',cleanup_target_state='',error='' "
             "WHERE task_id=?",
-            (time.time(), task_id),
+            (task_id,),
         )
 
     def discard_export(self, task_id: str, state: str = "discarded") -> bool:
@@ -555,15 +726,33 @@ class TaskStore:
         errors = self._cleanup_export_files(row)
         if errors:
             self.database.execute(
-                "UPDATE exports SET state='cleanup_pending',error=? WHERE task_id=?",
-                ("; ".join(errors)[-3000:], task_id),
+                "UPDATE exports SET state='cleanup_pending',cleanup_target_state=?,"
+                "error=? WHERE task_id=?",
+                (state, "; ".join(errors)[-3000:], task_id),
             )
         else:
             self.database.execute(
-                "UPDATE exports SET state=?,error='' WHERE task_id=?",
+                "UPDATE exports SET state=?,cleanup_target_state='',error='' WHERE task_id=?",
                 (state, task_id),
             )
         return True
+
+    def retry_export_cleanup(self, task_id: str) -> None:
+        row = self.export_record(task_id)
+        if not row or str(row.get("state") or "") != "cleanup_pending":
+            return
+        target = str(row.get("cleanup_target_state") or "").strip() or "discarded"
+        errors = self._cleanup_export_files(row)
+        if errors:
+            self.database.execute(
+                "UPDATE exports SET error=? WHERE task_id=?",
+                ("; ".join(errors)[-3000:], task_id),
+            )
+            return
+        self.database.execute(
+            "UPDATE exports SET state=?,cleanup_target_state='',error='' WHERE task_id=?",
+            (target, task_id),
+        )
 
     def update_export_from_task(
         self,
@@ -716,7 +905,7 @@ class TaskStore:
                 )
                 for row in rows:
                     if row["state"] == "cleanup_pending":
-                        self.complete_export(str(row["task_id"]))
+                        self.retry_export_cleanup(str(row["task_id"]))
                     else:
                         self.discard_export(str(row["task_id"]), "expired")
                 self.cleanup_task_history(now=now)

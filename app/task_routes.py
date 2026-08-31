@@ -41,7 +41,7 @@ from app.models import (
     TaskActionRequest,
     TaskBatchRequest,
 )
-from app.queue import QueueFullError
+from app.queue import BatchConflictError, QueueFullError
 
 task_router = APIRouter(prefix="/api", tags=["tasks"])
 
@@ -50,6 +50,29 @@ class OwnershipDownloadRequest(DownloadRequest):
     # Explicit identity fields and any other legacy client extras are ignored.
     # The owner is always derived from request.state.auth_context.
     model_config = ConfigDict(extra="ignore")
+
+
+def _normal_download_metadata(metadata: dict[str, dict[str, Any]]) -> None:
+    """Apply the ordinary-user quality policy at the trusted boundary."""
+    for item in metadata.values():
+        item["preferred_quality"] = ""
+
+
+def _selection_conflicts(
+    targets,
+    *,
+    code: str,
+    message: str,
+) -> list[dict[str, str]]:
+    return [
+        {
+            "source_key": str(target.key or ""),
+            "bvid": str(target.bvid or ""),
+            "code": code,
+            "message": message,
+        }
+        for target in targets
+    ]
 
 
 def _auth(request: Request) -> dict[str, Any]:
@@ -189,6 +212,14 @@ def status(request: Request, refresh_login: bool = False):
 
 @task_router.post("/preview")
 def preview(request: Request, body: PreviewRequest):
+    if not _is_admin(_auth(request)):
+        body = body.model_copy(
+            update={
+                "item": body.item.model_copy(update={"preferred_quality": ""}),
+                "min_height": _state(request).config_store.get().default_min_height,
+                "preferred_quality": "",
+            }
+        )
     return preview_response(request, body)
 
 
@@ -204,6 +235,10 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
     force = False if normal_user else body.force
     try:
         targets, metadata = _parse_download_body(body)
+        effective_min_height = body.min_height
+        if normal_user:
+            effective_min_height = state.config_store.get().default_min_height
+            _normal_download_metadata(metadata)
         if destination == "device":
             for target in targets:
                 record = state.task_store.active_export_for_source(
@@ -221,7 +256,7 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
                 metadata=metadata,
                 group="设备导出",
                 group_folder="device",
-                min_height=body.min_height,
+                min_height=effective_min_height,
                 owner_user_id=owner_user_id,
                 owner_active_limit=(
                     NORMAL_USER_ACTIVE_TASK_LIMIT if normal_user else None
@@ -240,7 +275,7 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
                 group=group["display_name"],
                 group_id=group["id"],
                 group_folder=group["folder_key"],
-                min_height=body.min_height,
+                min_height=effective_min_height,
                 owner_user_id=owner_user_id,
             )
             tasks = [_decorate_task(state, task, "library") for task in tasks]
@@ -252,6 +287,157 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
         task["owner_user_id"] = owner_user_id
         _audit_task(request, "download.enqueue", task)
     return ok(tasks, total=len(tasks), limit=MAX_BATCH_ITEMS)
+
+
+@task_router.post("/download/selection")
+def create_download_selection(request: Request, body: OwnershipDownloadRequest):
+    """Create a discovered selection atomically: every item queues, or none do."""
+    state = _state(request)
+    auth = _auth(request)
+    owner_user_id = str(auth["user_id"])
+    normal_user = not _is_admin(auth)
+    destination = "device" if normal_user else body.destination
+    group_id = "" if normal_user else body.group_id
+    group_name = "" if normal_user else body.group
+    force = False if normal_user else body.force
+    persisted_ids: list[str] = []
+    published = False
+
+    try:
+        targets, metadata = _parse_download_body(body)
+        effective_min_height = body.min_height
+        if normal_user:
+            effective_min_height = state.config_store.get().default_min_height
+            _normal_download_metadata(metadata)
+
+        if destination == "device":
+            export_conflicts: list[dict[str, str]] = []
+            export_states = state.task_store.export_states_for_sources(
+                owner_user_id, [target.key for target in targets]
+            )
+            now = time.time()
+            for target in targets:
+                claimable = next(
+                    (
+                        row
+                        for row in export_states.get(target.key, [])
+                        if str(row.get("state") or "") in {"preparing", "ready"}
+                        and str(row.get("task_status") or "") == "success"
+                        and float(row.get("expires_at") or 0) > now
+                    ),
+                    None,
+                )
+                if claimable:
+                    export_conflicts.append(
+                        {
+                            "source_key": str(target.key or ""),
+                            "bvid": str(target.bvid or ""),
+                            "code": "claimable_export",
+                            "message": "已有尚未领取或过期的设备导出",
+                        }
+                    )
+            if export_conflicts:
+                return err(
+                    "所选作品中存在待领取的设备导出，未创建任何任务",
+                    409,
+                    code="batch_conflict",
+                    data={"items": export_conflicts},
+                )
+
+        active = state.queue.active_count_for_owner(
+            owner_user_id
+        ) + state.export_queue.active_count_for_owner(owner_user_id)
+        selection_limit = (
+            MAX_BATCH_ITEMS
+            if not normal_user
+            else max(0, NORMAL_USER_ACTIVE_TASK_LIMIT - active)
+        )
+        if len(targets) > selection_limit:
+            conflicts = _selection_conflicts(
+                targets,
+                code="active_task_limit",
+                message=f"当前最多还能创建 {selection_limit} 个任务",
+            )
+            return err(
+                f"当前最多还能创建 {selection_limit} 个任务，未创建任何任务",
+                429,
+                code="active_task_limit",
+                data={"items": conflicts, "selection_limit": selection_limit},
+            )
+
+        def persist_batch(items: list[dict[str, Any]]) -> None:
+            persisted_ids.extend(
+                state.task_store.register_task_batch(destination, items)
+            )
+
+        if destination == "device":
+            tasks = state.export_queue.enqueue(
+                targets,
+                force=True,
+                metadata=metadata,
+                group="设备导出",
+                group_folder="device",
+                min_height=effective_min_height,
+                owner_user_id=owner_user_id,
+                owner_active_limit=(
+                    NORMAL_USER_ACTIVE_TASK_LIMIT if normal_user else None
+                ),
+                strict=True,
+                before_publish=persist_batch,
+            )
+            published = True
+            tasks = [_decorate_task(state, task, "device") for task in tasks]
+        else:
+            group = state.catalog_store.resolve_group(group_id, group_name)
+            tasks = state.queue.enqueue(
+                targets,
+                force=force,
+                metadata=metadata,
+                group=group["display_name"],
+                group_id=group["id"],
+                group_folder=group["folder_key"],
+                min_height=effective_min_height,
+                owner_user_id=owner_user_id,
+                strict=True,
+                before_publish=persist_batch,
+            )
+            published = True
+            tasks = [_decorate_task(state, task, "library") for task in tasks]
+    except BatchConflictError as exc:
+        return err(
+            str(exc),
+            409,
+            code="batch_conflict",
+            data={"items": exc.reasons},
+        )
+    except QueueFullError as exc:
+        return err(
+            str(exc),
+            429,
+            code="active_task_limit",
+            data={
+                "items": _selection_conflicts(
+                    locals().get("targets", []),
+                    code="active_task_limit",
+                    message="队列容量不足",
+                )
+            },
+        )
+    except ValueError as exc:
+        return err(str(exc))
+    except Exception:
+        if persisted_ids and not published:
+            state.task_store.rollback_registered_batch(persisted_ids)
+        return err(
+            "批量任务暂时无法创建，请稍后重试",
+            500,
+            code="batch_create_failed",
+        )
+
+    for task in tasks:
+        task["owner_user_id"] = owner_user_id
+        _audit_task(request, "download.selection.enqueue", task)
+    return ok(tasks, total=len(tasks), limit=selection_limit)
 
 
 @task_router.get("/tasks")
@@ -378,11 +564,16 @@ def _apply_task_action(
             raise QueueFullError(
                 f"当前账号活动任务已达到上限 {NORMAL_USER_ACTIVE_TASK_LIMIT} 个"
             )
+        retry_min_height = body.min_height
+        retry_preferred_quality = body.preferred_quality
+        if not _is_admin(auth):
+            retry_min_height = state.config_store.get().default_min_height
+            retry_preferred_quality = ""
         task = queue.retry(
             task_id,
             force=True if record["destination"] == "device" else body.force,
-            min_height=body.min_height,
-            preferred_quality=body.preferred_quality,
+            min_height=retry_min_height,
+            preferred_quality=retry_preferred_quality,
         )
         if record["destination"] == "device":
             task["owner_user_id"] = str(record["owner_user_id"])

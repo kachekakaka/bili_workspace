@@ -43,14 +43,21 @@ def test_frontend_search_and_library_are_integrated_without_overlay_competition(
         "模糊：标题包含任意词",
         "屏蔽已下载和已删除",
         "AbortController",
-        "requestIdleCallback",
-        "navigator?.connection",
         "刷新B站结果",
         "本页没有标题匹配项，可查看下一页；系统不会自动抓取全部页面。",
         "仍停留在搜索页",
+        "mountSubmissionBrowser",
+        "/api/download/selection",
     ):
         assert token in search
-    for forbidden in ("tags/bulk", "MutationObserver", "insertBefore", "enh-spacer"):
+    for forbidden in (
+        "tags/bulk",
+        "MutationObserver",
+        "insertBefore",
+        "enh-spacer",
+        "requestIdleCallback",
+        "navigator?.connection",
+    ):
         assert forbidden not in search
     for token in (
         "无标签",

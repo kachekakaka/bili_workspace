@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from typing import Annotated
+import time
+from typing import Annotated, Literal
 
 import httpx
 from urllib.parse import urlparse
@@ -15,7 +16,10 @@ from app import __version__
 from app.auth import ROLE_ADMIN
 from app.bbdown import find_ffmpeg
 from app.constants import (
+    AUTO_SCAN_PAGE_LIMIT,
+    DISCOVERY_PAGE_SIZE,
     MAX_BATCH_ITEMS,
+    NORMAL_USER_ACTIVE_TASK_LIMIT,
     SESSION_ABSOLUTE_DAYS,
 )
 from app.index_store import UnsafeIndexPathError
@@ -40,9 +44,15 @@ from app.models import (
     PreviewRequest,
     WatchProgressRequest,
 )
-from app.search import SearchError, search_videos
+from app.search import (
+    SearchError,
+    creator_profile,
+    creator_submissions,
+    search_creators,
+    search_videos,
+)
 from app.state import AppState
-from app.urls import Target, parse_inputs
+from app.urls import Target, parse_creator_locator, parse_inputs
 
 account_router = APIRouter(prefix="/api", tags=["account"])
 system_router = APIRouter(prefix="/api", tags=["system"])
@@ -56,6 +66,9 @@ _LOCAL_STATUS_LABELS = {
     "running": "下载中",
     "failed": "下载失败",
     "cancelled": "已取消",
+    "expired": "已过期",
+    "ready": "待领取",
+    "deleted": "已删除",
     "index_error": "索引异常",
 }
 
@@ -85,10 +98,21 @@ def ok(data=None, **extra):
     return body
 
 
-def err(message: str, status_code: int = 400, *, code: str = ""):
+def err(
+    message: str,
+    status_code: int = 400,
+    *,
+    code: str = "",
+    data=None,
+    detail=None,
+):
     body = {"ok": False, "error": message}
     if code:
         body["code"] = code
+    if data is not None:
+        body["data"] = data
+    if detail is not None:
+        body["detail"] = detail
     return JSONResponse(body, status_code=status_code)
 
 
@@ -169,22 +193,88 @@ def _parse_download_body(body: DownloadRequest) -> tuple[list[Target], dict[str,
     return result, metadata
 
 
-def _decorate_search_items(state: AppState, data: dict) -> dict:
+def _owner_task_states(
+    state: AppState,
+    keys: list[str],
+    owner_user_id: str,
+    destination: Literal["library", "device"],
+) -> dict[str, dict]:
+    queue = state.export_queue if destination == "device" else state.queue
+    return queue.key_statuses(keys, owner_user_id=owner_user_id)
+
+
+def _claimable_and_terminal_exports(
+    state: AppState,
+    owner_user_id: str,
+    keys: list[str],
+) -> tuple[dict[str, dict], dict[str, dict]]:
+    by_key = state.task_store.export_states_for_sources(owner_user_id, keys)
+    now = time.time()
+    claimable: dict[str, dict] = {}
+    terminal: dict[str, dict] = {}
+    for key, rows in by_key.items():
+        for row in rows:
+            export_state = str(row.get("state") or "")
+            task_status = str(row.get("task_status") or "")
+            if (
+                key not in claimable
+                and export_state in {"preparing", "ready"}
+                and task_status == "success"
+                and float(row.get("expires_at") or 0) > now
+            ):
+                claimable[key] = row
+            if key not in terminal and export_state in {"failed", "cancelled", "expired"}:
+                terminal[key] = row
+    return claimable, terminal
+
+
+def _decorate_search_items(
+    request: Request,
+    data: dict,
+    destination: Literal["library", "device"] = "library",
+) -> dict:
+    state = _state(request)
     items = data.get("items") or []
     keys = [str(item.get("bvid") or "") for item in items if item.get("bvid")]
-    task_states = state.queue.key_statuses(keys)
+    session = _session(request) or {}
+    owner_user_id = str(session.get("user_id") or "")
+    is_admin = str(session.get("role") or "") == ROLE_ADMIN
+    selected_destination = _creator_destination(request, destination)
+    task_states = _owner_task_states(
+        state,
+        keys,
+        owner_user_id,
+        selected_destination,
+    )
+    claimable, export_terminal = (
+        _claimable_and_terminal_exports(state, owner_user_id, keys)
+        if selected_destination == "device"
+        else ({}, {})
+    )
+    downloaded_by_user = (
+        {}
+        if is_admin or selected_destination != "device"
+        else state.task_store.device_download_history_for_sources(owner_user_id, keys)
+    )
+    tags_by_key = state.tag_store.tags_for_keys(keys) if is_admin else {}
+    tombstones = state.deletion_store.for_keys(keys) if is_admin else {}
+    restored: list[str] = []
     for item in items:
         item["cover"] = _safe_cover_url(str(item.get("cover") or ""))
         key = str(item.get("bvid") or "")
         local_status, task_id, output_path = "not_downloaded", "", ""
         downloaded_at, local_group, local_quality = None, "", ""
         task = task_states.get(key)
-        if task and task.get("status") in ("queued", "running"):
+        ready = claimable.get(key)
+        if ready:
+            local_status = "ready"
+            task_id = str(ready.get("task_id") or "")
+        elif task and task.get("status") in ("queued", "running"):
             local_status = str(task["status"])
             task_id = str(task.get("id") or "")
             local_group = str(task.get("group") or "")
             local_quality = str(task.get("quality_summary") or task.get("selected_quality") or "")
-        else:
+        elif is_admin:
             try:
                 indexed = state.index.get_valid(key)
             except UnsafeIndexPathError:
@@ -201,49 +291,85 @@ def _decorate_search_items(state: AppState, data: dict) -> dict:
                 task_id = str(task.get("id") or "")
                 local_group = str(task.get("group") or "")
                 local_quality = str(task.get("quality_summary") or task.get("selected_quality") or "")
+            elif key in export_terminal:
+                local_status = str(export_terminal[key].get("state") or "failed")
+                task_id = str(export_terminal[key].get("task_id") or "")
+        elif key in downloaded_by_user:
+            local_status = "downloaded"
+            downloaded_at = downloaded_by_user[key]
+        elif task and task.get("status") in {"failed", "cancelled"}:
+            local_status = str(task["status"])
+            task_id = str(task.get("id") or "")
+        elif key in export_terminal:
+            local_status = str(export_terminal[key].get("state") or "failed")
+            task_id = str(export_terminal[key].get("task_id") or "")
+
+        if is_admin:
+            deleted = tombstones.get(key)
+            if local_status == "downloaded":
+                if deleted:
+                    restored.append(key)
+            elif local_status not in {"ready", "queued", "running"} and deleted:
+                local_status = "deleted"
         item.update(
             local_status=local_status,
             local_status_label=_LOCAL_STATUS_LABELS.get(local_status, local_status),
             task_id=task_id,
-            output_path=output_path,
             downloaded_at=downloaded_at,
-            local_group=local_group,
-            local_quality=local_quality,
+            selectable=local_status not in {"ready", "queued", "running"},
+            block_reason=(
+                "已有待领取设备导出"
+                if local_status == "ready"
+                else "同一作品已有活动任务"
+                if local_status in {"queued", "running"}
+                else ""
+            ),
         )
-    return data
-
-
-def _decorate_search_catalog(request: Request, data: dict) -> dict:
-    state = _state(request)
-    data = _decorate_search_items(state, data)
-    items = data.get("items") or []
-    keys = [str(item.get("bvid") or "").strip() for item in items]
-    keys = [key for key in keys if key]
-    tags_by_key = state.tag_store.tags_for_keys(keys)
-    tombstones = state.deletion_store.for_keys(keys)
-    restored: list[str] = []
-    for item in items:
-        key = str(item.get("bvid") or "").strip()
-        item["tags"] = list(tags_by_key.get(key, []))
-        item["deleted_record"] = False
-        status = str(item.get("local_status") or "")
-        if status == "downloaded":
-            if key in tombstones:
-                restored.append(key)
-            continue
-        if status in {"queued", "running"}:
-            continue
-        deleted = tombstones.get(key)
-        if deleted:
+        if is_admin:
             item.update(
-                local_status="deleted",
-                local_status_label="已删除",
-                deleted_at=deleted.get("deleted_at"),
-                deleted_record=True,
+                output_path=output_path,
+                local_group=local_group,
+                local_quality=local_quality,
+                tags=list(tags_by_key.get(key, [])),
+                deleted_record=local_status == "deleted",
+                deleted_at=(tombstones.get(key) or {}).get("deleted_at"),
             )
     if restored:
         state.deletion_store.clear(restored)
     return data
+
+
+def _decorate_search_catalog(
+    request: Request,
+    data: dict,
+    destination: Literal["library", "device"] = "library",
+) -> dict:
+    state = _state(request)
+    selected_destination = _creator_destination(request, destination)
+    data = _decorate_search_items(request, data, selected_destination)
+    session = _session(request) or {}
+    is_admin = str(session.get("role") or "") == ROLE_ADMIN
+    owner_user_id = str(session.get("user_id") or "")
+    active = state.queue.active_count_for_owner(owner_user_id) + state.export_queue.active_count_for_owner(owner_user_id)
+    selection_limit = MAX_BATCH_ITEMS if is_admin else max(
+        0, NORMAL_USER_ACTIVE_TASK_LIMIT - active
+    )
+    data["limits"] = {
+        "page_size": DISCOVERY_PAGE_SIZE,
+        "auto_scan_pages": AUTO_SCAN_PAGE_LIMIT,
+        "selection": selection_limit,
+        "active_tasks": active,
+    }
+    data["destination"] = selected_destination
+    return data
+
+
+def _search_error_response(exc: SearchError):
+    return err(
+        exc.public_message,
+        exc.status_code,
+        code=exc.code,
+    )
 
 
 def _remote(request: Request) -> str:
@@ -680,6 +806,7 @@ def api_search(
     order: str = Query(default="totalrank", max_length=32),
     page: int = Query(default=1, ge=1, le=1000),
     fresh: bool = Query(default=False),
+    destination: Literal["library", "device"] = "library",
 ):
     state = _state(request)
     try:
@@ -690,11 +817,131 @@ def api_search(
             bbdown_dir=state.runtime.bbdown_credentials_dir,
             fresh=fresh,
         )
-        data = _decorate_search_catalog(request, data)
+        data = _decorate_search_catalog(request, data, destination)
     except SearchError as exc:
-        return err(str(exc))
-    except Exception as exc:  # noqa: BLE001
-        return err(f"搜索失败: {exc}", 502)
+        return _search_error_response(exc)
+    except Exception:  # noqa: BLE001
+        return err("Bilibili 搜索暂时不可用，请稍后重试", 502, code="bilibili_unavailable")
+    return ok(data)
+
+
+@catalog_router.get("/bilibili/creators/search")
+def api_creator_search(
+    request: Request,
+    q: str = Query(default="", max_length=100),
+    page: int = Query(default=1, ge=1, le=1000),
+    fresh: bool = Query(default=False),
+):
+    required = _require_admin(request)
+    if isinstance(required, JSONResponse):
+        return required
+    state = _state(request)
+    try:
+        data = search_creators(
+            q,
+            page=page,
+            bbdown_dir=state.runtime.bbdown_credentials_dir,
+            fresh=fresh,
+        )
+        for item in data.get("items") or []:
+            item["avatar"] = _safe_cover_url(str(item.get("avatar") or ""))
+    except SearchError as exc:
+        return _search_error_response(exc)
+    except Exception:  # noqa: BLE001
+        return err("UP 主名称搜索暂时不可用，请稍后重试", 502, code="bilibili_unavailable")
+    return ok(data)
+
+
+def _creator_destination(request: Request, requested: str) -> Literal["library", "device"]:
+    session = _session(request) or {}
+    if str(session.get("role") or "") != ROLE_ADMIN:
+        return "device"
+    return "device" if requested == "device" else "library"
+
+
+@catalog_router.get("/bilibili/creators/resolve")
+def api_creator_resolve(
+    request: Request,
+    locator: str = Query(default="", max_length=2048),
+    order: Literal["pubdate", "click"] = "pubdate",
+    destination: Literal["library", "device"] = "library",
+    fresh: bool = Query(default=False),
+):
+    state = _state(request)
+    try:
+        uid = parse_creator_locator(locator)
+        profile = creator_profile(
+            uid,
+            bbdown_dir=state.runtime.bbdown_credentials_dir,
+            fresh=fresh,
+        )
+        submissions = creator_submissions(
+            uid,
+            order=order,
+            page=1,
+            bbdown_dir=state.runtime.bbdown_credentials_dir,
+            fresh=fresh,
+        )
+        selected_destination = _creator_destination(request, destination)
+        submissions = _decorate_search_catalog(
+            request,
+            submissions,
+            selected_destination,
+        )
+        profile = dict(profile)
+        profile_cached = bool(profile.pop("cached", False))
+        profile["avatar"] = _safe_cover_url(str(profile.get("avatar") or ""))
+        has_public_videos = int(submissions.get("total") or 0) > 0
+        result = {
+            "state": "ready" if has_public_videos else "no_public_videos",
+            "code": "" if has_public_videos else "creator_no_public_videos",
+            "creator": profile,
+            "submissions": submissions,
+            "cached": profile_cached and bool(submissions.get("cached")),
+        }
+    except ValueError as exc:
+        return err(str(exc), 400, code="invalid_creator_locator")
+    except SearchError as exc:
+        return _search_error_response(exc)
+    except Exception:  # noqa: BLE001
+        return err(
+            "暂时无法读取这个 UP 主，请稍后重试或联系管理员检查 Bilibili 登录",
+            502,
+            code="creator_inaccessible",
+        )
+    return ok(result)
+
+
+@catalog_router.get("/bilibili/creators/{uid}/submissions")
+def api_creator_submissions(
+    request: Request,
+    uid: str,
+    order: Literal["pubdate", "click"] = "pubdate",
+    page: int = Query(default=1, ge=1, le=1000),
+    fresh: bool = Query(default=False),
+    destination: Literal["library", "device"] = "library",
+):
+    state = _state(request)
+    try:
+        canonical_uid = parse_creator_locator(uid)
+        data = creator_submissions(
+            canonical_uid,
+            order=order,
+            page=page,
+            bbdown_dir=state.runtime.bbdown_credentials_dir,
+            fresh=fresh,
+        )
+        data = _decorate_search_catalog(request, data, destination)
+    except ValueError as exc:
+        return err(str(exc), 400, code="invalid_creator_locator")
+    except SearchError as exc:
+        return _search_error_response(exc)
+    except Exception:  # noqa: BLE001
+        return err(
+            "暂时无法读取这个 UP 主的投稿，请稍后重试",
+            502,
+            code="creator_inaccessible",
+        )
     return ok(data)
 
 

@@ -4,7 +4,6 @@ import {
   readLru,
   SEARCH_PAGE_LRU_LIMIT,
   searchPageKey,
-  shouldPrefetchNextPage,
   splitTitleTerms,
   writeLru,
 } from '../core/search-policy.mjs';
@@ -17,6 +16,11 @@ import {
   qualityOptions,
 } from './shared.mjs';
 import { libraryTagColor } from './library.mjs';
+import { submissionScanDecision } from '../core/submission-policy.mjs';
+import {
+  clearSubmissionSessionState,
+  mountSubmissionBrowser,
+} from './submission-browser.mjs';
 
 const BLOCKED_STATUSES = new Set(['downloaded', 'deleted']);
 const FILTER_MODES = new Set(['raw', 'all', 'any']);
@@ -29,6 +33,7 @@ const searchState = {
   data: null,
   cache: new Map(),
   selected: new Map(),
+  conflicts: new Map(),
   hideDownloaded: true,
   filterMode: 'raw',
   filterText: '',
@@ -36,33 +41,22 @@ const searchState = {
   destination: 'library',
   groupId: '',
   minHeight: 1080,
+  limits: { selection: 100 },
   requestGeneration: 0,
   currentController: null,
-  preloadController: null,
-  preloadHandle: 0,
-  preloadHandleType: '',
   sessionKey: '',
+  discoveryMode: 'keyword',
+  scan: null,
+  failedPage: null,
 };
 
-function cancelSearchPreload() {
-  if (!searchState.preloadHandle) return;
-  if (searchState.preloadHandleType === 'idle' && globalThis.cancelIdleCallback) {
-    globalThis.cancelIdleCallback(searchState.preloadHandle);
-  } else {
-    globalThis.clearTimeout(searchState.preloadHandle);
-  }
-  searchState.preloadHandle = 0;
-  searchState.preloadHandleType = '';
-}
-
 export function clearSearchSessionState() {
-  cancelSearchPreload();
+  clearSubmissionSessionState();
   searchState.currentController?.abort();
-  searchState.preloadController?.abort();
   searchState.currentController = null;
-  searchState.preloadController = null;
   searchState.cache.clear();
   searchState.selected.clear();
+  searchState.conflicts.clear();
   Object.assign(searchState, {
     q: '',
     order: 'totalrank',
@@ -77,7 +71,11 @@ export function clearSearchSessionState() {
     destination: 'library',
     groupId: '',
     minHeight: 1080,
+    limits: { selection: 100 },
     sessionKey: '',
+    discoveryMode: 'keyword',
+    scan: null,
+    failedPage: null,
     requestGeneration: searchState.requestGeneration + 1,
   });
 }
@@ -159,8 +157,10 @@ function visibleSearchItems() {
 function searchCard(item, tags) {
   const selected = searchState.selected.has(item.bvid);
   const repeated = BLOCKED_STATUSES.has(String(item.local_status || ''));
+  const selectable = item.selectable !== false;
+  const conflict = searchState.conflicts.get(item.bvid);
   const sourceUrl = item.url || `https://www.bilibili.com/video/${encodeURIComponent(item.bvid || '')}`;
-  return `<article class="media-card enh-search-card" data-search-key="${esc(item.bvid)}"><div class="cover-wrap"><img data-cover-img src="${esc(coverUrl(item.cover))}" alt="${esc(item.title)}" loading="lazy" referrerpolicy="no-referrer"><label class="enh-card-select"><input type="checkbox" data-search-select="${esc(item.bvid)}" ${selected ? 'checked' : ''}> 选择</label><div class="cover-badges"><span></span><span class="badge ${searchStatusClass(item.local_status)}">${esc(item.local_status_label || '未下载')}</span></div>${item.duration ? `<span class="duration-chip">${esc(item.duration)}</span>` : ''}</div><div class="media-body"><a class="media-title" href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.bvid)}</a><div class="media-meta"><span>${esc(item.author || '-')}</span><span>${formatPlay(item.play)} 播放</span><span>${formatDate(item.pubdate, true)}</span></div><div class="media-meta"><span>${esc(item.bvid)}</span>${item.local_group ? `<span>分组：${esc(item.local_group)}</span>` : ''}${item.local_quality ? `<span>${esc(item.local_quality)}</span>` : ''}</div>${tagChips(tags, item.bvid, item.tags)}<div class="media-actions"><a class="btn small" href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">B站原页面</a><button type="button" class="btn small" data-search-preview="${esc(item.bvid)}">预览画质</button><button type="button" class="btn primary small" data-search-download="${esc(item.bvid)}">${repeated ? '重新下载' : '下载'}</button></div></div></article>`;
+  return `<article class="media-card enh-search-card" data-search-key="${esc(item.bvid)}"><div class="cover-wrap"><img data-cover-img src="${esc(coverUrl(item.cover))}" alt="${esc(item.title)}" loading="lazy" referrerpolicy="no-referrer"><label class="enh-card-select"><input type="checkbox" data-search-select="${esc(item.bvid)}" ${selected ? 'checked' : ''} ${selectable ? '' : 'disabled'}> 选择</label><div class="cover-badges"><span></span><span class="badge ${searchStatusClass(item.local_status)}">${esc(item.local_status_label || '未下载')}</span></div>${item.duration ? `<span class="duration-chip">${esc(item.duration)}</span>` : ''}</div><div class="media-body"><a class="media-title" href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">${esc(item.title || item.bvid)}</a><div class="media-meta"><span>${esc(item.author || '-')}</span><span>${formatPlay(item.play)} 播放</span><span>${formatDate(item.pubdate, true)}</span></div><div class="media-meta"><span>${esc(item.bvid)}</span>${item.local_group ? `<span>分组：${esc(item.local_group)}</span>` : ''}${item.local_quality ? `<span>${esc(item.local_quality)}</span>` : ''}</div>${item.block_reason ? `<div class="notice warn compact">${esc(item.block_reason)}</div>` : ''}${conflict ? `<div class="notice bad compact">${esc(conflict.message || '创建任务时发生冲突')}</div>` : ''}${tagChips(tags, item.bvid, item.tags)}<div class="media-actions"><a class="btn small" href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">B站原页面</a><button type="button" class="btn small" data-search-preview="${esc(item.bvid)}">预览画质</button><button type="button" class="btn primary small" data-search-download="${esc(item.bvid)}" ${selectable ? '' : 'disabled'}>${repeated ? '重新下载' : '下载'}</button></div></div></article>`;
 }
 
 async function mapLimit(items, limit, callback) {
@@ -187,19 +187,64 @@ export async function mount(root, context) {
   const groups = context.shared.get().groups || [];
   const tags = context.shared.get().tags || [];
   if (!FILTER_MODES.has(searchState.filterMode)) searchState.filterMode = 'raw';
+  const keywordContent = document.createElement('div');
+  keywordContent.innerHTML = `<div data-enhanced-view="search"><section class="card enh-search-panel"><div class="card-head"><div><h2>搜索 Bilibili 作品</h2><p>每次只加载 Bilibili 当前页；精准和模糊只在浏览器中筛选当前页标题。</p></div><span class="badge brand">当前页原始结果</span></div><div class="enh-search-primary-grid"><div class="field enh-search-query-field"><label>B站关键词</label><input id="enhSearchQuery" class="input" value="${esc(searchState.q)}" placeholder="输入交给 Bilibili 的原始关键词"></div><div class="field"><label>B站排序</label><select id="enhSearchOrder" class="select"><option value="totalrank">综合排序</option><option value="click">播放最多</option><option value="pubdate">最新发布</option></select></div><div class="field enh-search-primary-actions-field"><label>读取结果</label><div class="enh-search-primary-actions"><button type="button" id="enhSearchButton" class="btn primary">搜索</button><button type="button" id="enhSearchRefresh" class="btn">刷新B站结果</button></div></div></div><div class="enh-search-secondary-grid"><div class="field"><label>标题二级筛选</label><div class="segmented enh-search-filter-modes" role="group" aria-label="标题二级筛选模式"><button type="button" data-search-filter-mode="raw">不筛选</button><button type="button" data-search-filter-mode="all" title="精准：标题包含全部词">精准</button><button type="button" data-search-filter-mode="any" title="模糊：标题包含任意词">模糊</button></div></div><div class="field"><label>当前页标题筛选词</label><input id="enhSearchTitleFilter" class="input" value="${esc(searchState.filterText)}" placeholder="可与 B站关键词不同；修改不会联网"><small id="enhSearchFilterHelp">${esc(filterHelpText())}</small></div><div class="field enh-search-block-field"><label>本地状态</label><label class="enh-check"><input id="enhHideDownloaded" type="checkbox" ${searchState.hideDownloaded ? 'checked' : ''}> 屏蔽已下载和已删除</label><small>关闭后可辨识并确认重新下载。</small></div></div></section><section class="card enh-search-download-panel" style="margin-top:16px"><div class="enh-search-options-grid"><div class="field"><label>下载目标</label><select id="enhSearchDestination" class="select"><option value="library">保存到媒体库</option><option value="device">导出到当前设备</option></select></div><div class="field" id="enhSearchGroupField"><label>保存分组</label><select id="enhSearchGroup" class="select">${groupOptions(groups, searchState.groupId)}</select></div><div class="field"><label>最低清晰度</label><select id="enhSearchQuality" class="select">${qualityOptions(searchState.minHeight)}</select></div></div><div class="enh-batch-layout enh-search-batch-layout"><span id="enhSearchSummary" class="metric-foot">输入关键词后搜索</span><div class="enh-batch-actions"><button type="button" id="enhSearchSelectVisible" class="btn small">全选当前结果</button><button type="button" id="enhSearchClear" class="btn small">清空选择</button><select id="enhSearchBatchTag" class="select enh-inline-select">${tagOptions(tags)}</select><button type="button" id="enhSearchAddTag" class="btn small">给选中项加标签</button><button type="button" id="enhSearchDownloadSelected" class="btn primary small">下载选中（${searchState.selected.size}）</button></div></div></section><section id="enhSearchResults" style="margin-top:16px"></section></div>`;
   const host = document.createElement('div');
-  host.innerHTML = `<div data-enhanced-view="search"><section class="card enh-search-panel"><div class="card-head"><div><h2>搜索 Bilibili 作品</h2><p>每次只加载 Bilibili 当前页；精准和模糊只在浏览器中筛选当前页标题。</p></div><span class="badge brand">当前页原始结果</span></div><div class="enh-search-primary-grid"><div class="field enh-search-query-field"><label>B站关键词</label><input id="enhSearchQuery" class="input" value="${esc(searchState.q)}" placeholder="输入交给 Bilibili 的原始关键词"></div><div class="field"><label>B站排序</label><select id="enhSearchOrder" class="select"><option value="totalrank">综合排序</option><option value="click">播放最多</option><option value="pubdate">最新发布</option></select></div><div class="field enh-search-primary-actions-field"><label>读取结果</label><div class="enh-search-primary-actions"><button type="button" id="enhSearchButton" class="btn primary">搜索</button><button type="button" id="enhSearchRefresh" class="btn">刷新B站结果</button></div></div></div><div class="enh-search-secondary-grid"><div class="field"><label>标题二级筛选</label><div class="segmented enh-search-filter-modes" role="group" aria-label="标题二级筛选模式"><button type="button" data-search-filter-mode="raw">不筛选</button><button type="button" data-search-filter-mode="all" title="精准：标题包含全部词">精准</button><button type="button" data-search-filter-mode="any" title="模糊：标题包含任意词">模糊</button></div></div><div class="field"><label>当前页标题筛选词</label><input id="enhSearchTitleFilter" class="input" value="${esc(searchState.filterText)}" placeholder="可与 B站关键词不同；修改不会联网"><small id="enhSearchFilterHelp">${esc(filterHelpText())}</small></div><div class="field enh-search-block-field"><label>本地状态</label><label class="enh-check"><input id="enhHideDownloaded" type="checkbox" ${searchState.hideDownloaded ? 'checked' : ''}> 屏蔽已下载和已删除</label><small>关闭后可辨识并确认重新下载。</small></div></div></section><section class="card enh-search-download-panel" style="margin-top:16px"><div class="enh-search-options-grid"><div class="field"><label>下载目标</label><select id="enhSearchDestination" class="select"><option value="library">保存到媒体库</option><option value="device">导出到当前设备</option></select></div><div class="field" id="enhSearchGroupField"><label>保存分组</label><select id="enhSearchGroup" class="select">${groupOptions(groups, searchState.groupId)}</select></div><div class="field"><label>最低清晰度</label><select id="enhSearchQuality" class="select">${qualityOptions(searchState.minHeight)}</select></div></div><div class="enh-batch-layout enh-search-batch-layout"><span id="enhSearchSummary" class="metric-foot">输入关键词后搜索</span><div class="enh-batch-actions"><button type="button" id="enhSearchSelectVisible" class="btn small">全选当前结果</button><button type="button" id="enhSearchClear" class="btn small">清空选择</button><select id="enhSearchBatchTag" class="select enh-inline-select">${tagOptions(tags)}</select><button type="button" id="enhSearchAddTag" class="btn small">给选中项加标签</button><button type="button" id="enhSearchDownloadSelected" class="btn primary small">下载选中（${searchState.selected.size}）</button></div></div></section><section id="enhSearchResults" style="margin-top:16px"></section></div>`;
+  host.innerHTML = `<section class="card search-mode-card"><div class="card-head"><div><h2>选择发现方式</h2><p>关键词搜索与 UP 主投稿各自保留当前会话中的分页和选择。</p></div></div><div class="segmented"><button type="button" data-search-discovery-mode="keyword">作品关键词</button><button type="button" data-search-discovery-mode="creator">指定 UP 主</button></div></section><div data-search-keyword-pane></div><div data-search-creator-pane></div>`;
+  host.querySelector('[data-search-keyword-pane]').append(keywordContent);
+  const creatorRoot = host.querySelector('[data-search-creator-pane]');
   context.commit(() => root.replaceChildren(host));
+  const creatorMount = await mountSubmissionBrowser(creatorRoot, context, {
+    surface: 'admin-search-creator',
+    allowNameSearch: true,
+    normalUser: false,
+    groups,
+    tags,
+    defaultGroupId: groups.find(item => item.display_name === (context.shared.get().status?.default_group || ''))?.id || groups[0]?.id || '',
+    defaultDestination: 'library',
+    defaultMinHeight: Number(context.shared.get().status?.default_min_height || 1080),
+  });
+  const syncDiscoveryMode = () => {
+    const mode = searchState.discoveryMode === 'creator' ? 'creator' : 'keyword';
+    host.querySelector('[data-search-keyword-pane]').classList.toggle('hidden', mode !== 'keyword');
+    creatorRoot.classList.toggle('hidden', mode !== 'creator');
+    for (const button of host.querySelectorAll('[data-search-discovery-mode]')) {
+      button.classList.toggle('active', button.dataset.searchDiscoveryMode === mode);
+    }
+  };
+  syncDiscoveryMode();
+  host.querySelector('.search-mode-card').addEventListener('click', async event => {
+    const button = event.target.closest('[data-search-discovery-mode]');
+    if (!button) return;
+    const next = button.dataset.searchDiscoveryMode === 'creator' ? 'creator' : 'keyword';
+    if (next === searchState.discoveryMode) return;
+    const selectedCount = searchState.discoveryMode === 'keyword'
+      ? searchState.selected.size
+      : creatorMount.selectionCount();
+    if (selectedCount > 0) {
+      const accepted = await context.confirm({
+        title: '切换发现方式',
+        message: `切换后会清空当前已选的 ${selectedCount} 个作品，是否继续？`,
+        confirmLabel: '切换并清空',
+      });
+      if (!accepted) return;
+      if (searchState.discoveryMode === 'keyword') {
+        searchState.selected.clear();
+        searchState.conflicts.clear();
+      } else {
+        creatorMount.clearSelection();
+      }
+    }
+    searchState.discoveryMode = next;
+    syncDiscoveryMode();
+  }, { signal: context.signal });
 
   const results = host.querySelector('#enhSearchResults');
   let ownsModal = false;
 
   const abortSearchRequests = () => {
-    cancelSearchPreload();
     searchState.currentController?.abort();
-    searchState.preloadController?.abort();
     searchState.currentController = null;
-    searchState.preloadController = null;
   };
   context.signal.addEventListener('abort', abortSearchRequests, { once: true });
 
@@ -254,71 +299,49 @@ export async function mount(root, context) {
     else if (!filteredItems.length && currentFilterMode() !== 'raw') content = '<div class="empty">本页没有标题匹配项，可查看下一页；系统不会自动抓取全部页面。</div>';
     else if (blockedCount) content = '<div class="empty">当前页匹配项均已下载或曾被删除；可关闭屏蔽后查看。</div>';
     else content = '<div class="empty">Bilibili 当前页没有结果</div>';
-    results.innerHTML = `${content}${paginationHtml(searchState.page, pages)}`;
+    let scanNotice = '';
+    if (searchState.scan?.scanned > 1 || ['limit', 'stopped'].includes(searchState.scan?.reason)) {
+      const reason = searchState.scan.reason === 'candidate'
+        ? '首个有可选作品的页面'
+        : searchState.scan.reason === 'end'
+          ? '搜索结果末页'
+          : searchState.scan.reason === 'stopped'
+            ? '用户停止的位置'
+            : '单次 10 页上限';
+      scanNotice = `<div class="notice">本次按需检查了第 ${searchState.scan.startPage}–${searchState.scan.endPage} 页，跳过 ${Number(searchState.scan.skippedItems || 0)} 个不可选结果，停在${reason}；没有合并不同页面。</div>`;
+    }
+    const candidates = items.filter(item => item.selectable !== false);
+    const mayContinue = candidates.length === 0 && searchState.page < pages;
+    const continueButton = mayContinue
+      ? `<button type="button" class="btn primary" data-search-continue data-next-page="${Number(searchState.scan?.nextPage || searchState.page + 1)}">${searchState.scan?.reason === 'limit' ? '继续查找下一批' : '查找后续匹配'}</button>`
+      : '';
+    results.innerHTML = `${scanNotice}${content}<div class="toolbar creator-pagination-row">${paginationHtml(searchState.page, pages)}${continueButton}</div>`;
     bindCoverFallback(results, context.signal);
   };
 
-  const fetchRawPage = async (query, order, page, { fresh = false, signal } = {}) => {
-    const key = searchPageKey({ keyword: query, order, page });
+  const fetchRawPage = async (
+    query,
+    order,
+    page,
+    { fresh = false, signal, destination = searchState.destination } = {},
+  ) => {
+    const key = searchPageKey({ keyword: query, order, page, destination });
     if (!fresh) {
       const cached = readLru(searchState.cache, key);
       if (cached !== undefined) return cached;
     }
     if (fresh) searchState.cache.delete(key);
-    const params = new URLSearchParams({ q: query, order, page: String(page) });
+    const params = new URLSearchParams({
+      q: query,
+      order,
+      page: String(page),
+      destination,
+    });
     if (fresh) params.set('fresh', 'true');
     const response = await context.api(`/api/search?${params}`, { signal });
     const data = response.data || {};
     writeLru(searchState.cache, key, data, SEARCH_PAGE_LRU_LIMIT);
     return data;
-  };
-
-  const scheduleNextPagePreload = generation => {
-    cancelSearchPreload();
-    const query = searchState.q;
-    const order = searchState.order;
-    const currentPage = searchState.page;
-    const nextPage = currentPage + 1;
-    if (!shouldPrefetchNextPage({
-      page: currentPage,
-      pages: searchState.pages,
-      saveData: Boolean(globalThis.navigator?.connection?.saveData),
-      currentPageSucceeded: Boolean(searchState.data),
-      queryIsCurrent: generation === searchState.requestGeneration,
-    })) return;
-    if (searchState.cache.has(searchPageKey({ keyword: query, order, page: nextPage }))) return;
-    const run = async () => {
-      searchState.preloadHandle = 0;
-      searchState.preloadHandleType = '';
-      if (
-        generation !== searchState.requestGeneration
-        || query !== searchState.q
-        || order !== searchState.order
-        || currentPage !== searchState.page
-        || context.signal.aborted
-      ) return;
-      const controller = new AbortController();
-      searchState.preloadController = controller;
-      const abort = () => controller.abort();
-      context.signal.addEventListener('abort', abort, { once: true });
-      try {
-        await fetchRawPage(query, order, nextPage, { signal: controller.signal });
-      } catch (error) {
-        if (error?.name !== 'AbortError') {
-          // Best-effort only; the visible current page remains authoritative.
-        }
-      } finally {
-        context.signal.removeEventListener('abort', abort);
-        if (searchState.preloadController === controller) searchState.preloadController = null;
-      }
-    };
-    if (globalThis.requestIdleCallback) {
-      searchState.preloadHandleType = 'idle';
-      searchState.preloadHandle = globalThis.requestIdleCallback(() => void run(), { timeout: 1200 });
-    } else {
-      searchState.preloadHandleType = 'timeout';
-      searchState.preloadHandle = globalThis.setTimeout(() => void run(), 120);
-    }
   };
 
   const loadSearchPage = async (page, { fresh = false } = {}) => {
@@ -329,29 +352,73 @@ export async function mount(root, context) {
     searchState.requestGeneration = generation;
     const query = searchState.q;
     const order = searchState.order;
+    const destination = searchState.destination;
     const controller = new AbortController();
     searchState.currentController = controller;
     const abort = () => controller.abort();
     context.signal.addEventListener('abort', abort, { once: true });
-    results.innerHTML = '<div class="loading-card">正在读取 Bilibili 当前页…</div>';
+    results.innerHTML = '<div class="loading-card">正在按需读取 Bilibili 结果… <button type="button" class="btn small" data-search-stop>停止</button></div>';
+    const startPage = safePage;
+    let currentPage = safePage;
+    let scanned = 0;
+    let skippedItems = 0;
     try {
-      const data = await fetchRawPage(query, order, safePage, { fresh, signal: controller.signal });
-      if (
-        generation !== searchState.requestGeneration
-        || query !== searchState.q
-        || order !== searchState.order
-        || !context.isCurrent()
-      ) return;
-      searchState.page = safePage;
-      searchState.data = data;
-      searchState.pages = Number(data.pages || data.numPages || data.num_pages || 0);
-      searchState.total = Number(data.total || data.numResults || data.num_results || 0);
-      renderSearchResults();
-      scheduleNextPagePreload(generation);
+      while (true) {
+        const data = await fetchRawPage(query, order, currentPage, {
+          fresh: fresh && scanned === 0,
+          signal: controller.signal,
+          destination,
+        });
+        if (
+          generation !== searchState.requestGeneration
+          || query !== searchState.q
+          || order !== searchState.order
+          || destination !== searchState.destination
+          || !context.isCurrent()
+        ) return;
+        searchState.page = Number(data.page || currentPage);
+        searchState.data = data;
+        searchState.pages = Number(data.pages || data.numPages || data.num_pages || 0);
+        searchState.total = Number(data.total || data.numResults || data.num_results || 0);
+        searchState.limits = { ...searchState.limits, ...(data.limits || {}) };
+        scanned += 1;
+        const candidateCount = visibleSearchItems().filter(
+          item => item.selectable !== false,
+        ).length;
+        if (candidateCount === 0) skippedItems += (data.items || []).length;
+        searchState.scan = {
+          startPage,
+          endPage: searchState.page,
+          scanned,
+          reason: 'scanning',
+          nextPage: searchState.page + 1,
+          skippedItems,
+        };
+        const decision = submissionScanDecision({
+          page: searchState.page,
+          pages: searchState.pages,
+          candidateCount,
+          scanned,
+          limit: Number(searchState.limits.auto_scan_pages || 10),
+        });
+        if (decision.action === 'next') {
+          currentPage = decision.nextPage;
+          continue;
+        }
+        searchState.scan = {
+          ...searchState.scan,
+          reason: decision.action,
+          nextPage: decision.nextPage || null,
+        };
+        searchState.failedPage = null;
+        renderSearchResults();
+        return;
+      }
     } catch (error) {
       if (error?.name === 'AbortError') return;
       if (generation === searchState.requestGeneration && context.isCurrent()) {
-        results.innerHTML = `<div class="notice bad">${esc(error.message)}</div>`;
+        searchState.failedPage = currentPage;
+        results.innerHTML = `<div class="notice bad">第 ${currentPage} 页读取失败：${esc(error.message)} <button type="button" class="btn small" data-search-retry-page="${currentPage}">重试本页</button></div>`;
         context.toast.show(error.message, 'bad');
       }
     } finally {
@@ -367,7 +434,16 @@ export async function mount(root, context) {
       context.toast.show('请输入关键词', 'warn');
       return;
     }
-    const changed = query !== searchState.q || order !== searchState.order;
+    const queryChanged = query !== searchState.q;
+    const changed = queryChanged || order !== searchState.order;
+    if (queryChanged && searchState.selected.size) {
+      const accepted = await context.confirm({
+        title: '更换关键词',
+        message: `更换搜索上下文会清空已选的 ${searchState.selected.size} 个作品，是否继续？`,
+        confirmLabel: '更换并清空',
+      });
+      if (!accepted) return;
+    }
     const previousQuery = searchState.q;
     searchState.q = query;
     searchState.order = order;
@@ -376,7 +452,12 @@ export async function mount(root, context) {
       searchState.pages = 0;
       searchState.total = 0;
       searchState.data = null;
-      searchState.selected.clear();
+      searchState.scan = null;
+      searchState.failedPage = null;
+      if (queryChanged) {
+        searchState.selected.clear();
+        searchState.conflicts.clear();
+      }
       if (!searchState.filterTouched || searchState.filterText === previousQuery) searchState.filterText = query;
       host.querySelector('#enhSearchTitleFilter').value = searchState.filterText;
       updateFilterControls();
@@ -425,7 +506,7 @@ export async function mount(root, context) {
   };
 
   const downloadSearchItems = async items => {
-    const valid = items.filter(Boolean);
+    const valid = items.filter(item => item && item.selectable !== false);
     if (!valid.length) {
       context.toast.show('请先选择作品', 'warn');
       return;
@@ -450,7 +531,7 @@ export async function mount(root, context) {
     }
     const destination = searchState.destination || 'library';
     try {
-      const response = await context.api('/api/download', {
+      const response = await context.api('/api/download/selection', {
         method: 'POST',
         body: {
           urls: [],
@@ -471,11 +552,20 @@ export async function mount(root, context) {
         item.local_status = 'queued';
         item.local_status_label = '排队中';
         item.deleted_record = false;
+        item.selectable = false;
+        item.block_reason = '同一作品已有活动任务';
       }
       searchState.selected.clear();
+      searchState.conflicts.clear();
       context.toast.show(`已创建 ${response.total || response.data?.length || valid.length} 个任务，仍停留在搜索页`, 'good');
       renderSearchResults();
     } catch (error) {
+      searchState.conflicts.clear();
+      for (const conflict of error?.payload?.data?.items || []) {
+        const key = String(conflict.source_key || conflict.bvid || '');
+        if (key) searchState.conflicts.set(key, conflict);
+      }
+      renderSearchResults();
       context.toast.show(error.message, 'bad');
     }
   };
@@ -504,8 +594,12 @@ export async function mount(root, context) {
   host.querySelector('#enhSearchDestination').value = searchState.destination;
   host.querySelector('#enhSearchQuality').value = String(searchState.minHeight || 0);
   const syncDestination = () => {
+    const previous = searchState.destination;
     searchState.destination = host.querySelector('#enhSearchDestination').value;
     host.querySelector('#enhSearchGroupField').classList.toggle('hidden', searchState.destination === 'device');
+    if (previous !== searchState.destination && searchState.q && searchState.data) {
+      void loadSearchPage(searchState.page || 1);
+    }
   };
   syncDestination();
   updateFilterControls();
@@ -537,13 +631,32 @@ export async function mount(root, context) {
     searchState.filterTouched = true;
     renderSearchResults();
   }, { signal: context.signal });
+  host.querySelector('#enhSearchTitleFilter').addEventListener('keydown', event => {
+    if (
+      event.key !== 'Enter'
+      || visibleSearchItems().some(item => item.selectable !== false)
+      || searchState.page >= searchState.pages
+    ) return;
+    event.preventDefault();
+    void loadSearchPage(searchState.page + 1);
+  }, { signal: context.signal });
 
   host.addEventListener('change', event => {
     const input = event.target.closest('[data-search-select]');
     if (!input) return;
     const item = (searchState.data?.items || []).find(value => value.bvid === input.dataset.searchSelect);
-    if (!item) return;
-    if (input.checked) searchState.selected.set(item.bvid, item);
+    if (!item || item.selectable === false) {
+      input.checked = false;
+      return;
+    }
+    if (input.checked) {
+      if (!searchState.selected.has(item.bvid) && searchState.selected.size >= Number(searchState.limits.selection || 100)) {
+        input.checked = false;
+        context.toast.show(`当前最多选择 ${searchState.limits.selection || 100} 个作品`, 'warn');
+        return;
+      }
+      searchState.selected.set(item.bvid, item);
+    }
     else searchState.selected.delete(item.bvid);
     host.querySelector('#enhSearchDownloadSelected').textContent = `下载选中（${searchState.selected.size}）`;
   }, { signal: context.signal });
@@ -557,13 +670,37 @@ export async function mount(root, context) {
       searchState.filterMode = button.dataset.searchFilterMode;
       renderSearchResults();
     } else if (button.id === 'enhSearchSelectVisible') {
-      for (const item of visibleSearchItems()) searchState.selected.set(item.bvid, item);
+      for (const item of visibleSearchItems().filter(value => value.selectable !== false)) {
+        if (!searchState.selected.has(item.bvid) && searchState.selected.size >= Number(searchState.limits.selection || 100)) break;
+        searchState.selected.set(item.bvid, item);
+      }
       renderSearchResults();
     } else if (button.id === 'enhSearchClear') {
       searchState.selected.clear();
+      searchState.conflicts.clear();
       renderSearchResults();
     } else if (button.id === 'enhSearchDownloadSelected') await downloadSearchItems([...searchState.selected.values()]);
     else if (button.id === 'enhSearchAddTag') await batchTagSearchItems();
+    else if (button.dataset.searchContinue !== undefined) {
+      await loadSearchPage(Number(button.dataset.nextPage || searchState.page + 1));
+    } else if (button.dataset.searchStop !== undefined) {
+      abortSearchRequests();
+      searchState.requestGeneration += 1;
+      if (searchState.data) {
+        searchState.scan = {
+          ...(searchState.scan || {}),
+          startPage: searchState.scan?.startPage || searchState.page,
+          endPage: searchState.page,
+          scanned: searchState.scan?.scanned || 1,
+          reason: 'stopped',
+          nextPage: searchState.page + 1,
+          skippedItems: searchState.scan?.skippedItems || 0,
+        };
+        renderSearchResults();
+      }
+    } else if (button.dataset.searchRetryPage !== undefined) {
+      await loadSearchPage(Number(button.dataset.searchRetryPage), { fresh: true });
+    }
     else if (button.dataset.searchPage !== undefined) await loadSearchPage(Number(button.dataset.searchPage));
     else if (button.dataset.searchJumpButton !== undefined) {
       const pages = Math.max(1, Number(searchState.pages || 1));
@@ -594,7 +731,6 @@ export async function mount(root, context) {
 
   if (searchState.data) {
     renderSearchResults();
-    scheduleNextPagePreload(searchState.requestGeneration);
   } else if (searchState.q) {
     await loadSearchPage(searchState.page);
   } else {
@@ -604,6 +740,7 @@ export async function mount(root, context) {
   return Object.freeze({
     dispose: once(() => {
       abortSearchRequests();
+      creatorMount.dispose();
       if (ownsModal) context.modal.close('route');
     }),
   });

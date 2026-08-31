@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import re
 import ipaddress
 
 from fastapi import FastAPI, Request
@@ -44,6 +45,15 @@ def _normal_user_api_allowed(request: Request) -> bool:
     if path == "/api/preview" and method == "POST":
         return True
     if path == "/api/download" and method == "POST":
+        return True
+    if path == "/api/download/selection" and method == "POST":
+        return True
+    if path == "/api/bilibili/creators/resolve" and method == "GET":
+        return True
+    if (
+        method == "GET"
+        and re.fullmatch(r"/api/bilibili/creators/[1-9][0-9]*/submissions", path)
+    ):
         return True
     if path == "/api/events" and method == "GET":
         return True

@@ -11,11 +11,11 @@ def text(path: str) -> str:
 
 def test_v062_styles_are_retained_in_semantic_layers() -> None:
     index = text("web/index.html")
-    assert "/assets/styles/tokens.css?v=20260809-1" in index
-    assert "/assets/styles/pages.css?v=20260809-1" in index
+    assert "/assets/styles/tokens.css?v=20260831-1" in index
+    assert "/assets/styles/pages.css?v=20260831-1" in index
     assert "/assets/ui-v062.css" not in index
     assert "/assets/enhancements-ui-v062.js" not in index
-    assert "/assets/app/main.mjs?v=20260809-1" in index
+    assert "/assets/app/main.mjs?v=20260831-1" in index
 
 
 def test_v062_control_height_tokens_are_consistent() -> None:

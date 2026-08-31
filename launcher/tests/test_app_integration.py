@@ -159,7 +159,10 @@ def test_search_reads_cookie_from_data_root_not_tool_directory(
         return {"items": []}
 
     monkeypatch.setattr("app.routes.search_videos", fake_search)
-    monkeypatch.setattr("app.routes._decorate_search_catalog", lambda _request, data: data)
+    monkeypatch.setattr(
+        "app.routes._decorate_search_catalog",
+        lambda _request, data, _destination="library": data,
+    )
     state = SimpleNamespace(
         runtime=SimpleNamespace(bbdown_credentials_dir=credentials, bbdown_dir=tools)
     )

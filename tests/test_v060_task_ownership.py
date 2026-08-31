@@ -5,6 +5,7 @@ import json
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -374,6 +375,468 @@ def test_normal_user_active_task_limit_is_per_owner(
         assert allowed_other_user.status_code == 200, allowed_other_user.text
     finally:
         release.set()
+        client.close()
+        state.stop()
+
+
+def test_discovered_selection_is_atomic_and_enforces_normal_user_quality_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+
+    def blocking_runner(argv, **kwargs):
+        del kwargs
+        if "--only-show-info" in argv:
+            return artifact_runner()(argv)
+        release.wait(timeout=10)
+        work_dir = Path(argv[argv.index("--work-dir") + 1])
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "demo.mp4").write_bytes(b"video")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="[视频] [1080P 高清] [1920x1080] [AVC] [30]\n下载视频 100%",
+            stderr="",
+        )
+
+    blocking_runner.supports_info = True
+    blocking_runner.supports_quality_output = True
+    state, client, _admin, user_a, _user_b = _setup_state(
+        tmp_path, monkeypatch, runner=blocking_runner
+    )
+    try:
+        _as(client, user_a)
+        response = client.post(
+            "/api/download/selection",
+            json={
+                "items": [
+                    {"bvid": "BV1ATOMIC001", "title": "一", "preferred_quality": "720P"},
+                    {"bvid": "BV1ATOMIC002", "title": "二", "preferred_quality": "4K"},
+                ],
+                "destination": "library",
+                "min_height": 360,
+            },
+        )
+        assert response.status_code == 200, response.text
+        created = response.json()["data"]
+        assert len(created) == 2
+        assert {item["destination"] for item in created} == {"device"}
+        assert {item["min_height"] for item in created} == {
+            state.config_store.get().default_min_height
+        }
+        assert {item["preferred_quality"] for item in created} == {""}
+        ids = {item["id"] for item in created}
+        rows = state.database.all(
+            "SELECT id FROM task_records WHERE id IN (?,?)",
+            tuple(ids),
+        )
+        exports = state.database.all(
+            "SELECT task_id FROM exports WHERE task_id IN (?,?)",
+            tuple(ids),
+        )
+        assert {row["id"] for row in rows} == ids
+        assert {row["task_id"] for row in exports} == ids
+
+        before = state.database.one("SELECT COUNT(*) AS n FROM task_records")["n"]
+        conflict = client.post(
+            "/api/download/selection",
+            json={"bvids": ["BV1ATOMIC001", "BV1ATOMIC003"]},
+        )
+        assert conflict.status_code == 409, conflict.text
+        payload = conflict.json()
+        assert payload["code"] == "batch_conflict"
+        assert payload["data"]["items"] == [
+            {
+                "source_key": "BV1ATOMIC001",
+                "code": "active_task_conflict",
+                "message": "同一作品已有排队或下载中的任务",
+            }
+        ]
+        after = state.database.one("SELECT COUNT(*) AS n FROM task_records")["n"]
+        assert after == before
+        assert state.database.one(
+            "SELECT id FROM task_records WHERE source_key='BV1ATOMIC003'"
+        ) is None
+    finally:
+        release.set()
+        client.close()
+        state.stop()
+
+
+def test_discovered_selection_persistence_failure_publishes_no_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, _user_b = _setup_state(tmp_path, monkeypatch)
+    try:
+        _as(client, user_a)
+
+        def fail_batch(_destination, _tasks):
+            raise sqlite3.OperationalError("synthetic write failure")
+
+        monkeypatch.setattr(state.task_store, "register_task_batch", fail_batch)
+        response = client.post(
+            "/api/download/selection",
+            json={"bvids": ["BV1NOPUB0001", "BV1NOPUB0002"]},
+        )
+        assert response.status_code == 500
+        assert response.json()["code"] == "batch_create_failed"
+        assert state.export_queue.key_statuses(
+            ["BV1NOPUB0001", "BV1NOPUB0002"],
+            owner_user_id=user_a[1]["user_id"],
+        ) == {}
+        assert state.database.one(
+            "SELECT id FROM task_records WHERE source_key IN ('BV1NOPUB0001','BV1NOPUB0002')"
+        ) is None
+    finally:
+        client.close()
+        state.stop()
+
+
+def test_discovered_selection_capacity_rejects_the_whole_normal_user_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, _user_b = _setup_state(tmp_path, monkeypatch)
+    try:
+        _as(client, user_a)
+        bvids = [f"BV1CAPA{i:05d}" for i in range(NORMAL_USER_ACTIVE_TASK_LIMIT + 1)]
+        response = client.post("/api/download/selection", json={"bvids": bvids})
+        assert response.status_code == 429
+        body = response.json()
+        assert body["code"] == "active_task_limit"
+        assert body["data"]["selection_limit"] == NORMAL_USER_ACTIVE_TASK_LIMIT
+        assert len(body["data"]["items"]) == len(bvids)
+        assert state.database.one(
+            "SELECT id FROM task_records WHERE owner_user_id=?",
+            (user_a[1]["user_id"],),
+        ) is None
+        assert state.export_queue.active_count_for_owner(user_a[1]["user_id"]) == 0
+    finally:
+        client.close()
+        state.stop()
+
+
+def test_discovered_selection_publish_failure_rolls_back_database_and_memory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, _user_b = _setup_state(tmp_path, monkeypatch)
+    try:
+        _as(client, user_a)
+
+        def fail_notification(_task, *, task_id=""):
+            del task_id
+            raise RuntimeError("synthetic publish failure")
+
+        monkeypatch.setattr(state.export_queue, "_notify_locked", fail_notification)
+        response = client.post(
+            "/api/download/selection",
+            json={"bvids": ["BV1PUBFAIL01", "BV1PUBFAIL02"]},
+        )
+        assert response.status_code == 500
+        assert response.json()["code"] == "batch_create_failed"
+        assert state.export_queue.key_statuses(
+            ["BV1PUBFAIL01", "BV1PUBFAIL02"],
+            owner_user_id=user_a[1]["user_id"],
+        ) == {}
+        assert state.database.one(
+            "SELECT id FROM task_records WHERE source_key IN ('BV1PUBFAIL01','BV1PUBFAIL02')"
+        ) is None
+        assert state.database.one(
+            "SELECT task_id FROM exports WHERE source_key IN ('BV1PUBFAIL01','BV1PUBFAIL02')"
+        ) is None
+    finally:
+        client.close()
+        state.stop()
+
+
+def test_concurrent_discovered_selection_allows_only_one_same_owner_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    release = threading.Event()
+    start = threading.Barrier(2)
+
+    def blocking_runner(argv, **kwargs):
+        del kwargs
+        if "--only-show-info" in argv:
+            return artifact_runner()(argv)
+        release.wait(timeout=10)
+        work_dir = Path(argv[argv.index("--work-dir") + 1])
+        work_dir.mkdir(parents=True, exist_ok=True)
+        (work_dir / "demo.mp4").write_bytes(b"video")
+        return SimpleNamespace(
+            returncode=0,
+            stdout="[视频] [1080P 高清] [1920x1080] [AVC] [30]\n下载视频 100%",
+            stderr="",
+        )
+
+    blocking_runner.supports_info = True
+    blocking_runner.supports_quality_output = True
+    state, client_a, _admin, user_a, _user_b = _setup_state(
+        tmp_path, monkeypatch, runner=blocking_runner
+    )
+    client_b = TestClient(client_a.app, base_url="https://bili.example.test")
+    try:
+        _as(client_a, user_a)
+        _as(client_b, user_a)
+
+        def submit(client):
+            start.wait(timeout=5)
+            return client.post(
+                "/api/download/selection",
+                json={"bvids": ["BV1CONCUR001", "BV1CONCUR002"]},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(submit, (client_a, client_b)))
+        assert sorted(response.status_code for response in responses) == [200, 409]
+        assert sum(response.json().get("total", 0) for response in responses) == 2
+        rows = state.database.all(
+            "SELECT source_key,COUNT(*) AS n FROM task_records "
+            "WHERE source_key IN ('BV1CONCUR001','BV1CONCUR002') GROUP BY source_key"
+        )
+        assert rows == [
+            {"source_key": "BV1CONCUR001", "n": 1},
+            {"source_key": "BV1CONCUR002", "n": 1},
+        ]
+    finally:
+        release.set()
+        client_b.close()
+        client_a.close()
+        state.stop()
+
+
+def test_device_history_is_written_only_after_full_transfer_and_outlives_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, _user_b = _setup_state(tmp_path, monkeypatch)
+    owner = user_a[1]["user_id"]
+    try:
+        _as(client, user_a)
+        first = client.post("/api/download", json={"bvids": ["BV1HISTORY01"]})
+        task_id = first.json()["data"][0]["id"]
+        assert wait_terminal(state.export_queue, task_id)["status"] == "success"
+        assert client.post(f"/api/exports/{task_id}/prepare").status_code == 200
+
+        assert client.head(f"/api/exports/{task_id}/download").status_code == 200
+        assert state.task_store.device_download_history_for_sources(
+            owner, ["BV1HISTORY01"]
+        ) == {}
+        claimable_conflict = client.post(
+            "/api/download/selection",
+            json={"bvids": ["BV1HISTORY01", "BV1HISTORY03"]},
+        )
+        assert claimable_conflict.status_code == 409
+        assert claimable_conflict.json()["data"]["items"][0]["code"] == "claimable_export"
+        assert state.database.one(
+            "SELECT id FROM task_records WHERE source_key='BV1HISTORY03'"
+        ) is None
+        assert client.get(f"/api/exports/{task_id}/download").content == b"video"
+        history = state.task_store.device_download_history_for_sources(
+            owner, ["BV1HISTORY01"]
+        )
+        assert set(history) == {"BV1HISTORY01"}
+
+        deleted = client.post(
+            f"/api/enhancements/tasks/{task_id}/delete", json={}
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert state.task_store.task_record(task_id) is None
+        assert set(
+            state.task_store.device_download_history_for_sources(
+                owner, ["BV1HISTORY01"]
+            )
+        ) == {"BV1HISTORY01"}
+
+        second = client.post("/api/download", json={"bvids": ["BV1HISTORY02"]})
+        second_id = second.json()["data"][0]["id"]
+        assert wait_terminal(state.export_queue, second_id)["status"] == "success"
+        assert client.post(f"/api/exports/{second_id}/prepare").status_code == 200
+        assert client.delete(f"/api/exports/{second_id}").status_code == 200
+        assert state.task_store.device_download_history_for_sources(
+            owner, ["BV1HISTORY02"]
+        ) == {}
+    finally:
+        client.close()
+        state.stop()
+
+
+def test_cleanup_retry_preserves_delivery_fact_and_never_invents_discard_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, _user_b = _setup_state(tmp_path, monkeypatch)
+    owner = user_a[1]["user_id"]
+    original_cleanup = state.task_store._cleanup_export_files
+    try:
+        _as(client, user_a)
+        delivered = client.post("/api/download", json={"bvids": ["BV1CLEANUP01"]})
+        delivered_id = delivered.json()["data"][0]["id"]
+        assert wait_terminal(state.export_queue, delivered_id)["status"] == "success"
+        assert client.post(f"/api/exports/{delivered_id}/prepare").status_code == 200
+        monkeypatch.setattr(
+            state.task_store,
+            "_cleanup_export_files",
+            lambda _row: ["synthetic cleanup failure"],
+        )
+        assert client.get(f"/api/exports/{delivered_id}/download").content == b"video"
+        pending = state.task_store.export_record(delivered_id)
+        assert pending["state"] == "cleanup_pending"
+        assert pending["cleanup_target_state"] == "downloaded"
+        first_history = state.task_store.device_download_history_for_sources(
+            owner, ["BV1CLEANUP01"]
+        )["BV1CLEANUP01"]
+
+        monkeypatch.setattr(state.task_store, "_cleanup_export_files", original_cleanup)
+        state.task_store.retry_export_cleanup(delivered_id)
+        completed = state.task_store.export_record(delivered_id)
+        assert completed["state"] == "downloaded"
+        assert completed["cleanup_target_state"] == ""
+        assert state.task_store.device_download_history_for_sources(
+            owner, ["BV1CLEANUP01"]
+        )["BV1CLEANUP01"] == first_history
+
+        discarded = client.post("/api/download", json={"bvids": ["BV1CLEANUP02"]})
+        discarded_id = discarded.json()["data"][0]["id"]
+        assert wait_terminal(state.export_queue, discarded_id)["status"] == "success"
+        assert client.post(f"/api/exports/{discarded_id}/prepare").status_code == 200
+        monkeypatch.setattr(
+            state.task_store,
+            "_cleanup_export_files",
+            lambda _row: ["synthetic cleanup failure"],
+        )
+        assert client.delete(f"/api/exports/{discarded_id}").status_code == 200
+        discard_pending = state.task_store.export_record(discarded_id)
+        assert discard_pending["state"] == "cleanup_pending"
+        assert discard_pending["cleanup_target_state"] == "discarded"
+        assert state.task_store.device_download_history_for_sources(
+            owner, ["BV1CLEANUP02"]
+        ) == {}
+
+        monkeypatch.setattr(state.task_store, "_cleanup_export_files", original_cleanup)
+        state.task_store.retry_export_cleanup(discarded_id)
+        assert state.task_store.export_record(discarded_id)["state"] == "discarded"
+        assert state.task_store.device_download_history_for_sources(
+            owner, ["BV1CLEANUP02"]
+        ) == {}
+    finally:
+        client.close()
+        state.stop()
+
+
+def test_creator_discovery_role_boundary_and_normal_user_response_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, client, _admin, user_a, _user_b = _setup_state(tmp_path, monkeypatch)
+
+    def fake_profile(uid: str, **_kwargs):
+        return {
+            "uid": uid,
+            "name": "公开UP",
+            "avatar": "https://evil.example/avatar.jpg",
+            "bio": "公开简介",
+            "followers": 10,
+            "submission_count": 1,
+            "profile_url": f"https://space.bilibili.com/{uid}",
+            "cached": False,
+        }
+
+    def fake_submissions(uid: str, **kwargs):
+        return {
+            "uid": uid,
+            "order": kwargs.get("order", "pubdate"),
+            "page": kwargs.get("page", 1),
+            "pages": 1,
+            "total": 1,
+            "page_size": 20,
+            "cached": False,
+            "items": [
+                {
+                    "bvid": "BV1ROLEAPI01",
+                    "title": "公开投稿",
+                    "author": "公开UP",
+                    "cover": "https://i0.hdslb.com/bfs/cover/test.jpg",
+                    "url": "https://www.bilibili.com/video/BV1ROLEAPI01",
+                    "play": 1,
+                    "duration": "00:01",
+                    "pubdate": 1,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.routes.creator_profile", fake_profile)
+    monkeypatch.setattr("app.routes.creator_submissions", fake_submissions)
+    monkeypatch.setattr(
+        "app.routes.search_creators",
+        lambda q, **_kwargs: {
+            "keyword": q,
+            "page": 1,
+            "pages": 1,
+            "total": 1,
+            "page_size": 20,
+            "cached": False,
+            "items": [{"uid": "123456", "name": "公开UP", "avatar": ""}],
+        },
+    )
+    try:
+        _as(client, user_a)
+        assert client.get(
+            "/api/bilibili/creators/search", params={"q": "公开UP"}
+        ).status_code == 403
+        invalid = client.get(
+            "/api/bilibili/creators/resolve", params={"locator": "公开UP"}
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["code"] == "invalid_creator_locator"
+
+        resolved = client.get(
+            "/api/bilibili/creators/resolve",
+            params={"locator": "https://space.bilibili.com/123456", "destination": "library"},
+        )
+        assert resolved.status_code == 200, resolved.text
+        data = resolved.json()["data"]
+        assert data["state"] == "ready"
+        assert data["creator"]["avatar"] == ""
+        submissions = data["submissions"]
+        assert submissions["destination"] == "device"
+        assert submissions["limits"]["selection"] == NORMAL_USER_ACTIVE_TASK_LIMIT
+        item = submissions["items"][0]
+        assert item["local_status"] == "not_downloaded"
+        assert "tags" not in item
+        assert "output_path" not in item
+        assert "deleted_record" not in item
+
+        next_page = client.get(
+            "/api/bilibili/creators/123456/submissions",
+            params={"page": 1, "order": "click", "destination": "library"},
+        )
+        assert next_page.status_code == 200
+        assert next_page.json()["data"]["destination"] == "device"
+
+        preview = client.post(
+            "/api/preview",
+            json={
+                "item": {
+                    "bvid": "BV1ROLEAPI01",
+                    "preferred_quality": "720P",
+                },
+                "min_height": 360,
+                "preferred_quality": "720P",
+            },
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["data"]["min_height"] == state.config_store.get().default_min_height
+        assert preview.json()["data"]["preferred_quality"] == ""
+
+        admin_token = state.auth_store.login(
+            "administrator",
+            "Admin-password-123",
+            remote_addr="127.0.0.1",
+            user_agent="admin",
+        )
+        _as(client, admin_token)
+        candidates = client.get(
+            "/api/bilibili/creators/search", params={"q": "公开UP"}
+        )
+        assert candidates.status_code == 200
+        assert candidates.json()["data"]["items"][0]["uid"] == "123456"
+    finally:
         client.close()
         state.stop()
 

@@ -38,7 +38,7 @@ def _runtime(root: Path) -> RuntimeSettings:
     )
 
 
-def test_existing_v4_database_gets_complete_idempotent_schema_without_backup(
+def test_existing_v4_database_migrates_to_v5_with_backup(
     tmp_path: Path,
 ) -> None:
     runtime = _runtime(tmp_path)
@@ -50,12 +50,20 @@ def test_existing_v4_database_gets_complete_idempotent_schema_without_backup(
 
     database = Database(runtime)
     try:
-        assert database.migration_backup_path is None
+        assert database.migration_backup_path is not None
+        assert database.migration_backup_path.is_file()
+        assert database.one("PRAGMA user_version") == {"user_version": 5}
         tables = {
             str(row["name"])
             for row in database.all("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert {"tag_definitions", "item_tags", "deleted_media", "task_records"} <= tables
+        assert {
+            "tag_definitions",
+            "item_tags",
+            "deleted_media",
+            "task_records",
+            "device_download_history",
+        } <= tables
         assert database.one("SELECT value FROM marker") == {"value": "keep"}
     finally:
         database.close()

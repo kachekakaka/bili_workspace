@@ -7,7 +7,6 @@ import {
   readLru,
   SEARCH_PAGE_LRU_LIMIT,
   searchPageKey,
-  shouldPrefetchNextPage,
   splitTitleTerms,
   titleMatches,
   writeLru,
@@ -30,21 +29,9 @@ test('title-only filters do not alter the Bilibili page cache key', () => {
   const first = searchPageKey({ keyword: 'Ａ猫', order: 'click', page: 2 });
   const second = searchPageKey({ keyword: 'a猫', order: 'click', page: 2 });
   assert.equal(first, second);
-});
-
-test('prefetch allows exactly the immediate next page opportunity', () => {
-  assert.equal(shouldPrefetchNextPage({
-    page: 1, pages: 5, currentPageSucceeded: true, queryIsCurrent: true,
-  }), true);
-  assert.equal(shouldPrefetchNextPage({
-    page: 5, pages: 5, currentPageSucceeded: true, queryIsCurrent: true,
-  }), false);
-  assert.equal(shouldPrefetchNextPage({
-    page: 1, pages: 5, saveData: true, currentPageSucceeded: true, queryIsCurrent: true,
-  }), false);
-  assert.equal(shouldPrefetchNextPage({
-    page: 1, pages: 5, currentPageSucceeded: true, queryIsCurrent: false,
-  }), false);
+  assert.notEqual(first, searchPageKey({
+    keyword: 'a猫', order: 'click', page: 2, destination: 'device',
+  }));
 });
 
 test('search page LRU keeps at most 24 entries and refreshes access order', () => {

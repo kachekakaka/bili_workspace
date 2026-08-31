@@ -10,6 +10,7 @@ BV_RE = re.compile(r"(BV[0-9A-Za-z]{10})", re.IGNORECASE)
 AV_RE = re.compile(r"(?:^|[^A-Za-z0-9])(?:av)(\d+)(?:$|[^0-9])", re.IGNORECASE)
 EP_RE = re.compile(r"(?:^|[^A-Za-z0-9])(?:ep)(\d+)(?:$|[^0-9])", re.IGNORECASE)
 SS_RE = re.compile(r"(?:^|[^A-Za-z0-9])(?:ss)(\d+)(?:$|[^0-9])", re.IGNORECASE)
+CREATOR_UID_RE = re.compile(r"^[0-9]{1,20}$")
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,49 @@ class Target:
     key: str
     url: str
     bvid: str | None = None
+
+
+def parse_creator_locator(value: str) -> str:
+    """Return the canonical numeric UID from an exact UID or space URL."""
+
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("请输入 UP 主 UID 或主页链接")
+    if len(text) > MAX_INPUT_LENGTH:
+        raise ValueError(f"输入过长（上限 {MAX_INPUT_LENGTH} 字符）")
+
+    uid_text = text
+    if text.lower().startswith(("http://", "https://")):
+        try:
+            parsed = urlparse(text)
+        except ValueError as exc:
+            raise ValueError("UP 主主页链接格式无效") from exc
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if parsed.scheme.lower() != "https":
+            raise ValueError("UP 主主页只支持 HTTPS 链接")
+        if host != "space.bilibili.com":
+            raise ValueError("只支持 space.bilibili.com 的 UP 主主页链接")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("UP 主主页链接不得包含用户名或密码")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("UP 主主页链接端口无效") from exc
+        if port not in (None, 443):
+            raise ValueError("UP 主主页链接端口不受支持")
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        if not segments:
+            raise ValueError("UP 主主页链接缺少 UID")
+        uid_text = segments[0]
+    elif "://" in text or not CREATOR_UID_RE.fullmatch(text):
+        raise ValueError("只支持精确数字 UID 或 Bilibili UP 主主页链接")
+
+    if not CREATOR_UID_RE.fullmatch(uid_text):
+        raise ValueError("UP 主 UID 必须是正整数")
+    uid = int(uid_text)
+    if uid <= 0:
+        raise ValueError("UP 主 UID 必须大于 0")
+    return str(uid)
 
 
 def _allowed_host(host: str) -> bool:

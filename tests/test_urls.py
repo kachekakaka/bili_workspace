@@ -1,6 +1,6 @@
 import pytest
 
-from app.urls import normalize_line, parse_inputs
+from app.urls import normalize_line, parse_creator_locator, parse_inputs
 
 
 def test_normalize_bvid_and_url():
@@ -43,3 +43,33 @@ def test_valid_subdomain_and_trailing_dot_allowed():
 def test_any_invalid_line_rejects_partial_batch():
     with pytest.raises(ValueError):
         parse_inputs(urls=["BV1qt4y1X7TW\nnot-a-video"])
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("123456", "123456"),
+        ("000123456", "123456"),
+        ("https://space.bilibili.com/123456", "123456"),
+        ("https://space.bilibili.com./123456/video?tid=0#page", "123456"),
+    ],
+)
+def test_creator_locator_accepts_exact_uid_or_profile_url(value, expected):
+    assert parse_creator_locator(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "某个UP主",
+        "0",
+        "http://space.bilibili.com/123456",
+        "https://space.bilibili.com.evil.example/123456",
+        "https://user@space.bilibili.com/123456",
+        "https://space.bilibili.com:444/123456",
+        "https://www.bilibili.com/123456",
+    ],
+)
+def test_creator_locator_rejects_names_and_spoofed_urls(value):
+    with pytest.raises(ValueError):
+        parse_creator_locator(value)

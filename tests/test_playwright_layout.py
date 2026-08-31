@@ -124,6 +124,7 @@ def task_items() -> list[dict]:
             "created_at": 1_700_000_000,
             "finished_at": 1_700_000_100,
             "export_state": "ready",
+            "export_available": True,
             "export_expires_at": 1_800_000_000,
             "min_height": 1080,
             "min_height_label": "1080P",
@@ -307,7 +308,9 @@ def assert_visible_controls_do_not_overlap(page: Page, selector: str) -> None:
 
 
 @pytest.mark.parametrize(("width", "height"), VIEWPORTS)
-def test_search_filtering_preload_and_layout(browser: Browser, width: int, height: int) -> None:
+def test_search_filtering_without_speculative_preload_and_layout(
+    browser: Browser, width: int, height: int
+) -> None:
     requests: list[str] = []
     with static_site() as base_url:
         page = browser.new_page(viewport={"width": width, "height": height})
@@ -321,17 +324,12 @@ def test_search_filtering_preload_and_layout(browser: Browser, width: int, heigh
         page.goto(f"{base_url}/#/search", wait_until="domcontentloaded")
         page.wait_for_selector('[data-enhanced-view="search"]')
         page.fill("#enhSearchQuery", "测试 原因")
-        with page.expect_request(
-            lambda request: urlparse(request.url).path == "/api/search"
-            and parse_qs(urlparse(request.url).query).get("page") == ["2"]
-        ):
-            page.click("#enhSearchButton")
+        page.click("#enhSearchButton")
         page.wait_for_selector('[data-search-key="BV1LAYOUT001"]')
 
         pages_requested = [int(parse_qs(urlparse(url).query)["page"][0]) for url in requests]
         assert pages_requested.count(1) == 1
-        assert set(pages_requested) <= {1, 2}
-        assert pages_requested.count(2) == 1
+        assert pages_requested == [1]
 
         before_filter = len(requests)
         page.click('[data-search-filter-mode="all"]')
@@ -351,7 +349,7 @@ def test_search_filtering_preload_and_layout(browser: Browser, width: int, heigh
         page.wait_for_timeout(120)
         refreshed_pages = [int(parse_qs(urlparse(url).query)["page"][0]) for url in requests]
         assert refreshed_pages.count(1) == 2
-        assert refreshed_pages.count(2) <= 1
+        assert 2 not in refreshed_pages
 
         assert_no_horizontal_overflow(page)
         assert_visible_controls_do_not_overlap(
@@ -387,6 +385,9 @@ def test_current_admin_pages_fit_fixed_viewports(browser: Browser, width: int, h
                 assert page.locator("#enhTaskOwner").count() == 1
                 assert "访客甲（guest-a）" in page.locator("#enhTaskOwner").inner_text()
                 assert "用户：访客甲（guest-a）" in page.locator("[data-task-id=task-admin-1]").inner_text()
+            if name == "search":
+                page.click('[data-search-discovery-mode="creator"]')
+                page.wait_for_selector('.creator-discovery:visible')
             if name == "users":
                 if width <= 820:
                     assert page.locator(".user-card-list").is_visible()
@@ -513,6 +514,17 @@ def test_normal_user_has_only_download_and_tasks_at_fixed_viewports(
         assert page.locator("#downloadGroup").count() == 0
         assert page.locator("#downloadForce").count() == 0
         assert "下载完成后导出到当前设备，不会进入管理员媒体库。" in page.locator("#destinationNotice").inner_text()
+        page.wait_for_selector('[data-claimable-exports] a[href*="/api/exports/"]')
+        assert "领取" in page.locator("[data-claimable-exports]").inner_text()
+        assert page.locator("#downloadQuality").count() == 0
+        page.click('[data-download-mode="creator"]')
+        page.wait_for_selector('.creator-discovery:visible')
+        assert page.locator('[data-creator-locator-mode="name"]').count() == 0
+        assert_no_horizontal_overflow(page)
+        assert_visible_controls_do_not_overlap(
+            page,
+            "#pageRoot button, #pageRoot input, #pageRoot select",
+        )
 
         page.click("#userMenuButton")
         page.wait_for_selector("#userMenuPanel:not(.hidden)")

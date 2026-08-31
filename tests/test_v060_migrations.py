@@ -253,3 +253,61 @@ def test_newer_schema_is_rejected_without_downgrade_or_backup(tmp_path: Path) ->
         assert conn.execute("PRAGMA user_version").fetchone()[0] == DATABASE_SCHEMA_VERSION + 1
         assert conn.execute("SELECT value FROM marker").fetchone() == ("future",)
     assert not (runtime.database_path.parent / "backups").exists()
+
+
+def test_v4_history_backfill_only_accepts_proven_completed_exports(
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    database = Database(runtime)
+    delivered_at = time.time() - 60
+    try:
+        now = time.time()
+        database.execute(
+            "INSERT INTO users(id,username,password_hash,created_at,updated_at,disabled,"
+            "role,display_name,must_change_password) VALUES(?,?,?,?,?,0,'user','旧用户',0)",
+            ("legacy-user", "legacy-user", hash_password("LegacyPass123"), now, now),
+        )
+        for task_id, source_key, state in (
+            ("delivered", "BV1PROVEN001", "downloaded"),
+            ("ambiguous", "BV1AMBIGU001", "cleanup_pending"),
+        ):
+            database.execute(
+                "INSERT INTO exports(task_id,owner_user_id,source_key,title,state,created_at,"
+                "expires_at,downloaded_at,cleanup_target_state) VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    task_id,
+                    "legacy-user",
+                    source_key,
+                    source_key,
+                    state,
+                    now,
+                    now + 3600,
+                    delivered_at,
+                    "",
+                ),
+            )
+        database.execute("DROP TABLE device_download_history")
+        database.execute("PRAGMA user_version=4")
+    finally:
+        database.close()
+
+    migrated = Database(runtime)
+    try:
+        assert migrated.one(
+            "SELECT downloaded_at FROM device_download_history "
+            "WHERE owner_user_id='legacy-user' AND source_key='BV1PROVEN001'"
+        )["downloaded_at"] == delivered_at
+        assert migrated.one(
+            "SELECT downloaded_at FROM device_download_history "
+            "WHERE owner_user_id='legacy-user' AND source_key='BV1AMBIGU001'"
+        ) is None
+        ambiguous = migrated.one(
+            "SELECT state,cleanup_target_state FROM exports WHERE task_id='ambiguous'"
+        )
+        assert ambiguous == {
+            "state": "cleanup_pending",
+            "cleanup_target_state": "discarded",
+        }
+    finally:
+        migrated.close()
