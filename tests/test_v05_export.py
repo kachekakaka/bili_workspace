@@ -39,11 +39,14 @@ def test_device_export_full_transfer_cleans_temporary_artifacts(client):
     task_id = response.json()["data"][0]["id"]
     task = wait_terminal(client.state_ref.export_queue, task_id)
     assert task["status"] == "success"
+    queue_key = str(task["_queue_key"])
+    assert queue_key != task["source_key"]
+    assert client.state_ref.export_index.get(queue_key) is not None
 
     prepared = client.post(f"/api/exports/{task_id}/prepare")
     assert prepared.status_code == 200
-    record = client.state_ref.nas.export_record(task_id)
-    package = client.state_ref.nas.export_root / record["relative_path"]
+    record = client.state_ref.task_store.export_record(task_id)
+    package = client.state_ref.task_store.export_root / record["relative_path"]
     assert package.is_file()
 
     downloaded = client.get(f"/api/exports/{task_id}/download")
@@ -52,10 +55,10 @@ def test_device_export_full_transfer_cleans_temporary_artifacts(client):
     assert downloaded.headers["accept-ranges"] == "none"
     assert downloaded.headers["cache-control"] == "private, no-store"
 
-    final = client.state_ref.nas.export_record(task_id)
+    final = client.state_ref.task_store.export_record(task_id)
     assert final["state"] == "downloaded"
     assert not package.exists()
-    assert client.state_ref.export_index.get("BV0000000510") is None
+    assert client.state_ref.export_index.get(queue_key) is None
     assert client.get(f"/api/exports/{task_id}/download").status_code == 410
 
 

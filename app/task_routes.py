@@ -12,17 +12,18 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import ConfigDict
 
 from app import __version__
-from app.api import (
+from app.routes import (
     _compact_task,
     _decorate_task,
     _parse_download_body,
     _remote,
     _session,
     _state,
-    api_preview as legacy_preview,
-    get_status as legacy_status,
     err,
     ok,
+    preview_response,
+    status_response,
+    system_router,
 )
 from app.constants import (
     MAX_BATCH_ITEMS,
@@ -31,22 +32,18 @@ from app.constants import (
     SSE_AUTH_HEARTBEAT_SECONDS,
     TERMINAL_STATUSES,
 )
-from app.enhancement_api import ClearTasksRequest, TaskActionRequest, TaskBatchRequest
 from app.media_stream import file_response
-from app.models import DownloadRequest, PreviewRequest, RetryRequest
+from app.models import (
+    ClearTasksRequest,
+    DownloadRequest,
+    PreviewRequest,
+    RetryRequest,
+    TaskActionRequest,
+    TaskBatchRequest,
+)
 from app.queue import QueueFullError
-from app.task_extensions import (
-    cancel_task,
-    delete_task,
-    install_task_extensions,
-    pause_task,
-    retry_in_place,
-)
 
-router = APIRouter(prefix="/api", tags=["task-ownership"])
-enhancement_router = APIRouter(
-    prefix="/api/enhancements", tags=["task-ownership-enhancements"]
-)
+task_router = APIRouter(prefix="/api", tags=["tasks"])
 
 
 class OwnershipDownloadRequest(DownloadRequest):
@@ -75,7 +72,7 @@ def _is_admin(auth: dict[str, Any]) -> bool:
 
 def _record_for_request(request: Request, task_id: str) -> dict[str, Any] | None:
     auth = _auth(request)
-    record = _state(request).nas.task_record(task_id)
+    record = _state(request).task_store.task_record(task_id)
     if not record:
         return None
     if not _is_admin(auth) and str(record.get("owner_user_id") or "") != str(
@@ -140,7 +137,7 @@ def _list_records(
     else:
         owner_filter = str(auth["user_id"])
     state = _state(request)
-    records = state.nas.list_task_records(
+    records = state.task_store.list_task_records(
         owner_user_id=owner_filter,
         status=status,
         destination=destination,
@@ -160,7 +157,7 @@ def _owner_filter(request: Request, owner_user_id: str = "") -> str | None:
 
 def _audit_task(request: Request, action: str, task: dict[str, Any]) -> None:
     auth = _auth(request)
-    _state(request).nas.audit(
+    _state(request).auth_store.audit(
         str(auth.get("user_id") or ""),
         action,
         f"task={task.get('id','')}; destination={task.get('destination','')}",
@@ -170,13 +167,13 @@ def _audit_task(request: Request, action: str, task: dict[str, Any]) -> None:
     )
 
 
-@router.get("/status")
+@system_router.get("/status")
 def status(request: Request, refresh_login: bool = False):
     auth = _auth(request)
     if _is_admin(auth):
-        return legacy_status(request, refresh_login=refresh_login)
+        return status_response(request, refresh_login=refresh_login)
     state = _state(request)
-    summary = state.nas.task_status_summary(str(auth["user_id"]))
+    summary = state.task_store.task_status_summary(str(auth["user_id"]))
     return ok(
         {
             "version": __version__,
@@ -190,12 +187,12 @@ def status(request: Request, refresh_login: bool = False):
     )
 
 
-@router.post("/preview")
+@task_router.post("/preview")
 def preview(request: Request, body: PreviewRequest):
-    return legacy_preview(request, body)
+    return preview_response(request, body)
 
 
-@router.post("/download")
+@task_router.post("/download")
 def create_download(request: Request, body: OwnershipDownloadRequest):
     state = _state(request)
     auth = _auth(request)
@@ -209,7 +206,7 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
         targets, metadata = _parse_download_body(body)
         if destination == "device":
             for target in targets:
-                record = state.nas.active_export_for_source(
+                record = state.task_store.active_export_for_source(
                     target.key, owner_user_id=owner_user_id
                 )
                 if record:
@@ -232,10 +229,10 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
             )
             for task in tasks:
                 if task.get("status") in {"queued", "running"}:
-                    state.nas.register_export_task(task)
+                    state.task_store.register_export_task(task)
             tasks = [_decorate_task(state, task, "device") for task in tasks]
         else:
-            group = state.nas.resolve_group(group_id, group_name)
+            group = state.catalog_store.resolve_group(group_id, group_name)
             tasks = state.queue.enqueue(
                 targets,
                 force=force,
@@ -257,7 +254,7 @@ def create_download(request: Request, body: OwnershipDownloadRequest):
     return ok(tasks, total=len(tasks), limit=MAX_BATCH_ITEMS)
 
 
-@router.get("/tasks")
+@task_router.get("/tasks")
 def tasks_list(
     request: Request,
     owner_user_id: str = Query("", max_length=100),
@@ -320,7 +317,7 @@ def tasks_list(
     )
 
 
-@router.get("/tasks/{task_id}")
+@task_router.get("/tasks/{task_id}")
 def task_detail(request: Request, task_id: str):
     record = _record_for_request(request, task_id)
     if not record:
@@ -328,7 +325,7 @@ def task_detail(request: Request, task_id: str):
     return ok(_live_record(_state(request), record, compact=False))
 
 
-@router.get("/tasks/{task_id}/log")
+@task_router.get("/tasks/{task_id}/log")
 def task_log(
     request: Request,
     task_id: str,
@@ -337,19 +334,19 @@ def task_log(
     if not _record_for_request(request, task_id):
         return err("任务不存在", 404)
     try:
-        return ok(_state(request).nas.task_log(task_id, tail_chars=tail))
+        return ok(_state(request).task_store.task_log(task_id, tail_chars=tail))
     except KeyError:
         return err("任务不存在", 404)
     except ValueError as exc:
         return err(str(exc))
 
 
-@router.get("/tasks/{task_id}/log/download")
+@task_router.get("/tasks/{task_id}/log/download")
 def task_log_download(request: Request, task_id: str):
     if not _record_for_request(request, task_id):
         return err("任务不存在", 404)
     try:
-        data = _state(request).nas.task_log(task_id, tail_chars=None)
+        data = _state(request).task_store.task_log(task_id, tail_chars=None)
     except KeyError:
         return err("任务不存在", 404)
     except ValueError as exc:
@@ -372,7 +369,6 @@ def _apply_task_action(
     if not record:
         raise KeyError("任务不存在")
     queue = _queue_for_record(state, record)
-    install_task_extensions(queue)
     if action in {"retry", "resume"}:
         if (
             not _is_admin(auth)
@@ -382,8 +378,7 @@ def _apply_task_action(
             raise QueueFullError(
                 f"当前账号活动任务已达到上限 {NORMAL_USER_ACTIVE_TASK_LIMIT} 个"
             )
-        task = retry_in_place(
-            queue,
+        task = queue.retry(
             task_id,
             force=True if record["destination"] == "device" else body.force,
             min_height=body.min_height,
@@ -391,16 +386,16 @@ def _apply_task_action(
         )
         if record["destination"] == "device":
             task["owner_user_id"] = str(record["owner_user_id"])
-            state.nas.register_export_task(task)
+            state.task_store.register_export_task(task)
     elif action == "cancel":
-        task = cancel_task(queue, task_id)
+        task = queue.cancel_task(task_id)
     elif action == "pause":
-        task = pause_task(queue, task_id)
+        task = queue.pause(task_id)
     elif action == "delete":
         if record["destination"] == "device":
-            state.nas.discard_export(task_id)
-        delete_task(queue, task_id)
-        state.nas.delete_task_snapshot(task_id)
+            state.task_store.discard_export(task_id)
+        queue.delete_task(task_id)
+        state.task_store.delete_task_snapshot(task_id)
         result = {
             "id": task_id,
             "task_id": task_id,
@@ -420,7 +415,7 @@ def _apply_task_action(
     return result
 
 
-@router.post("/tasks/{task_id}/cancel")
+@task_router.post("/tasks/{task_id}/cancel")
 def cancel(request: Request, task_id: str):
     try:
         return ok(_apply_task_action(request, task_id, "cancel", TaskActionRequest()))
@@ -430,7 +425,7 @@ def cancel(request: Request, task_id: str):
         return err(str(exc), 409)
 
 
-@router.post("/tasks/{task_id}/retry")
+@task_router.post("/tasks/{task_id}/retry")
 def retry(request: Request, task_id: str, body: RetryRequest):
     try:
         return ok(
@@ -449,7 +444,7 @@ def retry(request: Request, task_id: str, body: RetryRequest):
         return err(str(exc), 409)
 
 
-@router.post("/tasks/{task_id}/open-output")
+@task_router.post("/tasks/{task_id}/open-output")
 def open_output(request: Request, task_id: str):
     record = _record_for_request(request, task_id)
     if not record:
@@ -469,7 +464,7 @@ def open_output(request: Request, task_id: str):
     return ok({"opened": True, "path": relative})
 
 
-@router.post("/tasks/clear-finished")
+@task_router.post("/tasks/clear-finished")
 def clear_finished(request: Request):
     items = _list_records(request)
     removed = 0
@@ -484,7 +479,7 @@ def clear_finished(request: Request):
     return ok({"removed": removed})
 
 
-@enhancement_router.post("/tasks/{task_id}/{action}")
+@task_router.post("/enhancements/tasks/{task_id}/{action}")
 def enhanced_action(
     request: Request,
     task_id: str,
@@ -501,7 +496,7 @@ def enhanced_action(
         return err(str(exc), 409)
 
 
-@enhancement_router.post("/tasks/batch")
+@task_router.post("/enhancements/tasks/batch")
 def enhanced_batch(request: Request, body: TaskBatchRequest):
     results: list[dict[str, Any]] = []
     errors: dict[str, str] = {}
@@ -520,7 +515,7 @@ def enhanced_batch(request: Request, body: TaskBatchRequest):
     return ok({"items": results, "errors": errors}, total=len(results))
 
 
-@enhancement_router.post("/tasks/clear")
+@task_router.post("/enhancements/tasks/clear")
 def enhanced_clear(request: Request, body: ClearTasksRequest):
     wanted = set(body.statuses)
     items = _list_records(
@@ -541,17 +536,17 @@ def enhanced_clear(request: Request, body: ClearTasksRequest):
     return ok({"removed": removed, "errors": errors})
 
 
-@router.post("/exports/{task_id}/prepare")
+@task_router.post("/exports/{task_id}/prepare")
 def prepare_export(request: Request, task_id: str):
     record = _record_for_request(request, task_id)
     if not record or record.get("destination") != "device":
         return err("设备导出任务不存在", 404)
     state = _state(request)
-    task = state.export_queue.get_task(task_id) or state.nas.export_task_payload(task_id)
+    task = state.export_queue.get_task(task_id) or state.task_store.export_task_payload(task_id)
     if not task:
         return err("设备导出任务不存在", 404)
     try:
-        export = state.nas.prepare_export(task_id, task)
+        export = state.task_store.prepare_export(task_id, task)
     except KeyError as exc:
         return err(str(exc), 404)
     except FileNotFoundError as exc:
@@ -561,20 +556,20 @@ def prepare_export(request: Request, task_id: str):
     return ok({**export, "download_url": f"/api/exports/{task_id}/download"})
 
 
-@router.api_route("/exports/{task_id}/download", methods=["GET", "HEAD"])
+@task_router.api_route("/exports/{task_id}/download", methods=["GET", "HEAD"])
 def download_export(request: Request, task_id: str):
     record = _record_for_request(request, task_id)
     if not record or record.get("destination") != "device":
         return err("设备导出任务不存在", 404)
     state = _state(request)
-    task = state.export_queue.get_task(task_id) or state.nas.export_task_payload(task_id)
+    task = state.export_queue.get_task(task_id) or state.task_store.export_task_payload(task_id)
     if not task:
         return err("设备导出任务不存在", 404)
     try:
-        export = state.nas.export_record(task_id)
+        export = state.task_store.export_record(task_id)
         if not export or export.get("state") != "ready":
-            state.nas.prepare_export(task_id, task)
-        export, path = state.nas.resolve_export(task_id)
+            state.task_store.prepare_export(task_id, task)
+        export, path = state.task_store.resolve_export(task_id)
     except KeyError as exc:
         return err(str(exc), 404)
     except FileNotFoundError as exc:
@@ -590,16 +585,16 @@ def download_export(request: Request, task_id: str):
         filename=str(export["filename"]),
         attachment=True,
         allow_range=False,
-        on_complete=lambda: state.nas.complete_export(task_id),
+        on_complete=lambda: state.task_store.complete_export(task_id),
     )
 
 
-@router.delete("/exports/{task_id}")
+@task_router.delete("/exports/{task_id}")
 def discard_export(request: Request, task_id: str):
     record = _record_for_request(request, task_id)
     if not record or record.get("destination") != "device":
         return err("设备导出记录不存在", 404)
-    if not _state(request).nas.discard_export(task_id):
+    if not _state(request).task_store.discard_export(task_id):
         return err("设备导出记录不存在", 404)
     return ok({"discarded": True})
 
@@ -614,7 +609,7 @@ def _sse_counts_changed(queue, export_queue, *, last_library: int, last_export: 
     )
 
 
-@router.get("/events")
+@task_router.get("/events")
 async def events(
     request: Request,
     owner_user_id: str = Query("", max_length=100),
@@ -638,7 +633,7 @@ async def events(
                 session_id
                 and now_mono - last_auth_check >= SSE_AUTH_HEARTBEAT_SECONDS
             ):
-                if not state.nas.session_is_active(session_id):
+                if not state.auth_store.session_is_active(session_id):
                     break
                 last_auth_check = now_mono
             changed, last_library_count, last_export_count = _sse_counts_changed(
@@ -656,7 +651,7 @@ async def events(
                 continue
             if view == "summary":
                 event_data = {
-                    "summary": state.nas.task_status_summary(
+                    "summary": state.task_store.task_status_summary(
                         _owner_filter(request, owner_user_id)
                     )
                 }

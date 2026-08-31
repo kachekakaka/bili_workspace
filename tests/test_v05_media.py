@@ -85,7 +85,7 @@ def test_group_rename_is_logical_and_survives_index_resync(client):
         f"/api/groups/{group['id']}", json={"name": "重命名后的媒体组"}
     )
     assert renamed.status_code == 200
-    client.state_ref.nas.sync_index(force=True)
+    client.state_ref.catalog_store.sync_index(force=True)
 
     entry = client.state_ref.index.get("BV0000000503")
     assert entry["group"] == "重命名后的媒体组"

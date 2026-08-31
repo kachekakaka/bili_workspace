@@ -9,7 +9,6 @@ from app.config import ConfigStore
 from app.index_store import IndexStore
 from app.progress import PHASE_LABELS, ProgressEvent
 from app.queue import Task, TaskQueue
-from app.task_extensions import cancel_task, pause_task
 from app.task_logs import task_log_path
 from app.urls import Target
 from tests.conftest import wait_terminal
@@ -234,7 +233,134 @@ def test_change_count_is_published_after_state_callback(tmp_env, monkeypatch):
     try:
         with queue._lock:
             queue._notify_locked(task)
+        queue._flush_notifications()
         assert order == ["persisted", "published"]
+    finally:
+        queue.stop()
+
+
+def test_state_callback_runs_without_holding_queue_lock(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    callback_can_read = threading.Event()
+    queue = None
+
+    def persist(_task_id, _payload):
+        assert queue is not None
+        reader = threading.Thread(
+            target=lambda: (queue.list_tasks(), callback_can_read.set()),
+            daemon=True,
+        )
+        reader.start()
+        reader.join(timeout=1)
+        assert not reader.is_alive()
+
+    queue = TaskQueue(store, index, on_state_change=persist)
+    try:
+        queue.enqueue([_target(207)])
+        assert callback_can_read.is_set()
+    finally:
+        queue.stop()
+
+
+def test_in_place_retry_preserves_identity_owner_and_created_at(tmp_env):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    second_started = threading.Event()
+    release_second = threading.Event()
+    calls = 0
+
+    def runner(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            second_started.set()
+            release_second.wait(timeout=5)
+        return SimpleNamespace(returncode=1, stdout="", stderr="模拟失败")
+
+    queue = TaskQueue(
+        store,
+        index,
+        runner=runner,
+        default_owner_user_id="owner-default",
+    )
+    try:
+        created = queue.enqueue([_target(208)], owner_user_id="owner-a")[0]
+        failed = wait_terminal(queue, created["id"])
+        assert failed["status"] == "failed"
+
+        retried = queue.retry(created["id"])
+        assert retried["id"] == created["id"]
+        assert retried["owner_user_id"] == "owner-a"
+        assert retried["created_at"] == created["created_at"]
+        assert second_started.wait(timeout=2)
+        log = queue.get_log(created["id"], tail_chars=None)
+        assert "原地重试" in str(log["text"])
+        release_second.set()
+        assert wait_terminal(queue, created["id"])["status"] == "failed"
+    finally:
+        release_second.set()
+        queue.stop()
+
+
+@pytest.mark.parametrize(
+    ("case", "status", "phase"),
+    [
+        ("success", "success", "success"),
+        ("skipped", "skipped", "skipped"),
+        ("failed", "failed", "failed"),
+        ("cancelled", "cancelled", "cancelled"),
+        ("paused", "cancelled", "paused"),
+    ],
+)
+def test_every_terminal_task_variant_can_retry_in_place(
+    tmp_env,
+    case: str,
+    status: str,
+    phase: str,
+):
+    store = ConfigStore(path=tmp_env.config_path, initial=tmp_env.initial)
+    index = IndexStore(tmp_env.download_dir)
+    task_id = f"retry-{case}"
+    source_key = f"SOURCE-{case}"
+
+    def runner(*_args, **_kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr="模拟重试失败")
+
+    queue = TaskQueue(
+        store,
+        index,
+        runner=runner,
+        initial_tasks=[
+            {
+                "id": task_id,
+                "key": source_key,
+                "source_key": source_key,
+                "url": f"https://example.invalid/{case}",
+                "bvid": None,
+                "force": False,
+                "owner_user_id": "owner-a",
+                "status": status,
+                "phase": phase,
+                "created_at": 123.0,
+                "finished_at": 456.0,
+                "retry_of": "obsolete-attempt",
+                "log_tail": "旧执行日志",
+                "log_size": 18,
+            }
+        ],
+        default_owner_user_id="owner-default",
+    )
+    try:
+        retried = queue.retry(task_id)
+        assert retried["id"] == task_id
+        assert retried["owner_user_id"] == "owner-a"
+        assert retried["created_at"] == 123.0
+        assert retried["retry_of"] == ""
+        assert retried["status"] == "queued"
+        assert retried["log_tail"] == ""
+        assert retried["files"] == []
+        assert retried["output_path"] == ""
     finally:
         queue.stop()
 
@@ -256,23 +382,23 @@ def test_pause_can_be_upgraded_to_cancel_without_false_terminal_state(tmp_env):
         created = queue.enqueue([_target(202)])[0]
         assert started.wait(timeout=2)
 
-        pausing = pause_task(queue, created["id"])
+        pausing = queue.pause(created["id"])
         assert pausing["status"] == "running"
         assert pausing["phase"] == "pausing"
         assert pausing["finished_at"] is None
 
-        cancelling = cancel_task(queue, created["id"])
+        cancelling = queue.cancel_task(created["id"])
         assert cancelling["status"] == "running"
         assert cancelling["phase"] == "cancelling"
         assert cancelling["finished_at"] is None
-        assert cancel_task(queue, created["id"])["phase"] == "cancelling"
+        assert queue.cancel_task(created["id"])["phase"] == "cancelling"
 
         release.set()
         finished = wait_terminal(queue, created["id"])
         assert finished["status"] == "cancelled"
         assert finished["phase"] == "cancelled"
         assert finished["finished_at"] is not None
-        assert cancel_task(queue, created["id"])["phase"] == "cancelled"
+        assert queue.cancel_task(created["id"])["phase"] == "cancelled"
     finally:
         release.set()
         queue.stop()
@@ -304,7 +430,7 @@ def test_cancel_during_synchronous_metadata_wait_does_not_start_preflight(tmp_en
     try:
         created = queue.enqueue([_target(205)])[0]
         assert metadata_started.wait(timeout=2)
-        cancelling = cancel_task(queue, created["id"])
+        cancelling = queue.cancel_task(created["id"])
         assert cancelling["status"] == "running"
         assert cancelling["phase"] == "cancelling"
         assert cancelling["finished_at"] is None
@@ -346,7 +472,7 @@ def test_cancel_while_execution_slot_arrives_commits_terminal_once(tmp_env):
     try:
         created = queue.enqueue([_target(206)])[0]
         assert entered.wait(timeout=2)
-        cancelling = cancel_task(queue, created["id"])
+        cancelling = queue.cancel_task(created["id"])
         assert cancelling["phase"] == "cancelling"
         allow_acquire.set()
         finished = wait_terminal(queue, created["id"])
@@ -382,13 +508,13 @@ def test_queued_pause_is_terminal_and_cannot_be_relabelled_as_cancel(tmp_env):
     try:
         _running, queued = queue.enqueue([_target(203), _target(204)])
         assert started.wait(timeout=2)
-        paused = pause_task(queue, queued["id"])
+        paused = queue.pause(queued["id"])
         assert paused["status"] == "cancelled"
         assert paused["phase"] == "paused"
         assert paused["finished_at"] is not None
-        assert pause_task(queue, queued["id"])["phase"] == "paused"
+        assert queue.pause(queued["id"])["phase"] == "paused"
         with pytest.raises(ValueError, match="已暂停"):
-            cancel_task(queue, queued["id"])
+            queue.cancel_task(queued["id"])
     finally:
         release.set()
         queue.stop()

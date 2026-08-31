@@ -37,9 +37,9 @@ def test_v04_index_is_imported_without_moving_media(tmp_env, external_runtime_en
         cookie_checker=StaticCookieChecker(logged_in=True),
     )
     try:
-        summary = state.nas.library_summary()
+        summary = state.catalog_store.library_summary()
         assert summary["media_count"] == 1
-        item = state.nas.library_list(
+        item = state.catalog_store.library_list(
             page=1,
             page_size=20,
             query="",
@@ -74,7 +74,7 @@ def test_task_snapshots_survive_restart_and_running_becomes_interrupted(
         "created_at": 100.0,
         "started_at": 101.0,
     }
-    first.nas.save_task_snapshot("library", snapshot["id"], snapshot)
+    first.task_store.save_task_snapshot("library", snapshot["id"], snapshot)
     first.stop()
 
     second = AppState.create(
@@ -100,8 +100,8 @@ def test_index_sync_short_circuits_when_unchanged(tmp_env, external_runtime_envi
         cookie_checker=StaticCookieChecker(logged_in=True),
     )
     try:
-        first = state.nas.sync_index(force=True)
-        second = state.nas.sync_index()
+        first = state.catalog_store.sync_index(force=True)
+        second = state.catalog_store.sync_index()
         assert first["imported"] == 0
         assert second == {"imported": 0, "unchanged": 0, "skipped": 0, "removed": 0}
     finally:
@@ -133,14 +133,14 @@ def test_index_sync_does_not_acknowledge_changes_after_its_snapshot(
 
     monkeypatch.setattr(state.index, "snapshot_if_changed", snapshot_with_concurrent_change)
     try:
-        state.nas.sync_index(force=True)
-        assert state.nas._last_index_token == captured_tokens[0]
-        assert state.nas._last_index_token != state.index.change_token()
+        state.catalog_store.sync_index(force=True)
+        assert state.catalog_store._last_index_token == captured_tokens[0]
+        assert state.catalog_store._last_index_token != state.index.change_token()
 
-        state.nas.sync_index()
+        state.catalog_store.sync_index()
         assert len(captured_tokens) == 2
-        assert state.nas._last_index_token == captured_tokens[1]
-        assert state.nas._last_index_token == state.index.change_token()
+        assert state.catalog_store._last_index_token == captured_tokens[1]
+        assert state.catalog_store._last_index_token == state.index.change_token()
     finally:
         state.stop()
 
@@ -156,28 +156,28 @@ def test_running_snapshot_writes_are_debounced(
     )
     try:
         writes = 0
-        original = state.nas._execute
+        original = state.database.execute
 
         def counted(sql, params=()):
             nonlocal writes
-            if sql.startswith("INSERT INTO task_snapshots"):
+            if sql.startswith("INSERT INTO task_records"):
                 writes += 1
             return original(sql, params)
 
-        monkeypatch.setattr(state.nas, "_execute", counted)
+        monkeypatch.setattr(state.database, "execute", counted)
         payload = {
             "id": "debounced-running",
             "status": "running",
             "created_at": 100.0,
             "progress_percent": 1,
         }
-        state.nas.save_task_snapshot("library", payload["id"], payload)
+        state.task_store.save_task_snapshot("library", payload["id"], payload)
         payload["progress_percent"] = 2
-        state.nas.save_task_snapshot("library", payload["id"], payload)
+        state.task_store.save_task_snapshot("library", payload["id"], payload)
         assert writes == 1
 
         payload["status"] = "success"
-        state.nas.save_task_snapshot("library", payload["id"], payload)
+        state.task_store.save_task_snapshot("library", payload["id"], payload)
         assert writes == 2
     finally:
         state.stop()
@@ -194,19 +194,19 @@ def test_running_transition_is_not_hidden_by_progress_debounce(
     )
     payload = {
         "id": "queued-to-running",
-        "owner_user_id": state.nas.default_owner_user_id(),
+        "owner_user_id": state.task_store.default_owner_user_id(),
         "status": "queued",
         "created_at": 100.0,
     }
     try:
-        state.nas.save_task_snapshot("library", payload["id"], payload)
+        state.task_store.save_task_snapshot("library", payload["id"], payload)
         payload["status"] = "running"
         payload["started_at"] = 101.0
-        state.nas.save_task_snapshot("library", payload["id"], payload)
+        state.task_store.save_task_snapshot("library", payload["id"], payload)
 
-        record = state.nas.task_record(payload["id"])
+        record = state.task_store.task_record(payload["id"])
         assert record is not None
         assert record["status"] == "running"
-        assert state.nas.task_status_summary()["running"] == 1
+        assert state.task_store.task_status_summary()["running"] == 1
     finally:
         state.stop()

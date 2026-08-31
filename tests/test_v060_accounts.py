@@ -134,7 +134,7 @@ def test_temporary_password_requires_change_and_normal_user_is_denied_admin_api(
         },
     ).json()["data"]
     state = account_client.state_ref
-    token, session = state.nas.login(
+    token, session = state.auth_store.login(
         "guest-a", "Temporary-123", remote_addr="127.0.0.1", user_agent="pytest"
     )
 
@@ -159,42 +159,42 @@ def test_temporary_password_requires_change_and_normal_user_is_denied_admin_api(
     forbidden = account_client.get("/api/admin/users")
     assert forbidden.status_code == 403
     assert forbidden.json()["code"] == "forbidden"
-    assert state.nas.active_session_count(created["id"]) == 1
+    assert state.auth_store.active_session_count(created["id"]) == 1
 
 
 def test_session_limit_evicts_least_recent_and_never_new_session(account_client: TestClient):
     state = account_client.state_ref
-    user = state.nas.create_user(
+    user = state.auth_store.create_user(
         "session-user", "会话用户", "Temporary-123", created_by="test"
     )
-    state.nas._execute(
+    state.database.execute(
         "UPDATE users SET must_change_password=0 WHERE id=?", (user["id"],)
     )
     issued: list[tuple[str, dict]] = []
     for index in range(MAX_ACTIVE_SESSIONS_PER_USER):
-        token, session = state.nas.login(
+        token, session = state.auth_store.login(
             "session-user",
             "Temporary-123",
             remote_addr="127.0.0.1",
             user_agent=f"device-{index}",
         )
         issued.append((token, session))
-        state.nas._execute(
+        state.database.execute(
             "UPDATE sessions SET last_seen_at=?,created_at=? WHERE id=?",
             (1000 + index, 1000 + index, session["session_id"]),
         )
 
-    newest_token, newest_session = state.nas.login(
+    newest_token, newest_session = state.auth_store.login(
         "session-user",
         "Temporary-123",
         remote_addr="127.0.0.1",
         user_agent="device-new",
     )
-    assert state.nas.active_session_count(user["id"]) == MAX_ACTIVE_SESSIONS_PER_USER
-    assert state.nas.get_session(issued[0][0]) is None
-    assert state.nas.get_session(issued[1][0]) is not None
-    assert state.nas.get_session(newest_token) is not None
-    row = state.nas._one(
+    assert state.auth_store.active_session_count(user["id"]) == MAX_ACTIVE_SESSIONS_PER_USER
+    assert state.auth_store.get_session(issued[0][0]) is None
+    assert state.auth_store.get_session(issued[1][0]) is not None
+    assert state.auth_store.get_session(newest_token) is not None
+    row = state.database.one(
         "SELECT revoke_reason FROM sessions WHERE id=?", (issued[0][1]["session_id"],)
     )
     assert row and row["revoke_reason"] == "session_limit"
@@ -203,43 +203,43 @@ def test_session_limit_evicts_least_recent_and_never_new_session(account_client:
 
 def test_session_limit_uses_created_at_as_tie_breaker(account_client: TestClient):
     state = account_client.state_ref
-    user = state.nas.create_user(
+    user = state.auth_store.create_user(
         "tie-user", "并发用户", "Temporary-123", created_by="test"
     )
-    state.nas._execute(
+    state.database.execute(
         "UPDATE users SET must_change_password=0 WHERE id=?", (user["id"],)
     )
     issued = [
-        state.nas.login(
+        state.auth_store.login(
             "tie-user", "Temporary-123", remote_addr="127.0.0.1", user_agent=str(i)
         )
         for i in range(10)
     ]
     for index, (_token, session) in enumerate(issued):
-        state.nas._execute(
+        state.database.execute(
             "UPDATE sessions SET last_seen_at=5000,created_at=? WHERE id=?",
             (100 + index, session["session_id"]),
         )
-    state.nas.login(
+    state.auth_store.login(
         "tie-user", "Temporary-123", remote_addr="127.0.0.1", user_agent="new"
     )
-    assert state.nas.get_session(issued[0][0]) is None
-    assert state.nas.get_session(issued[1][0]) is not None
+    assert state.auth_store.get_session(issued[0][0]) is None
+    assert state.auth_store.get_session(issued[1][0]) is not None
 
 
 def test_concurrent_logins_finish_with_at_most_ten_sessions(account_client: TestClient):
     state = account_client.state_ref
-    user = state.nas.create_user(
+    user = state.auth_store.create_user(
         "parallel-user", "并发登录", "Temporary-123", created_by="test"
     )
-    state.nas._execute(
+    state.database.execute(
         "UPDATE users SET must_change_password=0 WHERE id=?", (user["id"],)
     )
     errors: list[BaseException] = []
 
     def do_login(index: int) -> None:
         try:
-            state.nas.login(
+            state.auth_store.login(
                 "parallel-user",
                 "Temporary-123",
                 remote_addr=f"127.0.0.{index + 1}",
@@ -254,49 +254,49 @@ def test_concurrent_logins_finish_with_at_most_ten_sessions(account_client: Test
     for thread in threads:
         thread.join(timeout=5)
     assert not errors
-    assert state.nas.active_session_count(user["id"]) == 10
+    assert state.auth_store.active_session_count(user["id"]) == 10
 
 
 def test_expired_and_revoked_sessions_do_not_consume_limit(account_client: TestClient):
     state = account_client.state_ref
-    user = state.nas.create_user(
+    user = state.auth_store.create_user(
         "expiry-user", "过期会话", "Temporary-123", created_by="test"
     )
-    state.nas._execute(
+    state.database.execute(
         "UPDATE users SET must_change_password=0 WHERE id=?", (user["id"],)
     )
     tokens = [
-        state.nas.login(
+        state.auth_store.login(
             "expiry-user", "Temporary-123", remote_addr="127.0.0.1", user_agent=str(i)
         )
         for i in range(10)
     ]
-    state.nas._execute(
+    state.database.execute(
         "UPDATE sessions SET expires_at=? WHERE id=?",
         (time.time() - 1, tokens[0][1]["session_id"]),
     )
-    state.nas._execute(
+    state.database.execute(
         "UPDATE sessions SET revoked_at=?,revoke_reason='test' WHERE id=?",
         (time.time(), tokens[1][1]["session_id"]),
     )
-    state.nas.login(
+    state.auth_store.login(
         "expiry-user", "Temporary-123", remote_addr="127.0.0.1", user_agent="11"
     )
-    state.nas.login(
+    state.auth_store.login(
         "expiry-user", "Temporary-123", remote_addr="127.0.0.1", user_agent="12"
     )
-    assert state.nas.active_session_count(user["id"]) == 10
-    assert state.nas.get_session(tokens[2][0]) is not None
+    assert state.auth_store.active_session_count(user["id"]) == 10
+    assert state.auth_store.get_session(tokens[2][0]) is not None
 
 
 def test_cross_session_csrf_is_rejected_and_logout_only_revokes_current(
     account_client: TestClient,
 ):
     state = account_client.state_ref
-    token_a, session_a = state.nas.login(
+    token_a, session_a = state.auth_store.login(
         "administrator", "Admin-password-123", remote_addr="127.0.0.1", user_agent="a"
     )
-    token_b, session_b = state.nas.login(
+    token_b, session_b = state.auth_store.login(
         "administrator", "Admin-password-123", remote_addr="127.0.0.1", user_agent="b"
     )
     account_client.cookies.clear()
@@ -310,16 +310,16 @@ def test_cross_session_csrf_is_rejected_and_logout_only_revokes_current(
     account_client.headers.update({"X-CSRF-Token": session_a["csrf_token"]})
     logged_out = account_client.post("/api/auth/logout")
     assert logged_out.status_code == 200
-    assert state.nas.get_session(token_a) is None
-    assert state.nas.get_session(token_b) is not None
+    assert state.auth_store.get_session(token_a) is None
+    assert state.auth_store.get_session(token_b) is not None
 
 
 def test_plaintext_session_token_is_not_persisted(account_client: TestClient):
     state = account_client.state_ref
-    token, _session = state.nas.login(
+    token, _session = state.auth_store.login(
         "administrator", "Admin-password-123", remote_addr="127.0.0.1", user_agent="secret"
     )
     database_bytes = state.runtime.database_path.read_bytes()
     assert token.encode() not in database_bytes
-    rows = state.nas._all("SELECT detail FROM audit_log")
+    rows = state.database.all("SELECT detail FROM audit_log")
     assert all(token not in str(row["detail"]) for row in rows)

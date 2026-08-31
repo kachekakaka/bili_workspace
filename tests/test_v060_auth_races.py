@@ -7,10 +7,10 @@ from typing import Callable
 
 import pytest
 
-import app.nas as nas_module
-from app.index_store import IndexStore
+import app.account_store as account_store_module
+from app.account_store import AuthStore
+from app.database import Database
 from app.runtime import RuntimeSettings
-from app.serialized_auth_store import SerializedAuthNasStore
 
 
 def _runtime(root: Path) -> RuntimeSettings:
@@ -40,10 +40,14 @@ def _runtime(root: Path) -> RuntimeSettings:
     )
 
 
-def _store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SerializedAuthNasStore, dict]:
+def _store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[AuthStore, dict, Database]:
     monkeypatch.setenv("BILI_BOOTSTRAP_TOKEN", "bootstrap-token-for-tests")
     runtime = _runtime(tmp_path)
-    store = SerializedAuthNasStore(runtime, IndexStore(runtime.media_dir))
+    database = Database(runtime)
+    store = AuthStore(database)
     admin = store.setup_admin(
         "administrator",
         "AdminPassword123",
@@ -56,7 +60,7 @@ def _store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SerializedA
         "Temporary123",
         created_by=str(admin["id"]),
     )
-    return store, user
+    return store, user, database
 
 
 def _block_password_verification(
@@ -65,7 +69,7 @@ def _block_password_verification(
 ) -> tuple[threading.Event, threading.Event]:
     entered = threading.Event()
     release = threading.Event()
-    original: Callable[[str, str], bool] = nas_module._verify_password
+    original: Callable[[str, str], bool] = account_store_module.verify_password
 
     def blocking_verify(password: str, encoded: str) -> bool:
         valid = original(password, encoded)
@@ -75,7 +79,7 @@ def _block_password_verification(
                 raise TimeoutError("password verification test gate timed out")
         return valid
 
-    monkeypatch.setattr(nas_module, "_verify_password", blocking_verify)
+    monkeypatch.setattr(account_store_module, "verify_password", blocking_verify)
     return entered, release
 
 
@@ -83,7 +87,7 @@ def test_disable_cannot_be_overtaken_by_inflight_login(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, user = _store(tmp_path, monkeypatch)
+    store, user, database = _store(tmp_path, monkeypatch)
     entered, release = _block_password_verification(monkeypatch, "Temporary123")
     login_result: dict[str, object] = {}
     errors: list[BaseException] = []
@@ -128,7 +132,7 @@ def test_disable_cannot_be_overtaken_by_inflight_login(
         assert not disable_thread.is_alive()
         assert not errors
         token = str(login_result["token"])
-        rows = store._all(
+        rows = database.all(
             "SELECT revoked_at,revoke_reason FROM sessions WHERE user_id=?",
             (str(user["id"]),),
         )
@@ -147,13 +151,14 @@ def test_disable_cannot_be_overtaken_by_inflight_login(
         login_thread.join(timeout=1)
         disable_thread.join(timeout=1)
         store.close()
+        database.close()
 
 
 def test_password_reset_revokes_login_that_started_with_old_password(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    store, user = _store(tmp_path, monkeypatch)
+    store, user, database = _store(tmp_path, monkeypatch)
     entered, release = _block_password_verification(monkeypatch, "Temporary123")
     login_result: dict[str, object] = {}
     errors: list[BaseException] = []
@@ -199,7 +204,7 @@ def test_password_reset_revokes_login_that_started_with_old_password(
         assert not errors
         token = str(login_result["token"])
         assert store.get_session(token) is None
-        rows = store._all(
+        rows = database.all(
             "SELECT revoked_at,revoke_reason FROM sessions WHERE user_id=?",
             (str(user["id"]),),
         )
@@ -227,3 +232,4 @@ def test_password_reset_revokes_login_that_started_with_old_password(
         login_thread.join(timeout=1)
         reset_thread.join(timeout=1)
         store.close()
+        database.close()

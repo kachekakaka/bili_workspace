@@ -89,6 +89,33 @@ class RetryRequest(BaseModel):
     force: bool = False
 
 
+class TaskActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool = False
+    min_height: int | None = Field(default=None, ge=0, le=4320)
+    preferred_quality: QualityText | None = None
+
+
+class TaskBatchRequest(TaskActionRequest):
+    task_ids: list[ShortText] = Field(
+        default_factory=list,
+        min_length=1,
+        max_length=100,
+    )
+    action: Literal["retry", "cancel", "pause", "resume", "delete"]
+
+
+class ClearTasksRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statuses: list[Literal["success", "skipped", "failed", "cancelled"]] = Field(
+        default_factory=lambda: ["failed", "cancelled"],
+        max_length=4,
+    )
+    destination: Literal["all", "library", "device"] = "all"
+
+
 class ConfigUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

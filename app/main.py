@@ -8,21 +8,18 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import SESSION_COOKIE, router as api_router
 from app.auth import permissions_for_role
 from app.build_info import build_metadata
-from app.catalog_overrides import router as catalog_router
 from app.constants import MAX_REQUEST_BODY_BYTES
-from app.deletion_store import DeletionStore
-from app.enhancement_api import compat_router, router as enhancement_router
 from app.paths import web_dir
-from app.refinement_api import router as refinement_router
-from app.state import AppState
-from app.tag_store import TagStore
-from app.task_ownership_api import (
-    enhancement_router as task_ownership_enhancement_router,
+from app.routes import (
+    SESSION_COOKIE,
+    account_router,
+    catalog_router,
+    system_router,
 )
-from app.task_ownership_api import router as task_ownership_router
+from app.state import AppState
+from app.task_routes import task_router
 
 WEB_DIR = web_dir()
 _PUBLIC_API = {
@@ -65,15 +62,11 @@ def _normal_user_api_allowed(request: Request) -> bool:
 
 def create_app(state: AppState | None = None) -> FastAPI:
     app_state = state or AppState.create()
-    tag_store = TagStore(app_state.runtime)
-    deletion_store = DeletionStore(app_state.runtime)
     build = build_metadata()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        deletion_store.close()
-        tag_store.close()
         app_state.stop()
 
     app = FastAPI(
@@ -85,8 +78,6 @@ def create_app(state: AppState | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.app_state = app_state
-    app.state.tag_store = tag_store
-    app.state.deletion_store = deletion_store
 
     def host_allowed(value: str) -> bool:
         raw = value.strip()
@@ -175,7 +166,9 @@ def create_app(state: AppState | None = None) -> FastAPI:
                 if app_state.runtime.cookie_secure
                 else SESSION_COOKIE
             )
-            session = app_state.nas.get_session(request.cookies.get(cookie_name, ""))
+            session = app_state.auth_store.get_session(
+                request.cookies.get(cookie_name, "")
+            )
             if session is None:
                 response = JSONResponse(
                     {"ok": False, "error": "请先登录"}, status_code=401
@@ -257,14 +250,10 @@ def create_app(state: AppState | None = None) -> FastAPI:
     def healthz():
         return {"ok": True, **build, "mode": app_state.runtime.mode}
 
-    # Ownership routes must precede all historical compatibility routes.
-    app.include_router(task_ownership_router)
-    app.include_router(task_ownership_enhancement_router)
+    app.include_router(account_router)
+    app.include_router(system_router)
+    app.include_router(task_router)
     app.include_router(catalog_router)
-    app.include_router(refinement_router)
-    app.include_router(compat_router)
-    app.include_router(api_router)
-    app.include_router(enhancement_router)
 
     if WEB_DIR.exists():
 

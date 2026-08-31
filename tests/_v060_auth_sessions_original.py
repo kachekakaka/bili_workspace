@@ -9,14 +9,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.account_store import AuthStore
 from app.auth import (
     validate_display_name,
     validate_password,
     validate_username,
 )
-from app.index_store import IndexStore
+from app.database import Database
 from app.main import create_app
-from app.nas import NasStore
 from app.runtime import RuntimeSettings
 from app.state import AppState
 from tests.conftest import StaticCookieChecker, artifact_runner
@@ -60,10 +60,10 @@ def _runtime(
     )
 
 
-def _server_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> NasStore:
+def _server_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AuthStore:
     monkeypatch.setenv("BILI_BOOTSTRAP_TOKEN", "bootstrap-token-for-tests")
     runtime = _runtime(tmp_path)
-    store = NasStore(runtime, IndexStore(runtime.media_dir))
+    store = AuthStore(Database(runtime))
     store.setup_admin(
         "administrator",
         "StrongPassword123",
@@ -71,6 +71,11 @@ def _server_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> NasStore:
         "管理员",
     )
     return store
+
+
+def _close_store(store: AuthStore) -> None:
+    store.close()
+    store.database.close()
 
 
 def _server_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AppState:
@@ -144,7 +149,7 @@ def test_account_validation_rules() -> None:
 
 def test_fresh_local_install_creates_restricted_default_admin(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path, mode="local")
-    store = NasStore(runtime, IndexStore(runtime.media_dir))
+    store = AuthStore(Database(runtime))
     try:
         users = store.list_users()
         assert len(users) == 1
@@ -165,21 +170,21 @@ def test_fresh_local_install_creates_restricted_default_admin(tmp_path: Path) ->
         )
         assert session["must_change_password"] is True
         assert store.get_session(token) is not None
-        row = store._one("SELECT token_hash FROM sessions WHERE id=?", (session["session_id"],))
+        row = store.database.one("SELECT token_hash FROM sessions WHERE id=?", (session["session_id"],))
         assert row and row["token_hash"] == hashlib.sha256(token.encode()).hexdigest()
         assert token not in str(row)
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_default_admin_blocks_switch_to_remote_bind(tmp_path: Path) -> None:
     local_runtime = _runtime(tmp_path, mode="local")
-    local = NasStore(local_runtime, IndexStore(local_runtime.media_dir))
-    local.close()
+    local = AuthStore(Database(local_runtime))
+    _close_store(local)
 
     remote_runtime = _runtime(tmp_path, mode="server")
     with pytest.raises(RuntimeError, match="默认管理员密码尚未修改"):
-        NasStore(remote_runtime, IndexStore(remote_runtime.media_dir))
+        AuthStore(Database(remote_runtime))
 
 
 def test_eleventh_login_evicts_oldest_connection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,11 +203,11 @@ def test_eleventh_login_evicts_oldest_connection(tmp_path: Path, monkeypatch: py
         oldest_token, oldest = sessions[0]
         recently_used_token, recently_used = sessions[1]
         now = time.time()
-        store._execute(
+        store.database.execute(
             "UPDATE sessions SET last_seen_at=?,created_at=? WHERE id=?",
             (now - 500, now - 600, oldest["session_id"]),
         )
-        store._execute(
+        store.database.execute(
             "UPDATE sessions SET last_seen_at=?,created_at=? WHERE id=?",
             (now, now - 1000, recently_used["session_id"]),
         )
@@ -218,12 +223,12 @@ def test_eleventh_login_evicts_oldest_connection(tmp_path: Path, monkeypatch: py
         assert store.get_session(oldest_token) is None
         assert store.get_session(recently_used_token) is not None
         assert store.get_session(newest_token) is not None
-        revoked = store._one(
+        revoked = store.database.one(
             "SELECT revoke_reason FROM sessions WHERE id=?", (oldest["session_id"],)
         )
         assert revoked and revoked["revoke_reason"] == "session_limit"
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_session_limit_tie_uses_created_at_and_new_session_is_protected(
@@ -242,7 +247,7 @@ def test_session_limit_tie_uses_created_at_and_new_session_is_protected(
         ]
         base = time.time() - 100
         for index, (_token, session) in enumerate(items):
-            store._execute(
+            store.database.execute(
                 "UPDATE sessions SET last_seen_at=?,created_at=? WHERE id=?",
                 (base, base + index, session["session_id"]),
             )
@@ -257,7 +262,7 @@ def test_session_limit_tie_uses_created_at_and_new_session_is_protected(
         assert store.get_session(token) is not None
         assert store.get_session_by_id(new_session["session_id"]) is not None
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_expired_and_revoked_sessions_do_not_consume_limit(
@@ -274,7 +279,7 @@ def test_expired_and_revoked_sessions_do_not_consume_limit(
             )
             for index in range(10)
         ]
-        store._execute(
+        store.database.execute(
             "UPDATE sessions SET expires_at=? WHERE id=?",
             (time.time() - 1, tokens[0][1]["session_id"]),
         )
@@ -291,7 +296,7 @@ def test_expired_and_revoked_sessions_do_not_consume_limit(
         assert store.active_session_count(str(added[0][1]["user_id"])) == 10
         assert all(store.get_session(token) is not None for token, _ in added)
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_concurrent_logins_still_leave_at_most_ten_sessions(
@@ -317,7 +322,7 @@ def test_concurrent_logins_still_leave_at_most_ten_sessions(
         assert store.active_session_count(user_id) == 10
         assert sum(store.get_session(token) is not None for token in tokens) == 10
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_password_change_rotates_current_token_and_only_logout_current(
@@ -359,7 +364,7 @@ def test_password_change_rotates_current_token_and_only_logout_current(
         assert store.get_session(third_token) is None
         assert store.get_session(new_token) is not None
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_admin_user_api_forced_password_and_session_csrf_isolation(
@@ -450,11 +455,11 @@ def test_database_and_audit_never_store_plain_session_token(
             session_id=str(session["session_id"]),
         )
         for table in ("sessions", "audit_log"):
-            rows = store._all(f"SELECT * FROM {table}")
+            rows = store.database.all(f"SELECT * FROM {table}")
             assert token not in repr(rows)
-        assert token.encode() not in store.path.read_bytes()
+        assert token.encode() not in store.database.path.read_bytes()
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_sse_session_heartbeat_refreshes_last_seen(
@@ -469,19 +474,19 @@ def test_sse_session_heartbeat_refreshes_last_seen(
             user_agent="sse-heartbeat",
         )
         old_seen = time.time() - 300
-        store._execute(
+        store.database.execute(
             "UPDATE sessions SET last_seen_at=? WHERE id=?",
             (old_seen, session["session_id"]),
         )
         assert store.session_is_active(str(session["session_id"])) is True
-        row = store._one(
+        row = store.database.one(
             "SELECT last_seen_at FROM sessions WHERE id=?",
             (session["session_id"],),
         )
         assert row is not None
         assert float(row["last_seen_at"]) > old_seen + 60
     finally:
-        store.close()
+        _close_store(store)
 
 
 def test_remote_setup_form_collects_chinese_display_name() -> None:
@@ -516,15 +521,15 @@ def test_secure_cookie_is_httponly_host_scoped_and_session_heartbeat_touches_las
         assert "Path=/" in cookie
         assert "Domain=" not in cookie
 
-        session_id = state.nas.list_sessions(
+        session_id = state.auth_store.list_sessions(
             str(response.json()["data"]["user"]["id"]), ""
         )[0]["id"]
         stale = time.time() - 120
-        state.nas._execute(
+        state.database.execute(
             "UPDATE sessions SET last_seen_at=? WHERE id=?", (stale, session_id)
         )
-        assert state.nas.session_is_active(str(session_id)) is True
-        row = state.nas._one(
+        assert state.auth_store.session_is_active(str(session_id)) is True
+        row = state.database.one(
             "SELECT last_seen_at FROM sessions WHERE id=?", (session_id,)
         )
         assert row and float(row["last_seen_at"]) > stale + 60

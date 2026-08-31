@@ -152,9 +152,9 @@ def test_change_password_rotates_csrf_and_revokes_other_sessions(server_client):
     assert data["other_sessions_revoked"] >= 1
     rotated_token = server_client.cookies.get("__Host-bili_session")
     assert rotated_token and rotated_token not in {first_token, second_token}
-    assert server_client.state_ref.nas.get_session(first_token) is None
-    assert server_client.state_ref.nas.get_session(second_token) is None
-    assert server_client.state_ref.nas.get_session(rotated_token) is not None
+    assert server_client.state_ref.auth_store.get_session(first_token) is None
+    assert server_client.state_ref.auth_store.get_session(second_token) is None
+    assert server_client.state_ref.auth_store.get_session(rotated_token) is not None
 
     old_password = server_client.post(
         "/api/auth/login",

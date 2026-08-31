@@ -132,13 +132,28 @@ def authenticate_local_admin(client: TestClient) -> str:
     return csrf
 
 def wait_terminal(queue, task_id: str, timeout: float = 5.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    """Wait for terminal behavior, failing only after no observable progress."""
+    deadline = time.monotonic() + timeout
+    task = None
+    last_observation = None
+    while time.monotonic() < deadline:
         task = queue.get_task(task_id)
         if task and task["status"] in {"success", "failed", "skipped", "cancelled"}:
             return task
+        observation = (
+            (
+                task.get("status"),
+                task.get("phase"),
+                task.get("last_heartbeat"),
+            )
+            if task
+            else None
+        )
+        if observation != last_observation:
+            last_observation = observation
+            deadline = time.monotonic() + timeout
         time.sleep(0.02)
-    raise AssertionError(f"task did not finish: {task_id}")
+    raise AssertionError(f"task did not finish: {task_id}; last={task!r}")
 
 
 @pytest.fixture

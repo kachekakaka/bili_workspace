@@ -1,26 +1,25 @@
 from __future__ import annotations
 
-import asyncio
-import json
-import mimetypes
-import time
+import ipaddress
+import socket
+from typing import Annotated
 
 import httpx
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from app import __version__
 from app.auth import ROLE_ADMIN
 from app.bbdown import find_ffmpeg
 from app.constants import (
     MAX_BATCH_ITEMS,
-    MAX_LOG_API_CHARS,
     SESSION_ABSOLUTE_DAYS,
-    SSE_AUTH_HEARTBEAT_SECONDS,
 )
 from app.index_store import UnsafeIndexPathError
+from app.io_utils import atomic_write_json
 from app.media_stream import file_response
 from app.models import (
     AdminPasswordResetRequest,
@@ -39,15 +38,15 @@ from app.models import (
     GroupRenameRequest,
     MediaMoveRequest,
     PreviewRequest,
-    RetryRequest,
     WatchProgressRequest,
 )
-from app.queue import QueueFullError
 from app.search import SearchError, search_videos
 from app.state import AppState
 from app.urls import Target, parse_inputs
 
-router = APIRouter(prefix="/api")
+account_router = APIRouter(prefix="/api", tags=["account"])
+system_router = APIRouter(prefix="/api", tags=["system"])
+catalog_router = APIRouter(prefix="/api", tags=["catalog"])
 SESSION_COOKIE = "bili_session"
 _COVER_HOST_SUFFIXES = ("bilibili.com", "hdslb.com", "biliimg.com")
 _LOCAL_STATUS_LABELS = {
@@ -220,8 +219,8 @@ def _decorate_search_catalog(request: Request, data: dict) -> dict:
     items = data.get("items") or []
     keys = [str(item.get("bvid") or "").strip() for item in items]
     keys = [key for key in keys if key]
-    tags_by_key = request.app.state.tag_store.tags_for_keys(keys)
-    tombstones = request.app.state.deletion_store.for_keys(keys)
+    tags_by_key = state.tag_store.tags_for_keys(keys)
+    tombstones = state.deletion_store.for_keys(keys)
     restored: list[str] = []
     for item in items:
         key = str(item.get("bvid") or "").strip()
@@ -243,7 +242,7 @@ def _decorate_search_catalog(request: Request, data: dict) -> dict:
                 deleted_record=True,
             )
     if restored:
-        request.app.state.deletion_store.clear(restored)
+        state.deletion_store.clear(restored)
     return data
 
 
@@ -253,7 +252,7 @@ def _remote(request: Request) -> str:
 
 def _audit(request: Request, action: str, detail: str = "") -> None:
     session = _session(request)
-    _state(request).nas.audit(
+    _state(request).auth_store.audit(
         str(session.get("user_id")) if session else None,
         action,
         detail,
@@ -293,7 +292,7 @@ def _decorate_task(state: AppState, task: dict, destination: str) -> dict:
     value["destination"] = destination
     value["destination_label"] = "设备导出" if destination == "device" else "NAS 媒体库"
     if destination == "device":
-        record = state.nas.export_record(str(task["id"])) or {}
+        record = state.task_store.export_record(str(task["id"])) or {}
         value["export_state"] = record.get("state", "preparing")
         value["export_ready"] = record.get("state") == "ready"
         value["export_available"] = (
@@ -305,9 +304,9 @@ def _decorate_task(state: AppState, task: dict, destination: str) -> dict:
         value["export_expires_at"] = record.get("expires_at")
     else:
         if not value.get("group_id"):
-            group = state.nas.group_by_folder(
+            group = state.catalog_store.group_by_folder(
                 str(task.get("group_folder") or "")
-            ) or state.nas.group_by_name(str(task.get("group") or ""))
+            ) or state.catalog_store.group_by_name(str(task.get("group") or ""))
             value["group_id"] = group.get("id", "") if group else ""
             if group:
                 value["group"] = group["display_name"]
@@ -323,39 +322,25 @@ def _compact_task(value: dict) -> dict:
     return result
 
 
-def _find_task(state: AppState, task_id: str) -> tuple[dict | None, str]:
-    task = state.queue.get_task(task_id)
-    if task:
-        return task, "library"
-    task = state.export_queue.get_task(task_id)
-    if task:
-        return task, "device"
-    snapshot = state.nas.task_snapshot(task_id)
-    if snapshot:
-        return snapshot, str(snapshot.get("destination") or "library")
-    payload = state.nas.export_task_payload(task_id)
-    return (payload, "device") if payload else (None, "")
-
-
 # Authentication ---------------------------------------------------------
-@router.get("/auth/status")
+@account_router.get("/auth/status")
 def auth_status(request: Request):
     state = _state(request)
     token = request.cookies.get(_cookie_name(state), "")
-    return ok(state.nas.auth_status(token))
+    return ok(state.auth_store.auth_status(token))
 
 
-@router.post("/auth/setup")
+@account_router.post("/auth/setup")
 def auth_setup(request: Request, body: AuthSetupRequest):
     state = _state(request)
     try:
-        user = state.nas.setup_admin(
+        user = state.auth_store.setup_admin(
             body.username,
             body.password,
             body.bootstrap_token,
             body.display_name,
         )
-        token, _session_data = state.nas.login(
+        token, _session_data = state.auth_store.login(
             user["username"],
             body.password,
             remote_addr=_remote(request),
@@ -365,16 +350,16 @@ def auth_setup(request: Request, body: AuthSetupRequest):
         return err(str(exc), 429)
     except ValueError as exc:
         return err(str(exc), 400)
-    response = JSONResponse(ok(state.nas.auth_status(token)))
+    response = JSONResponse(ok(state.auth_store.auth_status(token)))
     _set_session_cookie(response, state, token)
     return response
 
 
-@router.post("/auth/login")
+@account_router.post("/auth/login")
 def auth_login(request: Request, body: AuthLoginRequest):
     state = _state(request)
     try:
-        token, _session_data = state.nas.login(
+        token, _session_data = state.auth_store.login(
             body.username,
             body.password,
             remote_addr=_remote(request),
@@ -384,19 +369,19 @@ def auth_login(request: Request, body: AuthLoginRequest):
         return err(str(exc), 429)
     except ValueError as exc:
         return err(str(exc), 401, code="invalid_credentials")
-    response = JSONResponse(ok(state.nas.auth_status(token)))
+    response = JSONResponse(ok(state.auth_store.auth_status(token)))
     _set_session_cookie(response, state, token)
     return response
 
 
-@router.post("/auth/password")
+@account_router.post("/auth/password")
 def auth_change_password(request: Request, body: AuthPasswordChangeRequest):
     state = _state(request)
     session = _session(request)
     if not session:
         return err("请先登录", 401)
     try:
-        result = state.nas.change_password(
+        result = state.auth_store.change_password(
             str(session["user_id"]),
             body.current_password,
             body.new_password,
@@ -407,31 +392,31 @@ def auth_change_password(request: Request, body: AuthPasswordChangeRequest):
     token = str(result.pop("token"))
     rotated = result.pop("session")
     request.state.auth_session = rotated
-    state.nas.audit(
+    state.auth_store.audit(
         str(session["user_id"]),
         "auth.password.change",
         f"撤销其他会话 {result['other_sessions_revoked']} 个",
         _remote(request),
         session_id=str(session["session_id"]),
     )
-    payload = state.nas.auth_status(token)
+    payload = state.auth_store.auth_status(token)
     payload["other_sessions_revoked"] = result["other_sessions_revoked"]
     response = JSONResponse(ok(payload))
     _set_session_cookie(response, state, token)
     return response
 
 
-@router.patch("/auth/profile")
+@account_router.patch("/auth/profile")
 def auth_update_profile(request: Request, body: AuthProfileUpdateRequest):
     state = _state(request)
     session = _session(request)
     if not session:
         return err("请先登录", 401)
     try:
-        user = state.nas.update_profile(str(session["user_id"]), body.display_name)
+        user = state.auth_store.update_profile(str(session["user_id"]), body.display_name)
     except (KeyError, ValueError) as exc:
         return err(str(exc), 400)
-    state.nas.audit(
+    state.auth_store.audit(
         str(session["user_id"]),
         "auth.profile.update",
         "修改中文显示名",
@@ -441,7 +426,7 @@ def auth_update_profile(request: Request, body: AuthProfileUpdateRequest):
     return ok(user)
 
 
-@router.get("/auth/sessions")
+@account_router.get("/auth/sessions")
 def auth_sessions(request: Request):
     state = _state(request)
     session = _session(request)
@@ -449,7 +434,7 @@ def auth_sessions(request: Request):
         return err("请先登录", 401)
     return ok(
         {
-            "items": state.nas.list_sessions(
+            "items": state.auth_store.list_sessions(
                 str(session["user_id"]), str(session["session_id"])
             ),
             "limit": 10,
@@ -457,14 +442,14 @@ def auth_sessions(request: Request):
     )
 
 
-@router.delete("/auth/sessions/{session_id}")
+@account_router.delete("/auth/sessions/{session_id}")
 def auth_revoke_session(request: Request, session_id: str):
     state = _state(request)
     session = _session(request)
     if not session:
         return err("请先登录", 401)
     try:
-        revoked = state.nas.revoke_session(
+        revoked = state.auth_store.revoke_session(
             str(session["user_id"]),
             session_id,
             current_session_id=str(session["session_id"]),
@@ -473,7 +458,7 @@ def auth_revoke_session(request: Request, session_id: str):
         return err(str(exc), 400)
     if not revoked:
         return err("会话不存在或已经失效", 404)
-    state.nas.audit(
+    state.auth_store.audit(
         str(session["user_id"]),
         "auth.session.revoke",
         "撤销其他设备",
@@ -483,16 +468,16 @@ def auth_revoke_session(request: Request, session_id: str):
     return ok({"revoked": True})
 
 
-@router.post("/auth/sessions/revoke-others")
+@account_router.post("/auth/sessions/revoke-others")
 def auth_revoke_other_sessions(request: Request):
     state = _state(request)
     session = _session(request)
     if not session:
         return err("请先登录", 401)
-    count = state.nas.revoke_other_sessions(
+    count = state.auth_store.revoke_other_sessions(
         str(session["user_id"]), str(session["session_id"])
     )
-    state.nas.audit(
+    state.auth_store.audit(
         str(session["user_id"]),
         "auth.session.revoke_others",
         f"撤销其他会话 {count} 个",
@@ -502,19 +487,19 @@ def auth_revoke_other_sessions(request: Request):
     return ok({"revoked": count})
 
 
-@router.post("/auth/logout")
+@account_router.post("/auth/logout")
 def auth_logout(request: Request):
     state = _state(request)
     session = _session(request)
     if session:
-        state.nas.audit(
+        state.auth_store.audit(
             str(session["user_id"]),
             "auth.logout",
             "退出当前设备",
             _remote(request),
             session_id=str(session["session_id"]),
         )
-        state.nas.logout(str(session["session_id"]))
+        state.auth_store.logout(str(session["session_id"]))
     response = JSONResponse(ok({"logged_out": True}))
     response.delete_cookie(
         _cookie_name(state),
@@ -526,22 +511,22 @@ def auth_logout(request: Request):
     return response
 
 
-@router.get("/admin/users")
+@account_router.get("/admin/users")
 def admin_list_users(request: Request):
     admin = _require_admin(request)
     if isinstance(admin, JSONResponse):
         return admin
-    return ok({"items": _state(request).nas.list_users()})
+    return ok({"items": _state(request).auth_store.list_users()})
 
 
-@router.post("/admin/users")
+@account_router.post("/admin/users")
 def admin_create_user(request: Request, body: AdminUserCreateRequest):
     admin = _require_admin(request)
     if isinstance(admin, JSONResponse):
         return admin
     state = _state(request)
     try:
-        user = state.nas.create_user(
+        user = state.auth_store.create_user(
             body.username,
             body.display_name,
             body.temporary_password,
@@ -549,7 +534,7 @@ def admin_create_user(request: Request, body: AdminUserCreateRequest):
         )
     except ValueError as exc:
         return err(str(exc), 400)
-    state.nas.audit(
+    state.auth_store.audit(
         str(admin["user_id"]),
         "admin.user.create",
         user["username"],
@@ -560,7 +545,7 @@ def admin_create_user(request: Request, body: AdminUserCreateRequest):
     return ok(user)
 
 
-@router.patch("/admin/users/{user_id}")
+@account_router.patch("/admin/users/{user_id}")
 def admin_update_user(request: Request, user_id: str, body: AdminUserUpdateRequest):
     admin = _require_admin(request)
     if isinstance(admin, JSONResponse):
@@ -569,9 +554,9 @@ def admin_update_user(request: Request, user_id: str, body: AdminUserUpdateReque
     try:
         user = None
         if body.display_name is not None:
-            user = state.nas.set_user_display_name(user_id, body.display_name)
+            user = state.auth_store.set_user_display_name(user_id, body.display_name)
         if body.disabled is not None:
-            user = state.nas.set_user_disabled(
+            user = state.auth_store.set_user_disabled(
                 user_id, body.disabled, actor_user_id=str(admin["user_id"])
             )
         if user is None:
@@ -583,7 +568,7 @@ def admin_update_user(request: Request, user_id: str, body: AdminUserUpdateReque
     return ok(user)
 
 
-@router.post("/admin/users/{user_id}/reset-password")
+@account_router.post("/admin/users/{user_id}/reset-password")
 def admin_reset_user_password(
     request: Request, user_id: str, body: AdminPasswordResetRequest
 ):
@@ -591,7 +576,7 @@ def admin_reset_user_password(
     if isinstance(admin, JSONResponse):
         return admin
     try:
-        result = _state(request).nas.reset_user_password(
+        result = _state(request).auth_store.reset_user_password(
             user_id,
             body.temporary_password,
             actor_user_id=str(admin["user_id"]),
@@ -603,7 +588,7 @@ def admin_reset_user_password(
     return ok(result)
 
 
-@router.post("/admin/users/{user_id}/revoke-sessions")
+@account_router.post("/admin/users/{user_id}/revoke-sessions")
 def admin_revoke_user_sessions(request: Request, user_id: str):
     admin = _require_admin(request)
     if isinstance(admin, JSONResponse):
@@ -611,8 +596,8 @@ def admin_revoke_user_sessions(request: Request, user_id: str):
     state = _state(request)
     if user_id == str(admin["user_id"]):
         return err("不能通过管理员接口撤销当前管理员全部会话", 400)
-    count = state.nas.revoke_all_sessions(user_id, "admin_revoke")
-    state.nas.audit(
+    count = state.auth_store.revoke_all_sessions(user_id, "admin_revoke")
+    state.auth_store.audit(
         str(admin["user_id"]),
         "admin.user.sessions_revoke",
         f"撤销会话 {count} 个",
@@ -624,13 +609,12 @@ def admin_revoke_user_sessions(request: Request, user_id: str):
 
 
 # Status/config/search ----------------------------------------------------
-@router.get("/status")
-def get_status(request: Request, refresh_login: bool = False):
+def status_response(request: Request, refresh_login: bool = False):
     state = _state(request)
     cfg = state.config_store.get()
     cookie = state.cookie_checker.status(force=refresh_login)
-    state.nas.sync_index()
-    records = _decorate_group_task_counts(state, state.nas.list_groups())
+    state.catalog_store.sync_index()
+    records = _decorate_group_task_counts(state, state.catalog_store.list_groups())
     return ok(
         {
             "version": __version__,
@@ -645,13 +629,13 @@ def get_status(request: Request, refresh_login: bool = False):
             "group_records": records,
             "active_tasks": state.queue.active_count() + state.export_queue.active_count(),
             "task_summary": _combined_summary(state),
-            "storage": state.nas.storage_status(),
+            "storage": state.catalog_store.storage_status(),
             **state.readiness(),
         }
     )
 
 
-@router.get("/config")
+@system_router.get("/config")
 def get_config(request: Request):
     state = _state(request)
     config = state.config_store.as_dict()
@@ -667,7 +651,7 @@ def get_config(request: Request):
     return ok(config, protected_fields=protected_fields)
 
 
-@router.put("/config")
+@system_router.put("/config")
 def put_config(request: Request, body: ConfigUpdate):
     state = _state(request)
     patch = body.as_patch()
@@ -689,7 +673,7 @@ def put_config(request: Request, body: ConfigUpdate):
     return ok(cfg.to_dict(), restart_required=restart)
 
 
-@router.get("/search")
+@catalog_router.get("/search")
 def api_search(
     request: Request,
     q: str = Query(default="", max_length=100),
@@ -715,12 +699,12 @@ def api_search(
 
 
 # Groups ------------------------------------------------------------------
-@router.get("/groups")
+@catalog_router.get("/groups")
 def api_groups(request: Request):
     state = _state(request)
     cfg = state.config_store.get()
-    state.nas.sync_index()
-    records = _decorate_group_task_counts(state, state.nas.list_groups())
+    state.catalog_store.sync_index()
+    records = _decorate_group_task_counts(state, state.catalog_store.list_groups())
     return ok(
         {
             "default_group": cfg.default_group,
@@ -731,22 +715,22 @@ def api_groups(request: Request):
     )
 
 
-@router.post("/groups")
+@catalog_router.post("/groups")
 def api_create_group(request: Request, body: GroupCreateRequest):
     try:
-        group = _state(request).nas.create_group(body.name)
+        group = _state(request).catalog_store.create_group(body.name)
     except ValueError as exc:
         return err(str(exc))
     _audit(request, "group.create", str(group.get("display_name") or body.name))
     return ok(group)
 
 
-@router.patch("/groups/{group_id}")
+@catalog_router.patch("/groups/{group_id}")
 def api_rename_group(request: Request, group_id: str, body: GroupRenameRequest):
     state = _state(request)
-    before = state.nas.get_group(group_id)
+    before = state.catalog_store.get_group(group_id)
     try:
-        group = state.nas.rename_group(group_id, body.name)
+        group = state.catalog_store.rename_group(group_id, body.name)
         if before and state.config_store.get().default_group.casefold() == str(before["display_name"]).casefold():
             state.config_store.update({"default_group": group["display_name"]})
     except KeyError as exc:
@@ -757,12 +741,12 @@ def api_rename_group(request: Request, group_id: str, body: GroupRenameRequest):
     return ok(group)
 
 
-@router.post("/groups/{group_id}/merge")
+@catalog_router.post("/groups/{group_id}/merge")
 def api_merge_group(request: Request, group_id: str, body: GroupMergeRequest):
     state = _state(request)
-    source = state.nas.get_group(group_id)
+    source = state.catalog_store.get_group(group_id)
     try:
-        group = state.nas.merge_group(group_id, body.target_id)
+        group = state.catalog_store.merge_group(group_id, body.target_id)
         if source and state.config_store.get().default_group.casefold() == str(source["display_name"]).casefold():
             state.config_store.update({"default_group": group["display_name"]})
     except KeyError as exc:
@@ -773,14 +757,14 @@ def api_merge_group(request: Request, group_id: str, body: GroupMergeRequest):
     return ok(group)
 
 
-@router.delete("/groups/{group_id}")
+@catalog_router.delete("/groups/{group_id}")
 def api_delete_group(request: Request, group_id: str):
     state = _state(request)
-    group = state.nas.get_group(group_id)
+    group = state.catalog_store.get_group(group_id)
     if group and state.config_store.get().default_group.casefold() == str(group["display_name"]).casefold():
         return err("当前默认分组不能删除，请先在设置中修改默认分组", 409)
     try:
-        state.nas.delete_group(group_id)
+        state.catalog_store.delete_group(group_id)
     except KeyError as exc:
         return err(str(exc), 404)
     except ValueError as exc:
@@ -790,8 +774,7 @@ def api_delete_group(request: Request, group_id: str):
 
 
 # Preview/download/tasks --------------------------------------------------
-@router.post("/preview")
-def api_preview(request: Request, body: PreviewRequest):
+def preview_response(request: Request, body: PreviewRequest):
     state = _state(request)
     try:
         target = _item_target(body.item)
@@ -810,225 +793,8 @@ def api_preview(request: Request, body: PreviewRequest):
     return ok(data)
 
 
-@router.post("/download")
-def api_download(request: Request, body: DownloadRequest):
-    state = _state(request)
-    try:
-        targets, metadata = _parse_download_body(body)
-        if body.destination == "device":
-            duplicate = None
-            for target in targets:
-                record = state.nas.active_export_for_source(target.key)
-                if record:
-                    duplicate = (target, record)
-                    break
-            if duplicate:
-                target, record = duplicate
-                return err(
-                    f"{target.bvid or target.key} 已有尚未下载或过期的设备导出任务"
-                    f"（任务 {record.get('task_id', '')}）",
-                    409,
-                )
-            tasks = state.export_queue.enqueue(
-                targets,
-                force=True,
-                metadata=metadata,
-                group="设备导出",
-                group_folder="device",
-                min_height=body.min_height,
-            )
-            for task in tasks:
-                if task.get("status") in {"queued", "running"}:
-                    state.nas.register_export_task(task)
-            tasks = [_decorate_task(state, task, "device") for task in tasks]
-        else:
-            group = state.nas.resolve_group(body.group_id, body.group)
-            tasks = state.queue.enqueue(
-                targets,
-                force=body.force,
-                metadata=metadata,
-                group=group["display_name"],
-                group_id=group["id"],
-                group_folder=group["folder_key"],
-                min_height=body.min_height,
-            )
-            tasks = [_decorate_task(state, task, "library") for task in tasks]
-    except QueueFullError as exc:
-        return err(str(exc), 429)
-    except ValueError as exc:
-        return err(str(exc))
-    _audit(request, "download.enqueue", f"destination={body.destination}; count={len(tasks)}")
-    return ok(tasks, total=len(tasks), limit=MAX_BATCH_ITEMS)
-
-
-@router.get("/tasks")
-def api_tasks(request: Request):
-    state = _state(request)
-    tasks = [
-        _compact_task(_decorate_task(state, item, "library"))
-        for item in state.queue.list_tasks()
-    ]
-    tasks += [
-        _compact_task(_decorate_task(state, item, "device"))
-        for item in state.export_queue.list_tasks()
-    ]
-    tasks.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
-    return ok(tasks, summary=_combined_summary(state))
-
-
-@router.get("/tasks/{task_id}")
-def api_task(request: Request, task_id: str):
-    state = _state(request)
-    task, destination = _find_task(state, task_id)
-    if not task:
-        return err("任务不存在", 404)
-    return ok(_decorate_task(state, task, destination))
-
-
-@router.get("/tasks/{task_id}/log")
-def api_task_log(request: Request, task_id: str, tail: int = Query(default=80_000, ge=1, le=MAX_LOG_API_CHARS)):
-    state = _state(request)
-    queue = state.export_queue if state.export_queue.get_task(task_id) else state.queue
-    try:
-        data = queue.get_log(task_id, tail_chars=tail)
-    except KeyError:
-        return err("任务不存在", 404)
-    except ValueError as exc:
-        return err(str(exc))
-    return ok(data)
-
-
-@router.get("/tasks/{task_id}/log/download")
-def api_task_log_download(request: Request, task_id: str):
-    state = _state(request)
-    queue = state.export_queue if state.export_queue.get_task(task_id) else state.queue
-    try:
-        data = queue.get_log(task_id, tail_chars=None)
-    except KeyError:
-        return err("任务不存在", 404)
-    except ValueError as exc:
-        return err(str(exc))
-    return PlainTextResponse(
-        str(data.get("text") or ""),
-        headers={"Content-Disposition": f'attachment; filename="task-{task_id}.log"'},
-    )
-
-
-@router.post("/tasks/{task_id}/cancel")
-def api_cancel_task(request: Request, task_id: str):
-    state = _state(request)
-    task, destination = _find_task(state, task_id)
-    if not task:
-        return err("任务不存在", 404)
-    queue = state.export_queue if destination == "device" else state.queue
-    if not queue.cancel(task_id):
-        return err("任务已结束，无法取消", 409)
-    return ok({"cancelled": True, "task_id": task_id})
-
-
-@router.post("/tasks/{task_id}/retry")
-def api_retry_task(request: Request, task_id: str, body: RetryRequest):
-    state = _state(request)
-    task, destination = _find_task(state, task_id)
-    if not task:
-        return err("任务不存在", 404)
-    queue = state.export_queue if destination == "device" else state.queue
-    try:
-        tasks = queue.retry(task_id, force=True if destination == "device" else body.force)
-        if destination == "device":
-            for item in tasks:
-                if item.get("status") in {"queued", "running"}:
-                    state.nas.register_export_task(item)
-        tasks = [_decorate_task(state, item, destination) for item in tasks]
-    except QueueFullError as exc:
-        return err(str(exc), 429)
-    except ValueError as exc:
-        return err(str(exc), 409)
-    return ok(tasks, total=len(tasks))
-
-
-@router.post("/tasks/{task_id}/open-output")
-def api_open_output(request: Request, task_id: str):
-    state = _state(request)
-    if state.export_queue.get_task(task_id):
-        return err("设备导出任务请使用“下载到当前设备”按钮", 409)
-    try:
-        relative = state.queue.open_output(task_id)
-    except KeyError:
-        return err("任务不存在", 404)
-    except FileNotFoundError as exc:
-        return err(str(exc), 404)
-    except RuntimeError as exc:
-        return err(str(exc), 501)
-    except ValueError as exc:
-        return err(str(exc), 409)
-    return ok({"opened": True, "path": relative})
-
-
-@router.post("/tasks/clear-finished")
-def api_clear_finished(request: Request):
-    # Device export history remains until it is downloaded or expires, so a user cannot
-    # accidentally clear the only pointer to a ready temporary file.
-    removed = _state(request).queue.clear_finished()
-    return ok({"removed": removed})
-
-
-# Device export -----------------------------------------------------------
-@router.post("/exports/{task_id}/prepare")
-def api_prepare_export(request: Request, task_id: str):
-    state = _state(request)
-    task = state.export_queue.get_task(task_id) or state.nas.export_task_payload(task_id)
-    if not task:
-        return err("设备导出任务不存在", 404)
-    try:
-        record = state.nas.prepare_export(task_id, task)
-    except KeyError as exc:
-        return err(str(exc), 404)
-    except FileNotFoundError as exc:
-        return err(str(exc), 404)
-    except ValueError as exc:
-        return err(str(exc), 409)
-    return ok({**record, "download_url": f"/api/exports/{task_id}/download"})
-
-
-@router.api_route("/exports/{task_id}/download", methods=["GET", "HEAD"])
-def api_download_export(request: Request, task_id: str):
-    state = _state(request)
-    task = state.export_queue.get_task(task_id) or state.nas.export_task_payload(task_id)
-    if not task:
-        return err("设备导出任务不存在", 404)
-    try:
-        record = state.nas.export_record(task_id)
-        if not record or record.get("state") != "ready":
-            state.nas.prepare_export(task_id, task)
-        record, path = state.nas.resolve_export(task_id)
-    except KeyError as exc:
-        return err(str(exc), 404)
-    except FileNotFoundError as exc:
-        return err(str(exc), 404)
-    except ValueError as exc:
-        return err(str(exc), 410 if "过期" in str(exc) or "清理" in str(exc) else 409)
-    return file_response(
-        request,
-        path,
-        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-        filename=str(record["filename"]),
-        attachment=True,
-        allow_range=False,
-        on_complete=lambda: state.nas.complete_export(task_id),
-    )
-
-
-@router.delete("/exports/{task_id}")
-def api_discard_export(request: Request, task_id: str):
-    state = _state(request)
-    if not state.nas.discard_export(task_id):
-        return err("设备导出记录不存在", 404)
-    return ok({"discarded": True})
-
-
 # Cover proxy/cache --------------------------------------------------------
-@router.get("/cover")
+@catalog_router.get("/cover")
 def api_cover(request: Request, url: str = Query(..., max_length=2048)):
     state = _state(request)
     try:
@@ -1043,12 +809,12 @@ def api_cover(request: Request, url: str = Query(..., max_length=2048)):
 
 
 # Library/player ----------------------------------------------------------
-@router.get("/library/summary")
+@catalog_router.get("/library/summary")
 def api_library_summary(request: Request):
-    return ok(_state(request).nas.library_summary())
+    return ok(_state(request).catalog_store.library_summary())
 
 
-@router.get("/library")
+@catalog_router.get("/library")
 def api_library(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1061,7 +827,7 @@ def api_library(
     watched: str = Query("", max_length=30),
 ):
     return ok(
-        _state(request).nas.library_list(
+        _state(request).catalog_store.library_list(
             page=page, page_size=page_size, query=q, group_id=group_id,
             sort=sort, user_id=_user_id(request), codec=codec,
             min_height=min_height, watched=watched,
@@ -1069,18 +835,18 @@ def api_library(
     )
 
 
-@router.get("/library/{media_id}")
+@catalog_router.get("/library/{media_id}")
 def api_media_detail(request: Request, media_id: str):
-    value = _state(request).nas.media_detail(media_id, _user_id(request))
+    value = _state(request).catalog_store.media_detail(media_id, _user_id(request))
     if not value:
         return err("作品不存在", 404)
     return ok(value)
 
 
-@router.api_route("/media/{file_id}/stream", methods=["GET", "HEAD"])
+@catalog_router.api_route("/media/{file_id}/stream", methods=["GET", "HEAD"])
 def api_media_stream(request: Request, file_id: str):
     try:
-        row, path = _state(request).nas.resolve_media_file(file_id)
+        row, path = _state(request).catalog_store.resolve_media_file(file_id)
     except KeyError as exc:
         return err(str(exc), 404)
     except FileNotFoundError as exc:
@@ -1091,10 +857,10 @@ def api_media_stream(request: Request, file_id: str):
     )
 
 
-@router.api_route("/media/{file_id}/download", methods=["GET", "HEAD"])
+@catalog_router.api_route("/media/{file_id}/download", methods=["GET", "HEAD"])
 def api_media_download(request: Request, file_id: str):
     try:
-        row, path = _state(request).nas.resolve_media_file(file_id)
+        row, path = _state(request).catalog_store.resolve_media_file(file_id)
     except KeyError as exc:
         return err(str(exc), 404)
     except FileNotFoundError as exc:
@@ -1105,10 +871,10 @@ def api_media_download(request: Request, file_id: str):
     )
 
 
-@router.put("/library/{media_id}/progress")
+@catalog_router.put("/library/{media_id}/progress")
 def api_watch_progress(request: Request, media_id: str, body: WatchProgressRequest):
     try:
-        data = _state(request).nas.save_progress(
+        data = _state(request).catalog_store.save_progress(
             _user_id(request), media_id, body.file_id, body.position_sec, body.duration_sec
         )
     except KeyError as exc:
@@ -1116,36 +882,24 @@ def api_watch_progress(request: Request, media_id: str, body: WatchProgressReque
     return ok(data)
 
 
-@router.post("/library/{media_id}/move")
+@catalog_router.post("/library/{media_id}/move")
 def api_move_media(request: Request, media_id: str, body: MediaMoveRequest):
     try:
-        data = _state(request).nas.move_media(media_id, body.group_id)
+        data = _state(request).catalog_store.move_media(media_id, body.group_id)
     except KeyError as exc:
         return err(str(exc), 404)
     _audit(request, "media.move", f"media={media_id}; group={body.group_id}")
     return ok(data)
 
 
-@router.delete("/library/{media_id}")
-def api_delete_media(request: Request, media_id: str, delete_files: bool = False):
-    try:
-        data = _state(request).nas.delete_media(media_id, delete_files)
-    except KeyError as exc:
-        return err(str(exc), 404)
-    except (ValueError, UnsafeIndexPathError) as exc:
-        return err(str(exc), 409)
-    _audit(request, "media.delete", f"media={media_id}; files={bool(delete_files)}")
-    return ok(data)
-
-
-@router.post("/library/{media_id}/compatible")
+@catalog_router.post("/library/{media_id}/compatible")
 def api_compatible(request: Request, media_id: str, body: CompatibleRequest):
     state = _state(request)
     ffmpeg = find_ffmpeg(state.runtime.bbdown_dir)
     if not ffmpeg:
         return err("未找到 FFmpeg", 503)
     try:
-        job = state.nas.start_compatible(media_id, body.file_id, ffmpeg)
+        job = state.catalog_store.start_compatible(media_id, body.file_id, ffmpeg)
     except KeyError as exc:
         return err(str(exc), 404)
     except ValueError as exc:
@@ -1153,16 +907,16 @@ def api_compatible(request: Request, media_id: str, body: CompatibleRequest):
     return ok(job)
 
 
-@router.get("/transcodes/{job_id}")
+@catalog_router.get("/transcodes/{job_id}")
 def api_transcode_status(request: Request, job_id: str):
-    job = _state(request).nas.transcode_status(job_id)
+    job = _state(request).catalog_store.transcode_status(job_id)
     if not job:
         return err("转码任务不存在", 404)
     return ok(job)
 
 
 # Bilibili account --------------------------------------------------------
-@router.post("/account/bilibili/qr")
+@account_router.post("/account/bilibili/qr")
 def api_bilibili_qr(request: Request):
     try:
         value = _state(request).qr_login.create()
@@ -1172,7 +926,7 @@ def api_bilibili_qr(request: Request):
         return err(f"二维码创建失败: {exc}", 502)
 
 
-@router.post("/account/bilibili/qr/{session_id}")
+@account_router.post("/account/bilibili/qr/{session_id}")
 def api_bilibili_qr_poll(request: Request, session_id: str):
     state = _state(request)
     try:
@@ -1187,7 +941,7 @@ def api_bilibili_qr_poll(request: Request, session_id: str):
         return err(f"扫码状态查询失败: {exc}", 502)
 
 
-@router.delete("/account/bilibili")
+@account_router.delete("/account/bilibili")
 def api_bilibili_logout(request: Request):
     state = _state(request)
     try:
@@ -1199,48 +953,222 @@ def api_bilibili_logout(request: Request):
     return ok({"removed": removed})
 
 
-# Server-sent events ------------------------------------------------------
-@router.get("/events")
-async def api_events(request: Request):
+# Catalog enhancements ----------------------------------------------------
+ShortText = Annotated[str, StringConstraints(max_length=300)]
+
+
+class TagAssignmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_key: ShortText = ""
+    media_id: ShortText = ""
+    tags: list[Annotated[str, StringConstraints(max_length=40)]] = Field(
+        default_factory=list,
+        max_length=50,
+    )
+
+
+class TagBulkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    keys: list[ShortText] = Field(default_factory=list, max_length=500)
+    media_ids: list[ShortText] = Field(default_factory=list, max_length=500)
+
+
+class LibraryItemsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    media_ids: list[ShortText] = Field(default_factory=list, min_length=1, max_length=100)
+
+
+class CatalogDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    media_ids: list[ShortText] = Field(default_factory=list, min_length=1, max_length=100)
+    delete_files: bool = True
+    mark_tag: Annotated[str, StringConstraints(max_length=40)] = ""
+
+
+@catalog_router.get("/enhancements/tags")
+def tags_list(request: Request):
+    store = _state(request).tag_store
+    return ok({"items": store.definitions(), "config_path": str(store.config_path)})
+
+
+@catalog_router.post("/enhancements/tags/reload")
+def tags_reload(request: Request):
+    store = _state(request).tag_store
+    return ok(
+        {
+            "items": store.reload_definitions(),
+            "config_path": str(store.config_path),
+        }
+    )
+
+
+@catalog_router.post("/enhancements/tags/bulk")
+def tags_bulk(request: Request, body: TagBulkRequest):
     state = _state(request)
-    session = _session(request)
-    session_id = str(session.get("session_id") or "") if session else ""
+    media_keys = state.library_service.media_keys(body.media_ids)
+    keys = list(dict.fromkeys([*body.keys, *media_keys.values()]))
+    by_key = state.tag_store.tags_for_keys(keys)
+    return ok(
+        {
+            "by_key": by_key,
+            "by_media_id": {
+                media_id: by_key.get(source_key, [])
+                for media_id, source_key in media_keys.items()
+            },
+            "media_keys": media_keys,
+        }
+    )
 
-    async def stream():
-        last = ""
-        last_keepalive = 0.0
-        last_auth_check = time.monotonic()
-        while True:
-            if await request.is_disconnected():
-                break
-            now_mono = time.monotonic()
-            if (
-                session_id
-                and now_mono - last_auth_check >= SSE_AUTH_HEARTBEAT_SECONDS
-            ):
-                if not state.nas.session_is_active(session_id):
-                    break
-                last_auth_check = now_mono
-            tasks = [
-                _compact_task(_decorate_task(state, item, "library"))
-                for item in state.queue.list_tasks()
-            ]
-            tasks += [
-                _compact_task(_decorate_task(state, item, "device"))
-                for item in state.export_queue.list_tasks()
-            ]
-            tasks.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
-            event_data = {"tasks": tasks, "summary": _combined_summary(state)}
-            fingerprint = json.dumps(event_data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            if fingerprint != last:
-                event_data["at"] = time.time()
-                payload = json.dumps(event_data, ensure_ascii=False, separators=(",", ":"))
-                yield f"event: tasks\ndata: {payload}\n\n"
-                last = fingerprint
-                last_keepalive = time.monotonic()
-            elif now_mono - last_keepalive >= SSE_AUTH_HEARTBEAT_SECONDS:
-                yield ": keepalive\n\n"
-                last_keepalive = now_mono
-            await asyncio.sleep(1.0)
 
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+@catalog_router.put("/enhancements/tags")
+def tags_assign(request: Request, body: TagAssignmentRequest):
+    state = _state(request)
+    source_key = body.source_key.strip()
+    if not source_key and body.media_id:
+        source_key = state.library_service.media_keys([body.media_id]).get(
+            body.media_id,
+            "",
+        )
+    if not source_key:
+        return err("作品不存在或作品标识为空", 404)
+    try:
+        selected = state.tag_store.set_tags(source_key, body.tags)
+    except ValueError as exc:
+        return err(str(exc))
+    return ok({"source_key": source_key, "tags": selected})
+
+
+@catalog_router.post("/enhancements/library/items")
+def enhanced_library_items(request: Request, body: LibraryItemsRequest):
+    return ok(_state(request).library_service.library_items(body.media_ids))
+
+
+@catalog_router.get("/enhancements/library")
+def enhanced_library(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(36, ge=1, le=100),
+    q: str = Query("", max_length=200),
+    group_id: str = Query("", max_length=100),
+    sort: str = Query("newest", max_length=30),
+    codec: str = Query("", max_length=80),
+    min_height: int = Query(0, ge=0, le=4320),
+    watched: str = Query("", max_length=30),
+    tag: str = Query("", max_length=40),
+):
+    return ok(
+        _state(request).library_service.library_list(
+            page=page,
+            page_size=page_size,
+            query=q,
+            group_id=group_id,
+            sort=sort,
+            user_id=_user_id(request),
+            codec=codec,
+            min_height=min_height,
+            watched=watched,
+            tag=tag,
+        )
+    )
+
+
+@catalog_router.post("/enhancements/library/delete")
+def catalog_batch_delete(request: Request, body: CatalogDeleteRequest):
+    data = _state(request).library_service.delete_many(
+        body.media_ids,
+        delete_files=body.delete_files,
+        user_id=_user_id(request),
+    )
+    return ok(data, total=len(data["deleted"]))
+
+
+@catalog_router.delete("/library/{media_id}")
+def catalog_delete_media(
+    request: Request,
+    media_id: str,
+    delete_files: bool = Query(default=False),
+):
+    try:
+        return ok(
+            _state(request).library_service.delete_media(
+                media_id,
+                delete_files=delete_files,
+                user_id=_user_id(request),
+            )
+        )
+    except KeyError as exc:
+        return err(str(exc), 404)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return err(str(exc), 409)
+
+
+def _lan_addresses() -> list[str]:
+    values: set[str] = set()
+    candidates: list[str] = []
+    try:
+        candidates.extend(socket.gethostbyname_ex(socket.gethostname())[2])
+    except OSError:
+        pass
+    try:
+        candidates.extend(
+            str(item[4][0])
+            for item in socket.getaddrinfo(
+                socket.gethostname(),
+                None,
+                type=socket.SOCK_STREAM,
+            )
+        )
+    except OSError:
+        pass
+    for raw in candidates:
+        value = raw.split("%", 1)[0]
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        if address.is_loopback or address.is_unspecified or address.is_link_local:
+            continue
+        values.add(str(address))
+    return sorted(values, key=lambda item: (":" in item, item))
+
+
+@system_router.get("/enhancements/network")
+def enhanced_network(request: Request):
+    state = _state(request)
+    cfg = state.config_store.get()
+    addresses = _lan_addresses()
+    urls = [
+        f"http://[{address}]:{cfg.port}/"
+        if ":" in address
+        else f"http://{address}:{cfg.port}/"
+        for address in addresses
+    ]
+    host = str(cfg.host)
+    return ok(
+        {
+            "host": host,
+            "port": cfg.port,
+            "lan_enabled": host.strip("[]")
+            not in {"127.0.0.1", "::1", "localhost"},
+            "addresses": addresses,
+            "urls": urls,
+            "proxy_hint": "若电脑或手机开启代理，请把局域网网段和这些 IP 加入直连/绕过代理列表。",
+        }
+    )
+
+
+@system_router.post("/enhancements/network/enable-lan")
+def enhanced_enable_lan(request: Request):
+    state = _state(request)
+    if state.runtime.launcher_managed:
+        return err("启动器模式的监听与安全配置只能在 Windows 启动器中修改", 409)
+    data = state.config_store.persisted_dict()
+    data["host"] = "0.0.0.0"
+    atomic_write_json(state.config_store.path, data, backup=True)
+    return ok(
+        {
+            "host": "0.0.0.0",
+            "restart_required": True,
+            "message": "已设置为监听所有网卡。请通过当前启动入口重启；重启后会强制启用管理员登录。",
+        }
+    )

@@ -5,9 +5,9 @@ import sqlite3
 import time
 from pathlib import Path
 
+from app.account_store import AuthStore
 from app.constants import DATABASE_SCHEMA_VERSION
-from app.index_store import IndexStore
-from app.migration_safe_task_store import MigrationSafeTaskOwnershipNasStore
+from app.database import Database
 from app.runtime import RuntimeSettings
 
 
@@ -128,10 +128,11 @@ def test_userless_v2_local_database_creates_admin_and_migrates_ownership(
     runtime = _local_runtime(tmp_path)
     payload = _create_userless_v2_database(runtime.database_path)
 
-    store = MigrationSafeTaskOwnershipNasStore(runtime, IndexStore(runtime.media_dir))
+    database = Database(runtime)
+    auth = AuthStore(database)
     try:
-        assert store.migration_backup_path is not None
-        with sqlite3.connect(store.migration_backup_path) as backup:
+        assert database.migration_backup_path is not None
+        with sqlite3.connect(database.migration_backup_path) as backup:
             assert backup.execute("PRAGMA user_version").fetchone() == (2,)
             assert backup.execute("SELECT COUNT(*) FROM users").fetchone() == (0,)
 
@@ -175,7 +176,7 @@ def test_userless_v2_local_database_creates_admin_and_migrates_ownership(
                 == 1
             )
 
-        token, session = store.login(
+        token, session = auth.login(
             "admin",
             "123456",
             remote_addr="127.0.0.1",
@@ -184,4 +185,5 @@ def test_userless_v2_local_database_creates_admin_and_migrates_ownership(
         assert token
         assert session["must_change_password"] is True
     finally:
-        store.close()
+        auth.close()
+        database.close()

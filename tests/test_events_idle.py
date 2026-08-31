@@ -1,7 +1,7 @@
 
 from types import SimpleNamespace
 
-from app.task_ownership_api import _sse_counts_changed
+from app.task_routes import _sse_counts_changed
 
 
 def _fake_queue(count: int):

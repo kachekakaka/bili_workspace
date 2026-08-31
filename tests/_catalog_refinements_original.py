@@ -32,7 +32,7 @@ def test_untagged_filter_and_media_group_move(client):
     ).json()["data"][0]
     assert wait_terminal(client.state_ref.queue, first["id"])["status"] == "success"
     assert wait_terminal(client.state_ref.queue, second["id"])["status"] == "success"
-    client.state_ref.nas.sync_index(force=True)
+    client.state_ref.catalog_store.sync_index(force=True)
 
     listing = client.get("/api/enhancements/library", params={"q": "BVUNTAG"}).json()["data"]
     by_key = {item["source_key"]: item for item in listing["items"]}
@@ -71,7 +71,7 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
         json={"items": [{"bvid": bvid, "title": "以后不要忘记已删除"}], "min_height": 0},
     ).json()["data"][0]
     assert wait_terminal(client.state_ref.queue, created["id"])["status"] == "success"
-    client.state_ref.nas.sync_index(force=True)
+    client.state_ref.catalog_store.sync_index(force=True)
 
     listing = client.get("/api/enhancements/library", params={"q": bvid}).json()["data"]
     media = listing["items"][0]
@@ -83,8 +83,8 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
     assert removed.json()["data"]["deleted_recorded"] is True
     assert removed.json()["data"]["marked_tag"] == ""
     assert client.get("/api/enhancements/library", params={"q": bvid}).json()["data"]["items"] == []
-    assert client.app.state.deletion_store.for_keys([bvid])[bvid]["title"] == "以后不要忘记已删除"
-    assert client.app.state.tag_store.tags_for_keys([bvid])[bvid] == []
+    assert client.state_ref.deletion_store.for_keys([bvid])[bvid]["title"] == "以后不要忘记已删除"
+    assert client.state_ref.tag_store.tags_for_keys([bvid])[bvid] == []
 
     def fake_search(keyword, *, order, page, bbdown_dir, fresh=False):
         del order, page, bbdown_dir, fresh
@@ -97,7 +97,7 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
             "cached": False,
         }
 
-    monkeypatch.setattr("app.api.search_videos", fake_search)
+    monkeypatch.setattr("app.routes.search_videos", fake_search)
     searched = client.get(
         "/api/search",
         params={"q": "删除", "fresh": "true"},
@@ -111,13 +111,13 @@ def test_deleted_work_is_tombstoned_hidden_from_library_and_marked_in_search(
         json={"items": [{"bvid": bvid, "title": "重新下载"}], "min_height": 0},
     ).json()["data"][0]
     assert wait_terminal(client.state_ref.queue, redownload["id"])["status"] == "success"
-    client.state_ref.nas.sync_index(force=True)
+    client.state_ref.catalog_store.sync_index(force=True)
     searched_again = client.get(
         "/api/search",
         params={"q": "删除", "fresh": "true"},
     ).json()["data"]["items"][0]
     assert searched_again["local_status"] == "downloaded"
-    assert client.app.state.deletion_store.for_keys([bvid]) == {}
+    assert client.state_ref.deletion_store.for_keys([bvid]) == {}
 
 
 def test_frontend_search_and_library_are_integrated_without_overlay_competition():

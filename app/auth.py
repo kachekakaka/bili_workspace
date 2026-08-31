@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import re
+import secrets
 from typing import Final
 
 USERNAME_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{2,31}$")
@@ -12,6 +15,7 @@ DISPLAY_NAME_RE: Final[re.Pattern[str]] = re.compile(
 ROLE_ADMIN: Final[str] = "admin"
 ROLE_USER: Final[str] = "user"
 VALID_ROLES: Final[frozenset[str]] = frozenset({ROLE_ADMIN, ROLE_USER})
+PASSWORD_SCRYPT_N: Final[int] = 2**14
 
 ADMIN_PERMISSIONS: Final[tuple[str, ...]] = (
     "admin:*",
@@ -59,6 +63,44 @@ def validate_password(value: str, *, allow_default_temp: bool = False) -> str:
     if not any(char.isdigit() for char in password):
         raise ValueError("密码至少需要包含一个数字")
     return password
+
+
+def hash_password(
+    password: str,
+    salt: bytes | None = None,
+    *,
+    allow_default_temp: bool = False,
+) -> str:
+    validate_password(password, allow_default_temp=allow_default_temp)
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.scrypt(
+        password.encode(),
+        salt=salt,
+        n=PASSWORD_SCRYPT_N,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+    return f"scrypt${PASSWORD_SCRYPT_N}$8$1${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password: str, encoded: str) -> bool:
+    try:
+        scheme, n, r, p, salt_hex, digest_hex = encoded.split("$", 5)
+        if scheme != "scrypt":
+            return False
+        expected = bytes.fromhex(digest_hex)
+        actual = hashlib.scrypt(
+            password.encode(),
+            salt=bytes.fromhex(salt_hex),
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=len(expected),
+        )
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
 
 
 def permissions_for_role(role: str) -> list[str]:

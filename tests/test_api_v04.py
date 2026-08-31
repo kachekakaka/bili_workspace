@@ -277,7 +277,7 @@ def test_multipart_runtime_quality_requires_every_selected_stream(tmp_env):
 
 
 def test_group_cards_include_active_and_failed_task_counts(client, monkeypatch):
-    group = client.state_ref.nas.create_group("待处理课程")
+    group = client.state_ref.catalog_store.create_group("待处理课程")
     monkeypatch.setattr(
         client.state_ref.queue,
         "list_tasks",

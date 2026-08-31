@@ -12,19 +12,18 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from app.auth import hash_password
 from app.constants import (
     ADMIN_TASK_HISTORY_LIMIT,
     DATABASE_SCHEMA_VERSION,
     NORMAL_USER_ACTIVE_TASK_LIMIT,
     NORMAL_USER_TASK_HISTORY_LIMIT,
 )
-from app.index_store import IndexStore
+from app.database import Database
 from app.main import create_app
-from app.nas import _hash_password
 from app.runtime import RuntimeSettings
 from app.state import AppState
-from app.task_ownership_store import TaskOwnershipNasStore
-from app.task_ownership_api import events
+from app.task_routes import events
 from tests.conftest import StaticCookieChecker, artifact_runner, wait_terminal
 
 
@@ -78,20 +77,20 @@ def _setup_state(
     )
     assert setup.status_code == 200, setup.text
     admin = setup.json()["data"]
-    user_a = state.nas.create_user(
+    user_a = state.auth_store.create_user(
         "user-a", "用户甲", "Temporary-123", created_by=admin["user"]["id"]
     )
-    user_b = state.nas.create_user(
+    user_b = state.auth_store.create_user(
         "user-b", "用户乙", "Temporary-123", created_by=admin["user"]["id"]
     )
-    state.nas._execute(
+    state.database.execute(
         "UPDATE users SET must_change_password=0 WHERE id IN (?,?)",
         (user_a["id"], user_b["id"]),
     )
-    token_a = state.nas.login(
+    token_a = state.auth_store.login(
         "user-a", "Temporary-123", remote_addr="127.0.0.1", user_agent="a"
     )
-    token_b = state.nas.login(
+    token_b = state.auth_store.login(
         "user-b", "Temporary-123", remote_addr="127.0.0.1", user_agent="b"
     )
     return state, client, admin, token_a, token_b
@@ -144,7 +143,7 @@ def test_normal_users_are_isolated_and_can_export_same_bv(
         assert finished_a["source_key"] == finished_b["source_key"] == "BV1SAME00001"
         assert finished_a["_queue_key"] != finished_b["_queue_key"]
 
-        rows = state.nas._all(
+        rows = state.database.all(
             "SELECT owner_user_id,source_key FROM exports ORDER BY owner_user_id"
         )
         assert {row["owner_user_id"] for row in rows} == {
@@ -170,7 +169,7 @@ def test_normal_users_are_isolated_and_can_export_same_bv(
         assert client.get("/api/search?q=test").status_code == 403
         assert client.get("/api/library").status_code == 403
 
-        admin_token = state.nas.login(
+        admin_token = state.auth_store.login(
             "administrator",
             "Admin-password-123",
             remote_addr="127.0.0.1",
@@ -280,18 +279,18 @@ def test_task_status_summary_aggregates_five_hundred_rows_without_loading_payloa
             )
         )
     try:
-        with state.nas._transaction() as conn:
+        with state.database.transaction() as conn:
             conn.executemany(
                 "INSERT INTO task_records(id,owner_user_id,destination,source_key,status,"
                 "created_at,updated_at,payload_json) VALUES(?,?,?,?,?,?,?,?)",
                 rows,
             )
 
-        summary = state.nas.task_status_summary()
+        summary = state.task_store.task_status_summary()
         assert summary["all"] == 500
         assert summary["active"] == summary["queued"] + summary["running"]
 
-        owner_summary = state.nas.task_status_summary(user_a[1]["user_id"])
+        owner_summary = state.task_store.task_status_summary(user_a[1]["user_id"])
         assert owner_summary["all"] == 300
         assert sum(owner_summary[name] for name in statuses) == 300
 
@@ -390,7 +389,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
         admin_id = admin["user"]["id"]
         for index in range(NORMAL_USER_TASK_HISTORY_LIMIT + 1):
             finished = now - index
-            state.nas.save_task_snapshot(
+            state.task_store.save_task_snapshot(
                 "device",
                 f"a-{index:03d}",
                 {
@@ -402,7 +401,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
                     "finished_at": finished,
                 },
             )
-        state.nas.save_task_snapshot(
+        state.task_store.save_task_snapshot(
             "device",
             "a-old",
             {
@@ -414,7 +413,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
                 "finished_at": now - 8 * 86400,
             },
         )
-        state.nas.save_task_snapshot(
+        state.task_store.save_task_snapshot(
             "device",
             "a-recent",
             {
@@ -426,7 +425,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
                 "finished_at": now - (6 * 86400 + 23 * 3600),
             },
         )
-        state.nas.save_task_snapshot(
+        state.task_store.save_task_snapshot(
             "device",
             "a-active",
             {
@@ -437,7 +436,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
                 "created_at": now - 30 * 86400,
             },
         )
-        state.nas.save_task_snapshot(
+        state.task_store.save_task_snapshot(
             "device",
             "b-keep",
             {
@@ -450,7 +449,7 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
             },
         )
         for index in range(ADMIN_TASK_HISTORY_LIMIT + 1):
-            state.nas.save_task_snapshot(
+            state.task_store.save_task_snapshot(
                 "library",
                 f"admin-{index:03d}",
                 {
@@ -463,18 +462,18 @@ def test_task_retention_is_per_user_and_preserves_active_and_admin(
                 },
             )
 
-        state.nas.cleanup_task_history(now=now)
-        a_terminal = state.nas._one(
+        state.task_store.cleanup_task_history(now=now)
+        a_terminal = state.database.one(
             "SELECT COUNT(*) AS n FROM task_records WHERE owner_user_id=? "
             "AND status IN ('success','skipped','failed','cancelled')",
             (owner_a,),
         )
         assert int(a_terminal["n"]) == NORMAL_USER_TASK_HISTORY_LIMIT
-        assert state.nas.task_record("a-old") is None
-        assert state.nas.task_record("a-recent") is not None
-        assert state.nas.task_record("a-active") is not None
-        assert state.nas.task_record("b-keep") is not None
-        admin_count = state.nas._one(
+        assert state.task_store.task_record("a-old") is None
+        assert state.task_store.task_record("a-recent") is not None
+        assert state.task_store.task_record("a-active") is not None
+        assert state.task_store.task_record("b-keep") is not None
+        admin_count = state.database.one(
             "SELECT COUNT(*) AS n FROM task_records WHERE owner_user_id=?",
             (admin_id,),
         )
@@ -548,7 +547,7 @@ def test_v3_to_v4_migration_assigns_admin_without_revoking_sessions(
         )
         conn.execute(
             "INSERT INTO users VALUES(?,?,?,?,?,0,'admin','管理员',0,NULL,NULL)",
-            ("legacy-admin", "legacyadmin", _hash_password("LegacyPass123"), now, now),
+            ("legacy-admin", "legacyadmin", hash_password("LegacyPass123"), now, now),
         )
         conn.execute(
             "INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?,NULL,'')",
@@ -604,9 +603,9 @@ def test_v3_to_v4_migration_assigns_admin_without_revoking_sessions(
     finally:
         conn.close()
 
-    store = TaskOwnershipNasStore(runtime, IndexStore(runtime.media_dir))
+    database = Database(runtime)
     try:
-        assert store.migration_backup_path is not None
+        assert database.migration_backup_path is not None
         with sqlite3.connect(runtime.database_path) as upgraded:
             assert upgraded.execute("PRAGMA user_version").fetchone()[0] == DATABASE_SCHEMA_VERSION
             assert upgraded.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -621,4 +620,4 @@ def test_v3_to_v4_migration_assigns_admin_without_revoking_sessions(
                 "SELECT owner_user_id FROM exports WHERE task_id='legacy-task'"
             ).fetchone() == ("legacy-admin",)
     finally:
-        store.close()
+        database.close()

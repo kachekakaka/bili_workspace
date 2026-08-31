@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 
 from app.constants import DATABASE_SCHEMA_VERSION
-from app.index_store import IndexStore
-from app.nas import NasStore, _hash_password
+from app.account_store import AuthStore
+from app.auth import hash_password
+from app.database import Database
 from app.runtime import RuntimeSettings
 
 
@@ -72,7 +73,7 @@ def _create_v2_database(path: Path, *, invalid_session_fk: bool = False) -> str:
         now = time.time()
         conn.execute(
             "INSERT INTO users VALUES(?,?,?,?,?,0)",
-            (user_id, "legacyadmin", _hash_password("LegacyPass123"), now, now),
+            (user_id, "legacyadmin", hash_password("LegacyPass123"), now, now),
         )
         conn.execute(
             "INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?)",
@@ -100,10 +101,11 @@ def test_v2_upgrade_creates_backup_preserves_password_and_revokes_old_sessions(
 ) -> None:
     runtime = _runtime(tmp_path)
     user_id = _create_v2_database(runtime.database_path)
-    store = NasStore(runtime, IndexStore(runtime.media_dir))
+    database = Database(runtime)
+    auth = AuthStore(database)
     try:
-        assert store.migration_backup_path is not None
-        with sqlite3.connect(store.migration_backup_path) as backup:
+        assert database.migration_backup_path is not None
+        with sqlite3.connect(database.migration_backup_path) as backup:
             assert backup.execute("PRAGMA user_version").fetchone()[0] == 2
             assert backup.execute(
                 "SELECT username FROM users WHERE id=?", (user_id,)
@@ -111,7 +113,7 @@ def test_v2_upgrade_creates_backup_preserves_password_and_revokes_old_sessions(
             assert backup.execute(
                 "SELECT user_id FROM sessions WHERE id='legacy-session'"
             ).fetchone() == (user_id,)
-        version = store._one("PRAGMA user_version")
+        version = database.one("PRAGMA user_version")
         assert version is not None
         with sqlite3.connect(runtime.database_path) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == DATABASE_SCHEMA_VERSION
@@ -129,10 +131,10 @@ def test_v2_upgrade_creates_backup_preserves_password_and_revokes_old_sessions(
             ).fetchone()
             assert session and session[0] is not None
             assert session[1] == "schema_upgrade"
-        user = store._one("SELECT * FROM users WHERE id=?", (user_id,))
+        user = database.one("SELECT * FROM users WHERE id=?", (user_id,))
         assert user and user["role"] == "admin"
         assert user["display_name"] == "管理员"
-        token, session = store.login(
+        token, session = auth.login(
             "legacyadmin",
             "LegacyPass123",
             remote_addr="127.0.0.1",
@@ -141,14 +143,15 @@ def test_v2_upgrade_creates_backup_preserves_password_and_revokes_old_sessions(
         assert token
         assert session["user_id"] == user_id
     finally:
-        store.close()
+        auth.close()
+        database.close()
 
 
 def test_failed_migration_rolls_back_original_database(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     _create_v2_database(runtime.database_path, invalid_session_fk=True)
     with pytest.raises(sqlite3.IntegrityError, match="外键"):
-        NasStore(runtime, IndexStore(runtime.media_dir))
+        Database(runtime)
 
     with sqlite3.connect(runtime.database_path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
@@ -168,13 +171,13 @@ def test_corrupt_database_is_not_silently_replaced(tmp_path: Path) -> None:
     payload = b"not-a-sqlite-database"
     runtime.database_path.write_bytes(payload)
     with pytest.raises(sqlite3.DatabaseError):
-        NasStore(runtime, IndexStore(runtime.media_dir))
+        Database(runtime)
     assert runtime.database_path.read_bytes() == payload
 
 
 def test_only_three_recent_migration_backups_are_retained(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
-    store = NasStore(runtime, IndexStore(runtime.media_dir))
+    database = Database(runtime)
     try:
         backup_dir = runtime.database_path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -188,12 +191,12 @@ def test_only_three_recent_migration_backups_are_retained(tmp_path: Path) -> Non
             import os
 
             os.utime(path, (stamp, stamp))
-        store._prune_migration_backups()
+        database._prune_migration_backups()
         remaining = sorted(backup_dir.glob("*.db"))
         assert len(remaining) == 3
         assert {item.name[-4] for item in remaining} == {"2", "3", "4"}
     finally:
-        store.close()
+        database.close()
 
 
 def test_migration_rejects_invalid_backup_directory_without_changing_database(
@@ -205,7 +208,7 @@ def test_migration_rejects_invalid_backup_directory_without_changing_database(
     backup_dir.write_text("not-a-directory", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="备份目录类型无效"):
-        NasStore(runtime, IndexStore(runtime.media_dir))
+        Database(runtime)
 
     with sqlite3.connect(runtime.database_path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
@@ -216,7 +219,7 @@ def test_backup_pruning_rejects_abnormal_entries_before_deleting_anything(
     tmp_path: Path,
 ) -> None:
     runtime = _runtime(tmp_path)
-    store = NasStore(runtime, IndexStore(runtime.media_dir))
+    database = Database(runtime)
     try:
         backup_dir = runtime.database_path.parent / "backups"
         backup_dir.mkdir()
@@ -226,12 +229,12 @@ def test_backup_pruning_rejects_abnormal_entries_before_deleting_anything(
         abnormal.mkdir()
 
         with pytest.raises(RuntimeError, match="异常文件类型"):
-            store._prune_migration_backups()
+            database._prune_migration_backups()
 
         assert keep.read_bytes() == b"keep"
         assert abnormal.is_dir()
     finally:
-        store.close()
+        database.close()
 
 
 def test_newer_schema_is_rejected_without_downgrade_or_backup(tmp_path: Path) -> None:
@@ -244,7 +247,7 @@ def test_newer_schema_is_rejected_without_downgrade_or_backup(tmp_path: Path) ->
         conn.commit()
 
     with pytest.raises(RuntimeError, match="高于当前程序支持"):
-        NasStore(runtime, IndexStore(runtime.media_dir))
+        Database(runtime)
 
     with sqlite3.connect(runtime.database_path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == DATABASE_SCHEMA_VERSION + 1

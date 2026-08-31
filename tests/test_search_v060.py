@@ -238,8 +238,8 @@ def test_only_one_formal_search_route_is_registered(client) -> None:
 
 def test_search_response_merges_tags_download_and_deleted_state(client, monkeypatch) -> None:
     bvid = "BV1MERGED0001"
-    client.app.state.tag_store.set_tags(bvid, ["夯"])
-    client.app.state.deletion_store.record(
+    client.state_ref.tag_store.set_tags(bvid, ["夯"])
+    client.state_ref.deletion_store.record(
         {"source_key": bvid, "bvid": bvid, "title": "已删除作品"},
         files_deleted=True,
     )
@@ -265,7 +265,7 @@ def test_search_response_merges_tags_download_and_deleted_state(client, monkeypa
             "cached": False,
         }
 
-    monkeypatch.setattr("app.api.search_videos", fake_search)
+    monkeypatch.setattr("app.routes.search_videos", fake_search)
     response = client.get(
         "/api/search",
         params={"q": "测试", "order": "pubdate", "page": 1, "fresh": "true"},

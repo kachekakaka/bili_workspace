@@ -188,6 +188,7 @@ def test_cli_exposes_only_create_validate_and_cleanup(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert created.returncode == 0, created.stdout + created.stderr
     run_root = Path(created.stdout.strip())
@@ -197,6 +198,7 @@ def test_cli_exposes_only_create_validate_and_cleanup(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert validated.returncode == 0, validated.stdout + validated.stderr
 
@@ -205,6 +207,7 @@ def test_cli_exposes_only_create_validate_and_cleanup(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert cleaned.returncode == 0, cleaned.stdout + cleaned.stderr
     assert not run_root.exists()
@@ -214,6 +217,7 @@ def test_cli_exposes_only_create_validate_and_cleanup(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
     )
     assert "record" not in help_result.stdout
     assert "gc-plan" not in help_result.stdout

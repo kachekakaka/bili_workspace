@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 import uuid
@@ -7,7 +8,7 @@ import shutil
 from collections import Counter, deque
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from app.artifacts import (
     cleanup_work_dir,
@@ -55,6 +56,8 @@ class Task:
     url: str
     bvid: str | None
     force: bool
+    owner_user_id: str = "local"
+    source_key: str = ""
     status: str = "queued"  # queued|running|skipped|success|failed|cancelled
     title: str = ""
     cover: str = ""
@@ -108,9 +111,15 @@ class Task:
     def from_snapshot(cls, value: dict[str, Any], *, storage_root: Path) -> "Task":
         allowed = {item.name for item in fields(cls) if item.name != "storage_root"}
         payload = {name: value[name] for name in allowed if name in value}
+        public_key = str(value.get("source_key") or value.get("key") or "")
+        payload["key"] = str(value.get("_queue_key") or value.get("key") or public_key)
+        payload["source_key"] = public_key
+        payload["owner_user_id"] = str(value.get("owner_user_id") or "")
         for required, default in (
             ("id", uuid.uuid4().hex[:12]),
+            ("owner_user_id", ""),
             ("key", ""),
+            ("source_key", ""),
             ("url", ""),
             ("bvid", None),
             ("force", False),
@@ -158,10 +167,14 @@ class Task:
         total_size = sum(
             int(item.get("size") or 0) for item in self.files if isinstance(item, dict)
         )
-        display_title = self.title or self.bvid or self.key
+        public_key = self.source_key or self.key
+        display_title = self.title or self.bvid or public_key
         return {
             "id": self.id,
-            "key": self.key,
+            "owner_user_id": self.owner_user_id,
+            "key": public_key,
+            "source_key": public_key,
+            "_queue_key": self.key,
             "url": self.url,
             "bvid": self.bvid,
             "force": self.force,
@@ -239,6 +252,8 @@ class TaskQueue:
         worker_count: int = 1,
         worker_name: str = "bbdown-worker",
         bbdown_data_dir: Path | None = None,
+        default_owner_user_id: str = "local",
+        namespace_by_owner: bool = False,
     ):
         self.config_store = config_store
         self.index = index
@@ -252,20 +267,29 @@ class TaskQueue:
         self.worker_count = min(3, max(1, int(worker_count)))
         self.worker_name = str(worker_name or "bbdown-worker")
         self.bbdown_data_dir = Path(bbdown_data_dir).resolve() if bbdown_data_dir else None
+        self.default_owner_user_id = str(default_owner_user_id or "local")
+        self.namespace_by_owner = bool(namespace_by_owner)
         self._lock = threading.RLock()
         self._cv = threading.Condition(self._lock)
         self._pending: deque[str] = deque()
         self._tasks: dict[str, Task] = {}
         self._order: deque[str] = deque()
         self._cancel_events: dict[str, threading.Event] = {}
+        self._pause_requested: set[str] = set()
         self._stop = False
         self._change_count = 0
+        self._pending_notifications: deque[tuple[str, dict[str, Any] | None]] = deque()
+        self._notification_lock = threading.RLock()
         storage_root = self.config_store.get().download_path()
         for snapshot in initial_tasks or []:
             try:
                 task = Task.from_snapshot(snapshot, storage_root=storage_root)
             except (TypeError, ValueError):
                 continue
+            if not task.owner_user_id:
+                task.owner_user_id = self.default_owner_user_id
+            if not task.source_key:
+                task.source_key = task.key
             self._tasks[task.id] = task
             self._order.append(task.id)
             if task.status == "queued":
@@ -273,6 +297,7 @@ class TaskQueue:
                 self._cancel_events[task.id] = threading.Event()
             self._notify_locked(task)
         self._trim_history_locked()
+        self._flush_notifications()
         self._workers = [
             threading.Thread(
                 target=self._loop,
@@ -288,17 +313,28 @@ class TaskQueue:
         self._change_count += 1
 
     def _notify_locked(self, task: Task | None, *, task_id: str = "") -> None:
-        callback = self.on_state_change
-        if callback is not None:
-            try:
-                callback(task.id if task else task_id, task.to_dict() if task else None)
-            except Exception:
-                # Persistence must never turn a valid download into a failed task.
-                pass
-        # Publish the change only after the persistence callback returns. This
-        # prevents summary SSE consumers from observing a new count while the
-        # corresponding task row still contains the previous state.
-        self._bump_change_locked()
+        self._pending_notifications.append(
+            (task.id if task else task_id, task.to_dict() if task else None)
+        )
+
+    def _flush_notifications(self) -> None:
+        """Persist and publish queued snapshots without holding the queue lock."""
+        with self._notification_lock:
+            while True:
+                with self._lock:
+                    if not self._pending_notifications:
+                        return
+                    task_id, payload = self._pending_notifications.popleft()
+                callback = self.on_state_change
+                if callback is not None:
+                    try:
+                        callback(task_id, payload)
+                    except Exception:
+                        # Persistence failures are isolated from the download result.
+                        pass
+                # SSE observes a new change count only after persistence returns.
+                with self._lock:
+                    self._bump_change_locked()
 
     def change_count(self) -> int:
         with self._lock:
@@ -314,10 +350,38 @@ class TaskQueue:
         for worker in self._workers:
             if current is not worker:
                 worker.join(timeout=3)
+        self._flush_notifications()
 
     def active_count(self) -> int:
         with self._lock:
             return sum(1 for task in self._tasks.values() if task.status in ("queued", "running"))
+
+    def _queue_key(self, owner_user_id: str, source_key: str) -> str:
+        source = str(source_key or "")
+        if not self.namespace_by_owner:
+            return source
+        prefix = hashlib.sha256(str(owner_user_id or "").encode("utf-8")).hexdigest()[:16]
+        return f"owner-{prefix}:{source}"
+
+    def owner_for_task(self, task_id: str) -> str:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return str(task.owner_user_id if task else "")
+
+    def source_key_for_task(self, task_id: str) -> str:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return str((task.source_key or task.key) if task else "")
+
+    def active_count_for_owner(self, owner_user_id: str) -> int:
+        owner = str(owner_user_id or "")
+        with self._lock:
+            return sum(
+                1
+                for task in self._tasks.values()
+                if task.owner_user_id == owner
+                and task.status in {"queued", "running"}
+            )
 
     def groups(self) -> list[str]:
         cfg = self.config_store.get()
@@ -399,13 +463,18 @@ class TaskQueue:
     def _queue_positions_locked(self) -> dict[str, int]:
         return {task_id: pos for pos, task_id in enumerate(self._pending, start=1)}
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(self, owner_user_id: str | None = None) -> list[dict[str, Any]]:
+        owner_filter = None if owner_user_id is None else str(owner_user_id)
         with self._lock:
             positions = self._queue_positions_locked()
             return [
                 self._tasks[task_id].to_dict(queue_position=positions.get(task_id))
                 for task_id in reversed(self._order)
                 if task_id in self._tasks
+                and (
+                    owner_filter is None
+                    or self._tasks[task_id].owner_user_id == owner_filter
+                )
             ]
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
@@ -423,26 +492,34 @@ class TaskQueue:
             positions = self._queue_positions_locked()
             # Active state is more useful than a newer "duplicate skipped" record.
             for task in self._tasks.values():
-                if task.key in wanted and task.status in ("queued", "running"):
-                    result[task.key] = task.to_dict(queue_position=positions.get(task.id))
+                source_key = task.source_key or task.key
+                if source_key in wanted and task.status in ("queued", "running"):
+                    result[source_key] = task.to_dict(queue_position=positions.get(task.id))
             for task_id in reversed(self._order):
                 task = self._tasks.get(task_id)
-                if task is None or task.key not in wanted or task.key in result:
+                if task is None:
+                    continue
+                source_key = task.source_key or task.key
+                if source_key not in wanted or source_key in result:
                     continue
                 if task.status in ("failed", "cancelled"):
-                    result[task.key] = task.to_dict(queue_position=positions.get(task.id))
+                    result[source_key] = task.to_dict(queue_position=positions.get(task.id))
         return result
 
-    def clear_finished(self) -> int:
+    def clear_finished(self, owner_user_id: str | None = None) -> int:
+        owner_filter = None if owner_user_id is None else str(owner_user_id)
         with self._lock:
             remove = [
                 task_id
                 for task_id, task in self._tasks.items()
                 if task.status in TERMINAL_STATUSES
+                and (owner_filter is None or task.owner_user_id == owner_filter)
             ]
             for task_id in remove:
                 self._drop_task_locked(task_id)
-            return len(remove)
+            removed = len(remove)
+        self._flush_notifications()
+        return removed
 
     def cancel(self, task_id: str, *, intent: str = "cancel") -> bool:
         if intent not in {"cancel", "pause"}:
@@ -472,12 +549,14 @@ class TaskQueue:
                     pass
                 task.status = "cancelled"
                 if intent == "pause":
+                    self._pause_requested.discard(task.id)
                     task.phase = "paused"
                     task.phase_label = PHASE_LABELS["paused"]
                     task.error = "任务已暂停；点击继续会使用同一任务 ID 从头重新开始当前下载"
                     task.progress_message = "任务在排队阶段暂停"
                     log_message = "\n[任务] 已在排队阶段暂停。\n"
                 else:
+                    self._pause_requested.discard(task.id)
                     task.phase = "cancelled"
                     task.phase_label = PHASE_LABELS["cancelled"]
                     task.error = "任务已取消"
@@ -496,12 +575,14 @@ class TaskQueue:
                     return True
                 event.set()
                 if intent == "pause":
+                    self._pause_requested.add(task.id)
                     task.phase = "pausing"
                     task.phase_label = PHASE_LABELS["pausing"]
                     task.error = "正在暂停任务…"
                     task.progress_message = "正在等待当前处理步骤停止"
                     log_message = "\n[任务] 收到暂停请求。\n"
                 else:
+                    self._pause_requested.discard(task.id)
                     task.phase = "cancelling"
                     task.phase_label = PHASE_LABELS["cancelling"]
                     task.error = "正在取消任务…"
@@ -516,6 +597,7 @@ class TaskQueue:
             self._notify_locked(task)
             task_to_log = task
             self._cv.notify_all()
+        self._flush_notifications()
         if task_to_log is not None and log_message:
             self._append_log(task_to_log, log_message)
         return True
@@ -531,8 +613,24 @@ class TaskQueue:
         group_folder: str = "",
         min_height: int | None = None,
         retry_of: str = "",
+        owner_user_id: str = "",
+        owner_active_limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        metadata = metadata or {}
+        owner = str(owner_user_id or self.default_owner_user_id)
+        if not owner:
+            raise ValueError("任务拥有者不能为空")
+        source_metadata = metadata or {}
+        source_by_queue_key: dict[str, str] = {}
+        transformed: list[Target] = []
+        transformed_metadata: dict[str, dict[str, Any]] = {}
+        for target in targets:
+            source_key = str(target.key or "")
+            queue_key = self._queue_key(owner, source_key)
+            source_by_queue_key[queue_key] = source_key
+            transformed.append(Target(key=queue_key, url=target.url, bvid=target.bvid))
+            transformed_metadata[queue_key] = dict(source_metadata.get(source_key) or {})
+        targets = transformed
+        metadata = transformed_metadata
         created: list[Task] = []
         with self._cv:
             cfg = self.config_store.get()
@@ -574,6 +672,18 @@ class TaskQueue:
                     f"队列容量不足：当前 {active} 个活动任务，本次需新增 {queue_needed} 个，"
                     f"上限 {self.max_pending} 个"
                 )
+            if owner_active_limit is not None:
+                owner_active = sum(
+                    1
+                    for task in self._tasks.values()
+                    if task.owner_user_id == owner
+                    and task.status in {"queued", "running"}
+                )
+                if owner_active + queue_needed > max(0, int(owner_active_limit)):
+                    raise QueueFullError(
+                        f"当前账号已有 {owner_active} 个活动任务，本次需新增 {queue_needed} 个，"
+                        f"上限 {int(owner_active_limit)} 个"
+                    )
 
             for target, action, entry in plans:
                 submitted = dict(metadata.get(target.key) or {})
@@ -648,7 +758,9 @@ class TaskQueue:
 
                 common = {
                     "id": uuid.uuid4().hex[:12],
+                    "owner_user_id": owner,
                     "key": target.key,
+                    "source_key": source_by_queue_key.get(target.key, target.key),
                     "url": target.url,
                     "bvid": target.bvid,
                     "force": force,
@@ -717,31 +829,210 @@ class TaskQueue:
                 )
             self._cv.notify_all()
             positions = self._queue_positions_locked()
-            return [task.to_dict(queue_position=positions.get(task.id)) for task in created]
+            result = [task.to_dict(queue_position=positions.get(task.id)) for task in created]
+        self._flush_notifications()
+        return result
 
-    def retry(self, task_id: str, *, force: bool = False) -> list[dict[str, Any]]:
-        with self._lock:
+    @staticmethod
+    def _is_paused_task(task: Task) -> bool:
+        if task.status != "cancelled":
+            return False
+        if task.phase == "paused":
+            return True
+        return "已暂停" in f"{task.error}\n{task.progress_message}"
+
+    def retry(
+        self,
+        task_id: str,
+        *,
+        force: bool = False,
+        min_height: int | None = None,
+        preferred_quality: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset a terminal task and enqueue the same identity again."""
+        cleanup: tuple[Path, str, str] | None = None
+        task_to_log: Task | None = None
+        with self._cv:
             task = self._tasks.get(task_id)
             if task is None:
                 raise KeyError("任务不存在")
             if task.status not in TERMINAL_STATUSES:
-                raise ValueError("任务尚未结束，不能重试")
-            target = Target(key=task.key, url=task.url, bvid=task.bvid)
-            metadata = {task.key: task.metadata()}
-            group = task.group
-            group_id = task.group_id
-            group_folder = task.group_folder
-            min_height = task.min_height
-        return self.enqueue(
-            [target],
-            force=force,
-            metadata=metadata,
-            group=group,
-            group_id=group_id,
-            group_folder=group_folder,
-            min_height=min_height,
-            retry_of=task_id,
+                raise ValueError("任务尚未结束，不能重新排队")
+            if any(
+                other.id != task.id
+                and other.key == task.key
+                and other.status in {"queued", "running"}
+                for other in self._tasks.values()
+            ):
+                raise ValueError("同一作品已有排队或下载中的任务")
+            active = sum(
+                1
+                for item in self._tasks.values()
+                if item.status in {"queued", "running"}
+            )
+            if active >= self.max_pending:
+                raise QueueFullError(f"队列已满，上限 {self.max_pending} 个活动任务")
+
+            cfg = self.config_store.get()
+            effective_min = validate_min_height(
+                min_height if min_height is not None else task.min_height,
+                default=cfg.default_min_height,
+            )
+            effective_preferred = (
+                task.preferred_quality
+                if preferred_quality is None
+                else str(preferred_quality or "").strip()[:120]
+            )
+            root = task.storage_root or cfg.download_path()
+            cleanup = (root, task.key, task.id)
+
+            self._pause_requested.discard(task.id)
+            try:
+                self._pending.remove(task.id)
+            except ValueError:
+                pass
+            self._cancel_events[task.id] = threading.Event()
+
+            task.force = bool(force)
+            task.min_height = effective_min
+            task.preferred_quality = effective_preferred
+            task.status = "queued"
+            task.phase = "queued"
+            task.phase_label = PHASE_LABELS["queued"]
+            task.quality_checked = False
+            task.quality_verified = False
+            task.quality_expected_parts = 0
+            task.quality_verified_parts = 0
+            task.quality_summary = ""
+            task.highest_available_height = None
+            task.highest_available_label = ""
+            task.selected_quality = ""
+            task.selected_resolution = ""
+            task.selected_codec = ""
+            task.selected_fps = ""
+            task.selected_height = None
+            task.selected_tracks = []
+            task.effective_dfn_priority = ""
+            task.quality_error = ""
+            task.progress_percent = None
+            task.speed_text = ""
+            task.eta_text = ""
+            task.downloaded_bytes = None
+            task.total_bytes = None
+            task.current_part = None
+            task.part_total = None
+            task.progress_message = "已使用原任务重新加入队列"
+            task.error = ""
+            task.log_tail = ""
+            task.log_size = 0
+            task.output_path = ""
+            task.files = []
+            task.retry_of = ""
+            task.started_at = None
+            task.finished_at = None
+            task.last_heartbeat = time.time()
+
+            self._delete_log_safely_locked(task)
+            self._pending.append(task.id)
+            self._mark_recent_locked(task.id)
+            self._notify_locked(task)
+            self._cv.notify_all()
+            task_to_log = task
+            positions = self._queue_positions_locked()
+            result = task.to_dict(queue_position=positions.get(task.id))
+
+        self._flush_notifications()
+        if cleanup is not None:
+            try:
+                cleanup_work_dir(*cleanup)
+            except (OSError, ValueError):
+                pass
+        if task_to_log is not None:
+            self._append_log(
+                task_to_log,
+                "[任务] 原地重试：保留任务 ID、拥有者和创建时间，"
+                "清空旧执行结果后重新排队。\n"
+                f"[清晰度] 最低 {effective_min}；"
+                f"{'指定 ' + effective_preferred if effective_preferred else '自动最高'}。\n",
+            )
+        return result
+
+    def pause(self, task_id: str) -> dict[str, Any]:
+        with self._cv:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            if self._is_paused_task(task):
+                return task.to_dict()
+            if task.status in TERMINAL_STATUSES:
+                raise ValueError("只有排队中或下载中的任务可以暂停")
+            if task.status == "running":
+                if task.phase == "cancelling":
+                    raise ValueError("任务正在取消，不能改为暂停")
+                if task.phase == "pausing":
+                    return task.to_dict()
+        if not self.cancel(task_id, intent="pause"):
+            current = self.get_task(task_id)
+            if current and current.get("phase") == "paused":
+                return current
+            raise ValueError("任务已结束，无法暂停")
+        return self.get_task(task_id) or {}
+
+    def cancel_task(self, task_id: str) -> dict[str, Any]:
+        with self._cv:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            if self._is_paused_task(task):
+                raise ValueError("任务已暂停；如需取消，请先继续任务")
+            if task.status == "cancelled":
+                return task.to_dict()
+            if task.status in TERMINAL_STATUSES:
+                raise ValueError("任务已结束，无法取消")
+        if not self.cancel(task_id, intent="cancel"):
+            current = self.get_task(task_id)
+            if current and current.get("status") == "cancelled":
+                return current
+            raise ValueError("任务已结束，无法取消")
+        return self.get_task(task_id) or {}
+
+    def delete_task(self, task_id: str) -> bool:
+        with self._cv:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise KeyError("任务不存在")
+            if task.status not in TERMINAL_STATUSES:
+                raise ValueError("排队中或下载中的任务不能直接删除，请先取消")
+            self._drop_task_locked(task.id)
+            self._cv.notify_all()
+        self._flush_notifications()
+        return True
+
+    def clear_tasks(
+        self,
+        statuses: Iterable[str],
+        *,
+        owner_user_id: str | None = None,
+    ) -> int:
+        allowed = TERMINAL_STATUSES.intersection(
+            str(value or "").strip() for value in statuses
         )
+        if not allowed:
+            return 0
+        owner_filter = None if owner_user_id is None else str(owner_user_id)
+        with self._cv:
+            ids = [
+                task_id
+                for task_id, task in self._tasks.items()
+                if task.status in allowed
+                and (owner_filter is None or task.owner_user_id == owner_filter)
+            ]
+            for task_id in ids:
+                self._drop_task_locked(task_id)
+            self._cv.notify_all()
+            removed = len(ids)
+        self._flush_notifications()
+        return removed
 
     def get_log(self, task_id: str, *, tail_chars: int | None = None) -> dict[str, object]:
         with self._lock:
@@ -774,6 +1065,7 @@ class TaskQueue:
     def _drop_task_locked(self, task_id: str) -> None:
         task = self._tasks.pop(task_id, None)
         self._cancel_events.pop(task_id, None)
+        self._pause_requested.discard(task_id)
         try:
             self._order.remove(task_id)
         except ValueError:
@@ -830,6 +1122,7 @@ class TaskQueue:
                 task.last_heartbeat = task.started_at
                 self._notify_locked(task)
 
+            self._flush_notifications()
             self._append_log(task, "[任务] 开始执行。\n")
             semaphore = self.execution_semaphore
             if semaphore is None:
@@ -865,6 +1158,7 @@ class TaskQueue:
             task.last_heartbeat = time.time()
 
     def _set_progress(self, task: Task, event: ProgressEvent) -> None:
+        changed = False
         with self._lock:
             if task.status != "running" or task.phase in {"cancelling", "pausing"}:
                 return
@@ -920,6 +1214,9 @@ class TaskQueue:
             )
             if after != before:
                 self._notify_locked(task)
+                changed = True
+        if changed:
+            self._flush_notifications()
 
     def _set_phase(
         self,
@@ -929,6 +1226,7 @@ class TaskQueue:
         message: str = "",
         percent: float | None = None,
     ) -> None:
+        changed = False
         with self._lock:
             if task.status != "running" or task.phase in {"cancelling", "pausing"}:
                 return
@@ -964,6 +1262,9 @@ class TaskQueue:
             )
             if after != before:
                 self._notify_locked(task)
+                changed = True
+        if changed:
+            self._flush_notifications()
 
     def _finish(
         self,
@@ -975,6 +1276,11 @@ class TaskQueue:
     ) -> None:
         now = time.time()
         with self._lock:
+            pause_requested = task.id in self._pause_requested
+            self._pause_requested.discard(task.id)
+            if status == "cancelled" and pause_requested:
+                error = "任务已暂停；点击继续会使用同一任务 ID 从头重新开始当前下载"
+                phase_override = "paused"
             task.status = status
             task.error = error
             task.finished_at = now
@@ -996,6 +1302,7 @@ class TaskQueue:
             self._mark_recent_locked(task.id)
             self._trim_history_locked()
             self._notify_locked(task)
+        self._flush_notifications()
         final_line = f"[任务] {task.phase_label}"
         if error:
             final_line += f"：{error}"

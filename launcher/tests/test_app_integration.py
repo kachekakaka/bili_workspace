@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.bbdown import find_ffmpeg, run_bbdown_info
-from app.api import api_search, get_config, put_config
+from app.routes import api_search, get_config, put_config
 from app.config import AppConfig
 from app.models import ConfigUpdate
-from app.nas import _compatible_video_encode_args
+from app.catalog_store import _compatible_video_encode_args
 from app.state import AppState
 from bili_workspace_launcher.paths import AppPaths, DataRootManager
 
@@ -158,8 +158,8 @@ def test_search_reads_cookie_from_data_root_not_tool_directory(
         captured.update(kwargs)
         return {"items": []}
 
-    monkeypatch.setattr("app.api.search_videos", fake_search)
-    monkeypatch.setattr("app.api._decorate_search_catalog", lambda _request, data: data)
+    monkeypatch.setattr("app.routes.search_videos", fake_search)
+    monkeypatch.setattr("app.routes._decorate_search_catalog", lambda _request, data: data)
     state = SimpleNamespace(
         runtime=SimpleNamespace(bbdown_credentials_dir=credentials, bbdown_dir=tools)
     )

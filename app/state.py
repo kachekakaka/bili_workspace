@@ -7,17 +7,23 @@ from pathlib import Path
 from typing import Callable
 
 from app.bbdown import find_bbdown_exe, find_ffmpeg
+from app.account_store import AuthStore
+from app.catalog_store import CatalogStore
 from app.config import ConfigStore
 from app.cover_cache import CoverCache
 from app.cookie import CookieChecker
+from app.database import Database
+from app.deletion_store import DeletionStore
 from app.index_store import IndexStore
 from app.integrity import IntegrityStatus, verify_tool_manifest
+from app.library_service import LibraryService
 from app.metadata import fetch_video_metadata
-from app.migration_safe_task_store import MigrationSafeTaskOwnershipNasStore
-from app.owned_queue import OwnedTaskQueue
 from app.paths import ROOT
 from app.qr_login import QrLoginManager
+from app.queue import TaskQueue
 from app.runtime import RuntimeSettings
+from app.tag_store import TagStore
+from app.task_store import TaskStore
 from app.userdata import UserdataIndexStore, migrate_legacy_database
 
 _IN_MEMORY_TASK_HISTORY = 5000
@@ -37,11 +43,17 @@ class AppState:
     runtime: RuntimeSettings
     config_store: ConfigStore
     index: IndexStore
-    queue: OwnedTaskQueue
+    queue: TaskQueue
     export_config_store: ConfigStore
     export_index: IndexStore
-    export_queue: OwnedTaskQueue
-    nas: MigrationSafeTaskOwnershipNasStore
+    export_queue: TaskQueue
+    database: Database
+    auth_store: AuthStore
+    task_store: TaskStore
+    catalog_store: CatalogStore
+    tag_store: TagStore
+    deletion_store: DeletionStore
+    library_service: LibraryService
     cover_cache: CoverCache
     qr_login: QrLoginManager
     cookie_checker: CookieChecker
@@ -167,18 +179,28 @@ class AppState:
             export_root, index_root / "exports.json"
         )
 
-        nas = MigrationSafeTaskOwnershipNasStore(runtime, index)
-        nas.bind_export_index(export_index)
-        default_owner = nas.default_owner_user_id()
+        database = Database(runtime)
+        auth_store = AuthStore(database)
+        tag_store = TagStore(database)
+        deletion_store = DeletionStore(database)
+        catalog_store = CatalogStore(database, index)
+        task_store = TaskStore(database, export_index)
+        library_service = LibraryService(
+            database,
+            catalog_store,
+            tag_store,
+            deletion_store,
+        )
+        default_owner = auth_store.default_owner_user_id()
         download_slots = threading.Semaphore(runtime.download_concurrency)
-        queue = OwnedTaskQueue(
+        queue = TaskQueue(
             store,
             index,
             runner=runner,
             metadata_fetcher=fetcher,
             max_history=_IN_MEMORY_TASK_HISTORY,
-            initial_tasks=nas.load_task_snapshots("library"),
-            on_state_change=lambda task_id, payload: nas.save_task_snapshot(
+            initial_tasks=task_store.load_task_snapshots("library"),
+            on_state_change=lambda task_id, payload: task_store.save_task_snapshot(
                 "library", task_id, payload
             ),
             execution_semaphore=download_slots,
@@ -190,16 +212,16 @@ class AppState:
         )
 
         def persist_device_task(task_id: str, payload: dict | None) -> None:
-            nas.save_task_snapshot("device", task_id, payload)
-            nas.update_export_from_task(task_id, payload)
+            task_store.save_task_snapshot("device", task_id, payload)
+            task_store.update_export_from_task(task_id, payload)
 
-        export_queue = OwnedTaskQueue(
+        export_queue = TaskQueue(
             export_store,
             export_index,
             runner=runner,
             metadata_fetcher=fetcher,
             max_history=_IN_MEMORY_TASK_HISTORY,
-            initial_tasks=nas.load_task_snapshots("device"),
+            initial_tasks=task_store.load_task_snapshots("device"),
             on_state_change=persist_device_task,
             execution_semaphore=download_slots,
             min_free_bytes=runtime.min_free_bytes,
@@ -221,7 +243,13 @@ class AppState:
             export_config_store=export_store,
             export_index=export_index,
             export_queue=export_queue,
-            nas=nas,
+            database=database,
+            auth_store=auth_store,
+            task_store=task_store,
+            catalog_store=catalog_store,
+            tag_store=tag_store,
+            deletion_store=deletion_store,
+            library_service=library_service,
             cover_cache=cover_cache,
             qr_login=qr,
             cookie_checker=checker,
@@ -232,7 +260,9 @@ class AppState:
         self.queue.stop()
         self.export_queue.stop()
         self.qr_login.stop()
-        self.nas.close()
+        self.task_store.close()
+        self.auth_store.close()
+        self.database.close()
 
     def readiness(self) -> dict:
         cfg = self.config_store.get()
@@ -253,6 +283,6 @@ class AppState:
             "database_path": str(self.runtime.database_path),
             "temp_dir": str(self.runtime.temp_dir),
             "cache_dir": str(self.runtime.cache_dir),
-            "library": self.nas.library_summary(),
+            "library": self.catalog_store.library_summary(),
             "tool_integrity": self.tool_integrity.to_dict(),
         }

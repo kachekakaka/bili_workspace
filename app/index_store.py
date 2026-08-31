@@ -286,6 +286,28 @@ class IndexStore:
                 self._save()
             return existed
 
+    def restore_entry(self, key: str, entry: dict[str, Any]) -> None:
+        """Restore one previously captured entry after a later commit failed."""
+        if not isinstance(entry, dict):
+            raise ValueError("索引恢复条目必须是对象")
+        with self._lock:
+            self._refresh_if_external_change()
+            restored = deepcopy(entry)
+            target = self._entry_target(restored)
+            if target is None:
+                raise UnsafeIndexPathError("索引恢复条目缺少目标路径")
+            files = restored.get("files") or []
+            if not isinstance(files, list):
+                raise UnsafeIndexPathError("索引恢复条目的文件列表无效")
+            for item in files:
+                if not isinstance(item, dict):
+                    raise UnsafeIndexPathError("索引恢复条目的文件记录无效")
+                rel = str(item.get("path") or "").strip()
+                if rel:
+                    self._entry_file(target, rel)
+            self._data[str(key)] = restored
+            self._save()
+
     def remove_entry_and_files(self, key: str) -> bool:
         """Delete a recorded target only after strict download-root containment checks."""
         with self._lock:
