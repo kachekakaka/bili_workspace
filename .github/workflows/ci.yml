@@ -80,7 +80,8 @@ jobs:
           python -m pip check
       - name: Run the T-PROJECT Playwright phase
         env:
-          BILI_TEST_ROOT: ${{ runner.temp }}/bili_workspace_test
+          # Chromium's POSIX singleton socket has a strict path-length limit.
+          BILI_TEST_ROOT: /tmp/bw
           PYTHON: python
         run: sh scripts/dev/run-playwright-phase.sh
       - name: Upload isolated Playwright evidence
@@ -88,7 +89,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: t-project-playwright-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/bili_workspace_test/**
+          path: /tmp/bw/**
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

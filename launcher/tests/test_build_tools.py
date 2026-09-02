@@ -26,8 +26,13 @@ from tools.build_ffmpeg_windows import (
     REQUIRED_CONFIGURATION,
 )
 from tools.build_launcher import (
+    ROOT,
+    SourceIdentity,
+    _build_record,
     _parse_ffmpeg_version_output,
+    _pyinstaller_environment,
     _publish_candidate,
+    _resolve_artifact_contract,
     _verify_ffmpeg_source_evidence,
     _validate_pe_amd64,
 )
@@ -252,6 +257,117 @@ def test_pe_validator_accepts_only_amd64(tmp_path: Path) -> None:
     path.write_bytes(payload[:133])
     with pytest.raises(RuntimeError, match="Machine"):
         _validate_pe_amd64(path)
+
+
+def test_candidate_and_snapshot_modes_have_hard_output_boundaries() -> None:
+    final_dist = (ROOT / "dist").resolve(strict=False)
+    canonical_record = (ROOT / "launcher" / "current-build.json").resolve(strict=False)
+    candidate_dist = (ROOT / "build" / "candidate-test" / "dist").resolve(strict=False)
+    candidate_record = (ROOT / "build" / "candidate-test" / "build.json").resolve(
+        strict=False
+    )
+
+    assert _resolve_artifact_contract(
+        mode="snapshot",
+        dist_dir=final_dist,
+        record_path=None,
+        run_exe_self_check=True,
+        run_exe_runtime_smoke=True,
+    ) == canonical_record
+    assert _resolve_artifact_contract(
+        mode="candidate",
+        dist_dir=candidate_dist,
+        record_path=candidate_record,
+        run_exe_self_check=True,
+        run_exe_runtime_smoke=True,
+    ) == candidate_record
+    with pytest.raises(RuntimeError, match="不得写入正式 dist"):
+        _resolve_artifact_contract(
+            mode="candidate",
+            dist_dir=final_dist,
+            record_path=candidate_record,
+            run_exe_self_check=True,
+            run_exe_runtime_smoke=True,
+        )
+    with pytest.raises(RuntimeError, match="都必须启用"):
+        _resolve_artifact_contract(
+            mode="snapshot",
+            dist_dir=final_dist,
+            record_path=canonical_record,
+            run_exe_self_check=True,
+            run_exe_runtime_smoke=False,
+        )
+
+
+def test_windows_ffmpeg_recipe_has_lf_checkout_contract() -> None:
+    attributes = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "*.Dockerfile text eol=lf" in attributes.splitlines()
+
+
+def test_pyinstaller_environment_excludes_foreign_dll_and_python_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    windows = tmp_path / "Windows"
+    bundle = tmp_path / "bundle"
+    monkeypatch.setenv("SystemRoot", str(windows))
+    monkeypatch.setenv("PATH", str(tmp_path / "foreign-dlls"))
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "foreign-python"))
+    monkeypatch.setenv("QT_PLUGIN_PATH", str(tmp_path / "foreign-qt"))
+    monkeypatch.setenv("QML2_IMPORT_PATH", str(tmp_path / "foreign-qml"))
+
+    environment = _pyinstaller_environment(bundle)
+
+    dll_search = environment["PATH"].split(os.pathsep)
+    assert str(tmp_path / "foreign-dlls") not in dll_search
+    assert str(windows.resolve(strict=False) / "System32") in dll_search
+    assert "PYTHONPATH" not in environment
+    assert "QT_PLUGIN_PATH" not in environment
+    assert "QML2_IMPORT_PATH" not in environment
+    assert environment["PYTHONNOUSERSITE"] == "1"
+    assert environment["PYTHONUTF8"] == "1"
+    assert environment["BILI_REPOSITORY_ROOT"] == str(ROOT)
+    assert environment["BILI_LAUNCHER_RESOURCE_BUNDLE"] == str(bundle)
+
+
+def test_launcher_workflow_uses_ephemeral_candidate_without_exe_artifact() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "launcher.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "python -B -X utf8 -m tools.validate_launcher_candidate" in workflow
+    assert "bili-workspace-launcher-validation" not in workflow
+    assert "build/ci-launcher-dist" not in workflow
+
+
+def test_build_record_v2_identifies_source_and_both_exe_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("tools.build_launcher.ROOT", tmp_path)
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    (resource_dir / "manifest.json").write_text(
+        json.dumps({"build_id": "0123456789ab"}),
+        encoding="utf-8",
+    )
+    executable = tmp_path / "staging.exe"
+    executable.write_bytes(b"candidate")
+    published = tmp_path / "build" / "candidate" / "candidate.exe"
+
+    record = _build_record(
+        executable,
+        resource_dir,
+        published,
+        artifact_kind="candidate",
+        source_identity=SourceIdentity(commit="a" * 40, dirty=True),
+        exe_self_check_ran=True,
+        exe_runtime_smoke_ran=True,
+    )
+
+    assert record["schema_version"] == 2
+    assert record["artifact_kind"] == "candidate"
+    assert record["source_commit"] == "a" * 40
+    assert record["source_dirty"] is True
+    assert record["exe_self_check_ran"] is True
+    assert record["exe_runtime_smoke_ran"] is True
 
 
 def test_ffmpeg_license_gate_requires_fixed_lgpl_source_build() -> None:

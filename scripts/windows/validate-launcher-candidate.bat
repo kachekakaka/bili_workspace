@@ -8,8 +8,5 @@ if not exist "%PYTHON%" (
   echo [错误] 缺少仓库统一 Python 3.11 环境：%PYTHON% 1>&2
   exit /b 1
 )
-"%PYTHON%" -B -X utf8 -m tools.build_launcher ^
-  --mode snapshot ^
-  --run-exe-self-check ^
-  --run-exe-runtime-smoke
+"%PYTHON%" -B -X utf8 -m tools.validate_launcher_candidate %*
 exit /b %ERRORLEVEL%

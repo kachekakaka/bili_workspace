@@ -14,7 +14,7 @@
 - 修复 BBDown 子进程三处缺陷：Windows 下预览/下载不再弹出命令窗口；BBDown 中文输出按探测编码解码，任务日志不再乱码；每次调用前将数据根凭据同步到 BBDown 可执行目录并允许其通过启动器资源校验，恢复登录态下 1080P 及以上清晰度；
 - 新增 Windows amd64 单文件启动器，离线内置 Python 3.11、BBDown 1.6.3 与 FFmpeg 7.1.1，并保留本机/局域网监听和失败关闭的安全配置；
 - Windows 配置、SQLite、日志、缓存、凭据与媒体统一放入用户选择的仓库外数据根，控制状态跟随 EXE；退役 `start.bat`、`verify.bat`、Portable Python packs 和旧专用工作流；
-- 启动器提供固定 `linux/amd64` Docker 导出事务，仓库与 CI 统一使用 Python 3.11，仓库只跟踪一份当前 EXE 和对应构建记录；
+- 启动器提供固定 `linux/amd64` Docker 导出事务，仓库与 CI 统一使用 Python 3.11，仓库只跟踪一份 Windows 打包快照 EXE 和对应构建记录；
 - 文档门禁按标准项目文档骨架校验活动 Markdown、核心导航、归档入口与项目级 Agent Skill 工具资产边界；核心导航只进入归档索引，普通活动文档可为精确历史证据引用归档正文，但不得将其当作当前事实；
 - 将 Playwright 固定为 T-PROJECT full 的必需阶段，复用既有浏览器并保持仓库外隔离；缺少阶段的非严格部署自检记为 `inconclusive`，严格入口缺少浏览器时记为 `blocked`；
 - 将 CI 浏览器阶段收口为一个带 run-id、隔离环境和结果文件的 T-PROJECT 消费者，最终结果写入失败不再返回成功；

@@ -28,14 +28,15 @@
 
 ## 构建与交付
 
-- Windows 运行入口为仓库跟踪的 `dist/bili-workspace-launcher-0.7.0.exe`。它自带 Python 3.11、BBDown 和 FFmpeg，首次启动必须选择仓库外数据根；本机模式与显式局域网服务器模式的监听及安全配置都由该 EXE 管理。
+- Windows 运行入口为仓库跟踪的 `dist/bili-workspace-launcher-0.7.0.exe`。它是维护者手工晋升的 Windows 打包快照，可能落后于 `main` 最新源码；其身份以配套 `launcher/current-build.json` 为准，不能用来证明未晋升源码已经打包。快照自带 Python 3.11、BBDown 和 FFmpeg，首次启动必须选择仓库外数据根。
+- 修改会被 EXE 内嵌的输入后，开发者使用 `scripts/windows/validate-launcher-candidate.bat` 在忽略目录构建并验证临时候选；默认验证后清理，不替换打包快照，也不上传。只有明确决定晋升且源码已提交、工作树干净时，才运行 `scripts/windows/build-launcher.bat` 成对更新正式快照与构建记录。
 - Docker 构建与启动入口为 `docker/build-and-start.sh`；当前运维范围保留镜像构建、验证与私有离线打包，真实 QNAP 部署方案暂缓。
 - 项目停止未来正式发布，不创建新的 tag、GitHub Release 或 GHCR 正式镜像；既有 V0.7.0 发布物仅作为冻结历史后备。
 - 镜像打包、网络、备份、恢复、源码更新和回滚统一从[项目文档总入口](docs/README.md)进入；验证层级与测试选择从[测试治理总入口](SoftwareTesting/README.md)进入。
 
 ## 最短运行入口
 
-Windows：
+Windows 打包快照（不等同于 `main` 最新源码）：
 
 ```powershell
 git clone https://github.com/kachekakaka/bili_workspace.git

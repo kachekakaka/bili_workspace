@@ -10,7 +10,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from .backend_process import record_backend_child_failure, run_backend_child
-from .paths import AppPaths
+from .paths import AppPaths, _path_exists
 from .resources import ResourceManager, sha256_file
 from .version import PRODUCT_VERSION
 
@@ -28,21 +28,52 @@ _PYSIDE_OFFICIAL_LICENSES = {
         "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2",
     },
 }
+_SELF_CHECK_REPORT_NAME = "self-check.json"
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bili-workspace-launcher")
-    parser.add_argument("--self-check", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
+    operation = parser.add_mutually_exclusive_group()
+    operation.add_argument("--self-check", action="store_true", help=argparse.SUPPRESS)
+    operation.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
+    operation.add_argument("--runtime-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--self-check-report", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--session-journal", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--stop-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--log-file", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--data-root", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--expected-build-id", help=argparse.SUPPRESS)
+    parser.add_argument("--runtime-smoke-report", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
 def _emit(message: str) -> None:
     if sys.stdout is not None:
         print(message)
+
+
+def _validated_self_check_report(path: Path) -> Path:
+    raw = Path(path)
+    if not raw.is_absolute():
+        raise RuntimeError("EXE 自检报告路径必须是绝对路径")
+    report = raw.resolve(strict=False)
+    base_dir = AppPaths.from_executable().base_dir.resolve(strict=False)
+    if (
+        report.parent != base_dir
+        or report.name != _SELF_CHECK_REPORT_NAME
+        or _path_exists(report)
+    ):
+        raise RuntimeError("EXE 自检报告必须是 EXE 同级的全新固定文件")
+    return report
+
+
+def _write_self_check_report(path: Path, payload: dict[str, object]) -> None:
+    with path.open("xb") as stream:
+        stream.write(
+            (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode(
+                "utf-8"
+            )
+        )
 
 
 def _canonical_distribution_name(value: str) -> str:
@@ -289,15 +320,115 @@ def self_check() -> int:
 def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()
     arguments = _parser().parse_args(argv)
+    backend_internal = {
+        "session-journal": arguments.session_journal,
+        "stop-file": arguments.stop_file,
+        "log-file": arguments.log_file,
+    }
+    runtime_internal = {
+        "data-root": arguments.data_root,
+        "expected-build-id": arguments.expected_build_id,
+        "runtime-smoke-report": arguments.runtime_smoke_report,
+    }
+    self_check_internal = {"self-check-report": arguments.self_check_report}
     if arguments.self_check:
-        return self_check()
+        unexpected = [
+            name
+            for name, value in {**backend_internal, **runtime_internal}.items()
+            if value is not None
+        ]
+        if unexpected:
+            raise RuntimeError("EXE 自检不接受其他内部参数：" + ", ".join(unexpected))
+        if arguments.self_check_report is not None:
+            try:
+                self_check_report = _validated_self_check_report(
+                    arguments.self_check_report
+                )
+            except Exception:
+                return 1
+        else:
+            self_check_report = None
+        try:
+            result = self_check()
+        except Exception as exc:
+            if self_check_report is not None:
+                try:
+                    _write_self_check_report(
+                        self_check_report,
+                        {
+                            "schema_version": 1,
+                            "status": "failed",
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                    )
+                except Exception:
+                    pass
+            return 1
+        if self_check_report is not None:
+            _write_self_check_report(
+                self_check_report,
+                {"schema_version": 1, "status": "passed"},
+            )
+        return result
+    if arguments.runtime_smoke:
+        unexpected = [
+            name
+            for name, value in {**backend_internal, **self_check_internal}.items()
+            if value is not None
+        ]
+        if unexpected:
+            raise RuntimeError("运行时冒烟不接受后端子进程参数：" + ", ".join(unexpected))
+        missing = [name for name, value in runtime_internal.items() if value is None]
+        if missing:
+            raise RuntimeError("缺少运行时冒烟参数：" + ", ".join(missing))
+        from .runtime_smoke import (
+            run_runtime_smoke,
+            validate_runtime_smoke_inputs,
+            write_report,
+        )
+
+        assert arguments.data_root is not None
+        assert arguments.expected_build_id is not None
+        assert arguments.runtime_smoke_report is not None
+        try:
+            _data_root, safe_report = validate_runtime_smoke_inputs(
+                arguments.data_root,
+                arguments.runtime_smoke_report,
+            )
+        except Exception:
+            return 1
+        try:
+            result = run_runtime_smoke(
+                arguments.data_root,
+                arguments.expected_build_id,
+                arguments.runtime_smoke_report,
+            )
+        except Exception as exc:
+            try:
+                write_report(
+                    safe_report,
+                    {
+                        "schema_version": 1,
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
+            except Exception:
+                pass
+            return 1
+        write_report(safe_report, result)
+        return 0
     if arguments.run_backend:
-        required = {
-            "session-journal": arguments.session_journal,
-            "stop-file": arguments.stop_file,
-            "log-file": arguments.log_file,
-        }
-        missing = [name for name, value in required.items() if value is None]
+        unexpected = [
+            name
+            for name, value in {**runtime_internal, **self_check_internal}.items()
+            if value is not None
+        ]
+        if unexpected:
+            raise RuntimeError("后端子进程不接受运行时冒烟参数：" + ", ".join(unexpected))
+        missing = [name for name, value in backend_internal.items() if value is None]
         if missing:
             raise RuntimeError("缺少内部后端参数：" + ", ".join(missing))
         try:
@@ -309,6 +440,10 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             record_backend_child_failure(arguments.session_journal, exc)
             return 1
+    unused_internal = {**backend_internal, **runtime_internal, **self_check_internal}
+    unexpected = [name for name, value in unused_internal.items() if value is not None]
+    if unexpected:
+        raise RuntimeError("内部参数缺少对应操作：" + ", ".join(unexpected))
     from .gui import run_gui
 
     return run_gui()

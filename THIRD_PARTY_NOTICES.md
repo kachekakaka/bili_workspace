@@ -8,11 +8,11 @@
 - 许可证：MIT；Windows 候选内随附许可证全文
 - 上游仓库：`https://github.com/nilaoda/BBDown`
 
-BBDown 官方仓库已经归档。当前 Windows 启动器固定使用 v1.6.3，构建与运行时均校验固定包和展开二进制哈希；身份由启动器资源清单和 `launcher/current-build.json` 承接。Docker 构建阶段会执行 `BBDown --help` 冒烟测试。
+BBDown 官方仓库已经归档。Windows 启动器构建固定使用 v1.6.3，构建与运行时均校验固定包和展开二进制哈希；候选身份由临时构建记录承接，已晋升快照身份由启动器资源清单和 `launcher/current-build.json` 承接。Docker 构建阶段会执行 `BBDown --help` 冒烟测试。
 
 ## FFmpeg / FFprobe
 
-- Windows 文件：由当前 EXE 内置并展开到 `resources/<build_id>/windows-tools/ffmpeg/bin/ffmpeg.exe`
+- Windows 文件：由候选或已晋升快照 EXE 内置并展开到 `resources/<build_id>/windows-tools/ffmpeg/bin/ffmpeg.exe`
 - Windows 构建来源：FFmpeg 7.1.1 官方签名源码，在固定 `linux/amd64` 容器中交叉构建 Windows amd64 二进制
 - Windows 许可证：LGPL-2.1-or-later；完整源码、签名、公钥、配方、工具链与许可证随候选资源提供
 - Docker：使用 Debian Bookworm 软件源安装 `ffmpeg`，同时提供 `ffprobe`

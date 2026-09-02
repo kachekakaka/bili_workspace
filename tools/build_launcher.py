@@ -15,9 +15,11 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.constants import DATABASE_SCHEMA_VERSION
 from tools.build_ffmpeg_windows import (
     BUILDER_BASE_IMAGE,
     DEBIAN_SNAPSHOT,
@@ -53,6 +55,15 @@ MAX_FFMPEG_EVIDENCE_BYTES = 64 * 1024
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _ERROR_MORE_DATA = 234
 _RM_SESSION_KEY_CHARACTERS = 32
+_RUNTIME_SMOKE_REPORT_NAME = "runtime-smoke.json"
+_SELF_CHECK_REPORT_NAME = "self-check.json"
+_MAX_RUNTIME_SMOKE_REPORT_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class SourceIdentity:
+    commit: str
+    dirty: bool
 
 
 def _require_builder() -> None:
@@ -64,12 +75,83 @@ def _require_builder() -> None:
         raise RuntimeError("启动器构建 Python 必须是 64 位")
 
 
+def _pyinstaller_environment(resource_bundle: Path) -> dict[str, str]:
+    """Return a deterministic Windows DLL search environment for freezing."""
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(("PYTHON", "QT_"))
+        and key.upper() not in {"QML_IMPORT_PATH", "QML2_IMPORT_PATH"}
+    }
+    environment_by_upper_name = {key.upper(): value for key, value in environment.items()}
+    system_root_raw = environment_by_upper_name.get(
+        "SYSTEMROOT"
+    ) or environment_by_upper_name.get("WINDIR")
+    if not system_root_raw:
+        raise RuntimeError("无法确定 Windows 系统目录")
+    system_root = Path(system_root_raw).resolve(strict=False)
+    search_directories = (
+        Path(sys.executable).resolve(strict=False).parent,
+        Path(sys.base_prefix).resolve(strict=False),
+        system_root / "System32",
+        system_root,
+    )
+    unique_directories: list[Path] = []
+    seen: set[str] = set()
+    for directory in search_directories:
+        identity = os.path.normcase(str(directory))
+        if identity not in seen:
+            seen.add(identity)
+            unique_directories.append(directory)
+    environment["PATH"] = os.pathsep.join(str(path) for path in unique_directories)
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONUTF8"] = "1"
+    environment["BILI_REPOSITORY_ROOT"] = str(ROOT)
+    environment["BILI_LAUNCHER_RESOURCE_BUNDLE"] = str(resource_bundle)
+    return environment
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _source_identity() -> SourceIdentity:
+    """Return the committed base and whether this candidate includes local edits."""
+
+    if not (ROOT / ".git").exists():
+        raise RuntimeError("启动器只能在可审计的 Git 工作树中构建")
+    try:
+        commit_result = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        status_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            ],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        commit = commit_result.stdout.decode("ascii").strip().lower()
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        raise RuntimeError("无法取得启动器源码 Git 身份") from exc
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise RuntimeError("启动器源码 HEAD 不是完整的 40 位 Git commit")
+    return SourceIdentity(commit=commit, dirty=bool(status_result.stdout))
 
 
 def _windows_file_use_count(path: Path) -> int:
@@ -190,6 +272,35 @@ def _validate_record_path(path: Path) -> None:
     canonical = (ROOT / "launcher" / "current-build.json").resolve(strict=False)
     if candidate != canonical and not _inside(candidate, ROOT / "build"):
         raise RuntimeError(f"构建记录只能写入 current-build.json 或 build：{path}")
+
+
+def _resolve_artifact_contract(
+    *,
+    mode: str,
+    dist_dir: Path,
+    record_path: Path | None,
+    run_exe_self_check: bool,
+    run_exe_runtime_smoke: bool,
+) -> Path:
+    final_dist = (ROOT / "dist").resolve(strict=False)
+    canonical_record = (ROOT / "launcher" / "current-build.json").resolve(strict=False)
+    if not run_exe_self_check or not run_exe_runtime_smoke:
+        raise RuntimeError("候选与正式快照都必须启用 EXE 自检和全新数据根运行时冒烟")
+    if mode == "snapshot":
+        if dist_dir != final_dist:
+            raise RuntimeError("正式快照只能写入仓库 dist")
+        if record_path is not None and record_path != canonical_record:
+            raise RuntimeError("正式快照必须更新 launcher/current-build.json")
+        return canonical_record
+    if mode == "candidate":
+        if dist_dir == final_dist:
+            raise RuntimeError("候选构建不得写入正式 dist")
+        if record_path is None:
+            raise RuntimeError("候选构建必须在 build 内写入候选记录")
+        if record_path == canonical_record:
+            raise RuntimeError("候选构建不得更新 launcher/current-build.json")
+        return record_path
+    raise RuntimeError(f"不支持的启动器构建模式：{mode}")
 
 
 def _validate_pe_amd64(path: Path) -> None:
@@ -587,7 +698,10 @@ def _build_record(
     resource_dir: Path,
     published_executable: Path,
     *,
+    artifact_kind: str,
+    source_identity: SourceIdentity,
     exe_self_check_ran: bool,
+    exe_runtime_smoke_ran: bool,
 ) -> dict[str, object]:
     manifest_bytes = (resource_dir / "manifest.json").read_bytes()
     manifest = json.loads(manifest_bytes.decode("utf-8"))
@@ -599,9 +713,12 @@ def _build_record(
     except ValueError as exc:
         raise RuntimeError("构建记录中的 EXE 必须位于仓库 build 或 dist") from exc
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "artifact_kind": artifact_kind,
         "version": "0.7.0",
         "build_id": manifest["build_id"],
+        "source_commit": source_identity.commit,
+        "source_dirty": source_identity.dirty,
         "platform": "windows/amd64",
         "executable": executable_name,
         "sha256": _sha256(executable),
@@ -611,8 +728,104 @@ def _build_record(
         "pyinstaller_version": PyInstaller.__version__,
         "pyside6_version": PySide6.__version__,
         "exe_self_check_ran": exe_self_check_ran,
+        "exe_runtime_smoke_ran": exe_runtime_smoke_ran,
         "built_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
+
+
+def _run_exe_self_check(executable: Path) -> None:
+    report_path = executable.parent / _SELF_CHECK_REPORT_NAME
+    result = subprocess.run(
+        [
+            str(executable),
+            "--self-check",
+            "--self-check-report",
+            str(report_path),
+        ],
+        cwd=executable.parent,
+        check=False,
+        timeout=180,
+    )
+    report = _read_check_report(report_path, "EXE 自检")
+    if result.returncode != 0 or report != {"schema_version": 1, "status": "passed"}:
+        error = str(report.get("error", "")).strip()
+        detail = f"：{error}" if error else ""
+        raise RuntimeError(f"候选 EXE 自检失败（退出码 {result.returncode}）{detail}")
+
+
+def _read_check_report(path: Path, label: str) -> dict[str, object]:
+    try:
+        if path.stat().st_size > _MAX_RUNTIME_SMOKE_REPORT_BYTES:
+            raise RuntimeError(f"{label}报告超过大小上限")
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"{label}没有生成有效报告") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"{label}报告必须是 JSON object")
+    return raw
+
+
+def _read_runtime_smoke_report(path: Path) -> dict[str, object]:
+    return _read_check_report(path, "候选运行时冒烟")
+
+
+def _run_exe_runtime_smoke(executable: Path, expected_build_id: str) -> None:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(("BILI_", "PYTHON"))
+    }
+    environment["PYTHONUTF8"] = "1"
+    with tempfile.TemporaryDirectory(prefix="bili-launcher-runtime-smoke-") as temporary:
+        temporary_root = Path(temporary).resolve(strict=True)
+        if _inside(temporary_root, ROOT):
+            raise RuntimeError("运行时冒烟临时根必须位于 Git 工作树外")
+        data_root = temporary_root / "data"
+        report_path = temporary_root / _RUNTIME_SMOKE_REPORT_NAME
+        result = subprocess.run(
+            [
+                str(executable),
+                "--runtime-smoke",
+                "--data-root",
+                str(data_root),
+                "--expected-build-id",
+                expected_build_id,
+                "--runtime-smoke-report",
+                str(report_path),
+            ],
+            cwd=executable.parent,
+            env=environment,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+        report = _read_runtime_smoke_report(report_path)
+        expected = {
+            "schema_version": 1,
+            "status": "passed",
+            "build_id": expected_build_id,
+            "application_schema_version": DATABASE_SCHEMA_VERSION,
+            "mode": "local",
+            "root_page": "passed",
+        }
+        invalid = (
+            result.returncode != 0
+            or set(report) != {*expected, "port"}
+            or any(report.get(key) != value for key, value in expected.items())
+            or isinstance(report.get("port"), bool)
+            or not isinstance(report.get("port"), int)
+            or not 1 <= report["port"] <= 65535
+        )
+        if invalid:
+            error = str(report.get("error", "")).strip()
+            detail = f"：{error}" if error else ""
+            raise RuntimeError(
+                f"候选 EXE 全新数据根运行时冒烟失败（退出码 {result.returncode}）{detail}"
+            )
 
 
 def _write_new_record(path: Path, record: dict[str, object]) -> None:
@@ -737,6 +950,7 @@ def _publish_candidate(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("candidate", "snapshot"), required=True)
     parser.add_argument("--dist-dir", type=Path, default=ROOT / "dist")
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_WORK)
     parser.add_argument("--resource-dir", type=Path, default=DEFAULT_TARGET)
@@ -747,6 +961,11 @@ def main(argv: list[str] | None = None) -> int:
         "--run-exe-self-check",
         action="store_true",
         help="显式授权构建器启动刚生成的 EXE 执行 --self-check",
+    )
+    parser.add_argument(
+        "--run-exe-runtime-smoke",
+        action="store_true",
+        help="显式授权候选 EXE 在全新仓库外临时数据根启动自有后端",
     )
     arguments = parser.parse_args(argv)
     _reject_reparse(arguments.dist_dir, "EXE 输出目录")
@@ -777,28 +996,24 @@ def main(argv: list[str] | None = None) -> int:
             if _inside(left, right) or _inside(right, left):
                 raise RuntimeError(f"{left_name}与{right_name}不能重叠")
 
-    final_dist = (ROOT / "dist").resolve(strict=False)
-    canonical_record = (ROOT / "launcher" / "current-build.json").resolve(strict=False)
     record_path = arguments.record.resolve(strict=False) if arguments.record is not None else None
-    if dist_dir == final_dist:
-        if not arguments.run_exe_self_check:
-            raise RuntimeError("正式 dist 构建必须显式启用 EXE 自检")
-        if record_path is not None and record_path != canonical_record:
-            raise RuntimeError("正式 dist 构建必须更新 launcher/current-build.json")
-        record_path = canonical_record
-    elif record_path == canonical_record:
-        raise RuntimeError("只有正式 dist 构建可以更新 launcher/current-build.json")
-    if record_path is not None:
-        _validate_record_path(record_path)
-        _reject_reparse(arguments.record or record_path, "构建记录")
-        _reject_reparse_ancestors(arguments.record or record_path, "构建记录")
-        for label, directory in (
-            ("PyInstaller 工作目录", work_dir),
-            ("资源 staging", resource_dir),
-            ("固定资源缓存", cache_dir),
-        ):
-            if _inside(record_path, directory):
-                raise RuntimeError(f"构建记录不能位于{label}内")
+    record_path = _resolve_artifact_contract(
+        mode=arguments.mode,
+        dist_dir=dist_dir,
+        record_path=record_path,
+        run_exe_self_check=arguments.run_exe_self_check,
+        run_exe_runtime_smoke=arguments.run_exe_runtime_smoke,
+    )
+    _validate_record_path(record_path)
+    _reject_reparse(arguments.record or record_path, "构建记录")
+    _reject_reparse_ancestors(arguments.record or record_path, "构建记录")
+    for label, directory in (
+        ("PyInstaller 工作目录", work_dir),
+        ("资源 staging", resource_dir),
+        ("固定资源缓存", cache_dir),
+    ):
+        if _inside(record_path, directory):
+            raise RuntimeError(f"构建记录不能位于{label}内")
 
     if _path_exists(dist_dir) and (
         dist_dir.is_symlink() or _is_reparse_point(dist_dir) or not dist_dir.is_dir()
@@ -811,6 +1026,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     if unexpected_executables:
         raise RuntimeError("EXE 输出目录包含其他可执行文件，拒绝覆盖")
+    source_identity = _source_identity()
+    if arguments.mode == "snapshot" and source_identity.dirty:
+        raise RuntimeError("正式快照只能从干净、已提交的 Git HEAD 构建")
     _require_builder()
     bundle = prepare(resource_dir, cache_dir)
     verification = _smoke_tools(bundle)
@@ -819,19 +1037,27 @@ def main(argv: list[str] | None = None) -> int:
         verification,
     )
     _record_tool_verification(bundle, verification)
+    try:
+        bundle_manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+        bundle_build_id = bundle_manifest["build_id"]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError("无法读取候选资源 build_id") from exc
+    if not isinstance(bundle_build_id, str):
+        raise RuntimeError("候选资源 build_id 类型无效")
     job_dir = work_dir / f"job-{uuid.uuid4().hex}"
     staging_dist = job_dir / "dist"
     pyinstaller_work = job_dir / "pyinstaller"
     staging_dist.mkdir(parents=True)
     staging_executable = staging_dist / EXPECTED_EXE
     destination = dist_dir / EXPECTED_EXE
-    environment = os.environ.copy()
-    environment["BILI_REPOSITORY_ROOT"] = str(ROOT)
-    environment["BILI_LAUNCHER_RESOURCE_BUNDLE"] = str(bundle)
+    environment = _pyinstaller_environment(bundle)
     try:
         subprocess.run(
             [
                 sys.executable,
+                "-B",
+                "-X",
+                "utf8",
                 "-m",
                 "PyInstaller",
                 "--noconfirm",
@@ -855,19 +1081,20 @@ def main(argv: list[str] | None = None) -> int:
                 f"候选为 {staging_executable.stat().st_size} 字节，达到常规 Git 单文件停止线"
             )
         _validate_pe_amd64(staging_executable)
-        if arguments.run_exe_self_check:
-            subprocess.run(
-                [str(staging_executable), "--self-check"], cwd=ROOT, check=True, timeout=180
-            )
-        record = (
-            _build_record(
-                staging_executable,
-                bundle,
-                destination,
-                exe_self_check_ran=arguments.run_exe_self_check,
-            )
-            if record_path is not None
-            else None
+        _run_exe_self_check(staging_executable)
+        _run_exe_runtime_smoke(staging_executable, bundle_build_id)
+        if arguments.mode == "snapshot":
+            final_identity = _source_identity()
+            if final_identity != source_identity or final_identity.dirty:
+                raise RuntimeError("正式快照构建期间 Git HEAD 或工作树发生变化，拒绝晋升")
+        record = _build_record(
+            staging_executable,
+            bundle,
+            destination,
+            artifact_kind=arguments.mode,
+            source_identity=source_identity,
+            exe_self_check_ran=True,
+            exe_runtime_smoke_ran=True,
         )
         _publish_candidate(
             staging_executable=staging_executable,
@@ -876,7 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
             record=record,
         )
     except Exception:
-        print("候选构建失败；保留任务自有 staging 供诊断。", file=sys.stderr)
+        print(f"{arguments.mode} 构建失败；保留任务自有 staging 供诊断。", file=sys.stderr)
         raise
     if not arguments.keep_build:
         for directory in (job_dir, resource_dir):

@@ -5,6 +5,9 @@ on:
     paths:
       - "app/**"
       - "web/**"
+      - "LICENSES/**"
+      - "THIRD_PARTY_NOTICES.md"
+      - ".gitattributes"
       - "docker/Dockerfile"
       - "docker/entrypoint.sh"
       - "docker/healthcheck.py"
@@ -13,12 +16,17 @@ on:
       - "tools/build_launcher.py"
       - "tools/build_ffmpeg_windows.py"
       - "tools/prepare_launcher_resources.py"
+      - "tools/validate_launcher_candidate.py"
       - "scripts/windows/build-launcher.bat"
+      - "scripts/windows/validate-launcher-candidate.bat"
       - ".github/workflows/launcher.yml"
   pull_request:
     paths:
       - "app/**"
       - "web/**"
+      - "LICENSES/**"
+      - "THIRD_PARTY_NOTICES.md"
+      - ".gitattributes"
       - "docker/Dockerfile"
       - "docker/entrypoint.sh"
       - "docker/healthcheck.py"
@@ -27,7 +35,9 @@ on:
       - "tools/build_launcher.py"
       - "tools/build_ffmpeg_windows.py"
       - "tools/prepare_launcher_resources.py"
+      - "tools/validate_launcher_candidate.py"
       - "scripts/windows/build-launcher.bat"
+      - "scripts/windows/validate-launcher-candidate.bat"
       - ".github/workflows/launcher.yml"
   workflow_dispatch:
 
@@ -117,23 +127,7 @@ jobs:
           tools/build_ffmpeg_windows.py
           tools/prepare_launcher_resources.py
           tools/build_launcher.py
+          tools/validate_launcher_candidate.py
 
-      - name: Build and self-check Windows amd64 candidate
-        run: >-
-          python -B -X utf8 -m tools.build_launcher
-          --dist-dir build/ci-launcher-dist
-          --work-dir build/ci-launcher-pyinstaller
-          --resource-dir build/ci-launcher-resources
-          --record build/ci-launcher-build.json
-          --run-exe-self-check
-          --keep-build
-
-      - name: Upload short-lived validation artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: bili-workspace-launcher-validation
-          path: |
-            build/ci-launcher-dist/bili-workspace-launcher-0.7.0.exe
-            build/ci-launcher-build.json
-          if-no-files-found: error
-          retention-days: 5
+      - name: Build, self-check, and runtime-smoke Windows amd64 candidate
+        run: python -B -X utf8 -m tools.validate_launcher_candidate

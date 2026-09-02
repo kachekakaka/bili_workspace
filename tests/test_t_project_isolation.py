@@ -233,7 +233,8 @@ def test_shell_consumers_keep_local_cleanup_and_ci_artifacts() -> None:
     assert "t_project_isolation.py cleanup" not in browser
     assert "t_project_isolation.py record" not in browser
     assert "if: always()" in workflow
-    assert "bili_workspace_test/**" in workflow
+    assert "BILI_TEST_ROOT: /tmp/bw" in workflow
+    assert "path: /tmp/bw/**" in workflow
 
 
 def test_config_sync_accepts_owned_run_and_keeps_writes_inside(

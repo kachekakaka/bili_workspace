@@ -172,6 +172,7 @@ _LAUNCHER_MODULE_NAMES = {
     "paths.py",
     "ports.py",
     "resources.py",
+    "runtime_smoke.py",
     "settings.py",
     "version.py",
 }

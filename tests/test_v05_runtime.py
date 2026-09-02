@@ -11,6 +11,7 @@ def _base(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     values = {
         "BILI_APP_MODE": "docker",
         "BILI_CONFIG_DIR": str(tmp_path / "config"),
+        "BILI_USERDATA_DIR": str(tmp_path / "userdata"),
         "BILI_MEDIA_DIR": str(tmp_path / "media"),
         "BILI_CACHE_DIR": str(tmp_path / "cache"),
         "BILI_TEMP_DIR": str(tmp_path / "tmp"),
