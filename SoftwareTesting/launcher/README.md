@@ -35,7 +35,7 @@ py -3.11 -m venv .venv
 
 入口为本次运行创建唯一的 `build/launcher-candidates/candidate-<token>/`，复用固定下载缓存，执行资源与工具核验、PyInstaller、PE AMD64、单文件命名、100 MiB 停止线、EXE `--self-check`，再由该 EXE 在仓库外全新临时数据根启动自有后端，核对本机模式、健康响应 `build_id`、当前数据库 schema 和 `/` 页面，最后优雅停止。默认采集结果后只按所有权标记删除本次候选；失败时保留该唯一目录供诊断，`--keep-candidate` 可显式保留通过候选。它不得触碰 `dist` 或规范构建记录，CI 也不上传候选 EXE。
 
-`tools.build_launcher` 是唯一打包实现，`candidate` 与 `snapshot` 模式都强制上述两类 EXE 检查。候选记录使用 schema 2，写入完整 `HEAD` 和 `source_dirty`；正式快照只能由 `scripts/windows/build-launcher.bat` 从干净、已提交的 `HEAD` 构建，并在发布前再次核对源码身份。正式脚本只成对更新 `dist/bili-workspace-launcher-0.7.0.exe` 与 `launcher/current-build.json`，不会自动 commit、push 或上传。当前仓库中的旧快照记录仍是 schema 1，直到维护者下一次明确晋升前保持不变。
+`tools.build_launcher` 是唯一打包实现，`candidate` 与 `snapshot` 模式都强制上述两类 EXE 检查。候选记录使用 schema 2，写入完整 `HEAD` 和 `source_dirty`；正式快照只能由 `scripts/windows/build-launcher.bat` 从干净、已提交的 `HEAD` 构建，并在发布前再次核对源码身份。正式脚本只成对更新 `dist/bili-workspace-launcher-0.7.0.exe` 与 `launcher/current-build.json`，不会自动 commit、push 或上传。当前仓库中的正式快照记录已使用 schema 2；具体源码提交、内容摘要和两类 EXE 检查结果以该记录为准。
 
 FFmpeg 必须由固定 Linux/amd64 容器、Debian 快照和仓库内 LF 配方自建；官方源码签名、发布公钥指纹、实际二进制、`ffmpeg -version` 配置、LGPL 模式、工具链、PE 导入、完整源码及许可证证据全部进入资源清单，缺失或不一致时在 PyInstaller 前失败关闭。不能在缺少证据时把纯逻辑阶段替代为打包通过。
 
