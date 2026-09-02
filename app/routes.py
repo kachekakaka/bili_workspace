@@ -22,6 +22,10 @@ from app.constants import (
     NORMAL_USER_ACTIVE_TASK_LIMIT,
     SESSION_ABSOLUTE_DAYS,
 )
+from app.creator_imports import (
+    CreatorImportNotFoundError,
+    CreatorImportStateError,
+)
 from app.index_store import UnsafeIndexPathError
 from app.io_utils import atomic_write_json
 from app.media_stream import file_response
@@ -35,6 +39,7 @@ from app.models import (
     AuthSetupRequest,
     CompatibleRequest,
     ConfigUpdate,
+    CreatorImportStartRequest,
     DownloadItem,
     DownloadRequest,
     GroupCreateRequest,
@@ -370,6 +375,16 @@ def _search_error_response(exc: SearchError):
         exc.status_code,
         code=exc.code,
     )
+
+
+def _creator_import_error_response(exc: BaseException):
+    if isinstance(exc, CreatorImportNotFoundError):
+        return err("全量入库作业不存在", 404, code="creator_import_not_found")
+    if isinstance(exc, CreatorImportStateError):
+        return err(str(exc), 409, code="creator_import_state_conflict")
+    if isinstance(exc, ValueError):
+        return err(str(exc), 400, code="invalid_creator_import")
+    return err("全量入库作业暂时不可用", 500, code="creator_import_unavailable")
 
 
 def _remote(request: Request) -> str:
@@ -943,6 +958,79 @@ def api_creator_submissions(
             code="creator_inaccessible",
         )
     return ok(data)
+
+
+@catalog_router.post("/bilibili/creator-imports")
+def api_creator_import_start(request: Request, body: CreatorImportStartRequest):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        job, created = _state(request).creator_imports.start(
+            uid=body.uid,
+            owner_user_id=str(admin.get("user_id") or ""),
+            group_id=body.group_id,
+            min_height=body.min_height,
+        )
+    except Exception as exc:  # noqa: BLE001 - normalized API failure contract
+        return _creator_import_error_response(exc)
+    return ok({"job": job, "created": created})
+
+
+@catalog_router.get("/bilibili/creator-imports")
+def api_creator_import_list(request: Request):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    return ok({"items": _state(request).creator_imports.list_jobs()})
+
+
+@catalog_router.get("/bilibili/creator-imports/{job_id}")
+def api_creator_import_detail(request: Request, job_id: str):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        job = _state(request).creator_imports.get_job(job_id)
+    except Exception as exc:  # noqa: BLE001 - normalized API failure contract
+        return _creator_import_error_response(exc)
+    return ok(job)
+
+
+@catalog_router.post("/bilibili/creator-imports/{job_id}/cancel")
+def api_creator_import_cancel(request: Request, job_id: str):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        job = _state(request).creator_imports.cancel(job_id)
+    except Exception as exc:  # noqa: BLE001 - normalized API failure contract
+        return _creator_import_error_response(exc)
+    return ok(job)
+
+
+@catalog_router.post("/bilibili/creator-imports/{job_id}/resume")
+def api_creator_import_resume(request: Request, job_id: str):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        job = _state(request).creator_imports.resume(job_id)
+    except Exception as exc:  # noqa: BLE001 - normalized API failure contract
+        return _creator_import_error_response(exc)
+    return ok(job)
+
+
+@catalog_router.post("/bilibili/creator-imports/{job_id}/retry-failed")
+def api_creator_import_retry_failed(request: Request, job_id: str):
+    admin = _require_admin(request)
+    if isinstance(admin, JSONResponse):
+        return admin
+    try:
+        job = _state(request).creator_imports.retry_failed(job_id)
+    except Exception as exc:  # noqa: BLE001 - normalized API failure contract
+        return _creator_import_error_response(exc)
+    return ok(job)
 
 
 # Groups ------------------------------------------------------------------

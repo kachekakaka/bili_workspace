@@ -110,9 +110,7 @@ def _normalize_item(item: dict[str, Any]) -> dict[str, Any] | None:
         play = item.get("view")
     duration = item.get("duration") or ""
     pubdate = item.get("pubdate") or item.get("created") or 0
-    cover = item.get("pic") or item.get("cover") or ""
-    if cover.startswith("//"):
-        cover = "https:" + cover
+    cover = _https_image(item.get("pic") or item.get("cover"))
     return {
         "bvid": bvid,
         "title": title,
@@ -385,7 +383,11 @@ def search_videos(
 
 def _https_image(value: Any) -> str:
     text = str(value or "").strip()
-    return "https:" + text if text.startswith("//") else text
+    if text.startswith("//"):
+        return "https:" + text
+    if text.lower().startswith("http://"):
+        return "https://" + text[7:]
+    return text
 
 
 def _normalize_creator(item: dict[str, Any]) -> dict[str, Any] | None:

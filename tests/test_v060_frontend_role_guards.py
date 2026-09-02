@@ -32,6 +32,7 @@ def test_normal_user_frontend_scope_is_device_only() -> None:
     assert "下载完成后导出到当前设备，不会进入管理员媒体库。" in download
     assert "allowNameSearch: false" in download
     assert "普通用户不开放名称搜索" in creator
+    assert "const importRoot = normalUser ? null" in creator
     assert "allowNameSearch: true" in search
     assert "/api/bilibili/creators/resolve" in creator
     assert "/api/download/selection" in creator

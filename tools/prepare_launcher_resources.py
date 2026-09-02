@@ -155,10 +155,13 @@ _ALLOWED_EXECUTABLES = {
     "windows-tools/ffmpeg/bin/ffmpeg.exe",
 }
 _ALLOWED_UNTRACKED_DOCKER_INPUTS = {
+    "app/creator_imports.py",
     "app/defaults/config.json.default",
     "app/defaults/runtime.env.default",
     "app/defaults/tags.json.default",
+    "web/assets/app/core/library-navigation.mjs",
     "web/assets/app/core/resource-cache.mjs",
+    "web/assets/app/pages/creator-imports.mjs",
 }
 _LAUNCHER_MODULE_NAMES = {
     "__init__.py",

@@ -169,6 +169,24 @@ def test_task_event_replaces_only_the_changed_card(task_browser: Browser) -> Non
         "title": "未变化任务",
         "display_title": "未变化任务",
     }
+    import_job = {
+        "id": "import-partial",
+        "uid": "123456",
+        "creator_name": "测试 UP",
+        "group_name": "未分组",
+        "min_height": 1080,
+        "status": "partial",
+        "phase": "partial",
+        "created_at": 1_700_000_000,
+        "finished_at": 1_700_000_100,
+        "discovered": 5,
+        "processed": 5,
+        "queued": 4,
+        "failed_count": 1,
+        "failures": [{"bvid": "BV1FAILED001", "title": "失败投稿", "message": "合成失败"}],
+        "can_retry_failed": True,
+    }
+    import_actions: list[str] = []
     event_source_script = """
       (() => {
         const instances = [];
@@ -196,6 +214,29 @@ def test_task_event_replaces_only_the_changed_card(task_browser: Browser) -> Non
 
     def route_api(route: Route) -> None:
         path = urlparse(route.request.url).path
+        if path == "/api/bilibili/creator-imports" and route.request.method == "GET":
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(envelope({"items": [dict(import_job)]}), ensure_ascii=False),
+            )
+            return
+        if path == "/api/bilibili/creator-imports/import-partial/retry-failed":
+            import_actions.append("retry-failed")
+            import_job.update(
+                status="waiting",
+                phase="waiting",
+                can_retry_failed=False,
+                failed_count=0,
+                failures=[],
+                finished_at=None,
+            )
+            route.fulfill(
+                status=200,
+                content_type="application/json; charset=utf-8",
+                body=json.dumps(envelope(dict(import_job)), ensure_ascii=False),
+            )
+            return
         if path == "/api/tasks":
             route.fulfill(
                 status=200,
@@ -218,6 +259,13 @@ def test_task_event_replaces_only_the_changed_card(task_browser: Browser) -> Non
         page.route("**/api/**", route_api)
         page.goto(f"{base_url}/index.html#/tasks", wait_until="domcontentloaded")
         page.wait_for_selector('[data-task-id="task-2"]')
+        page.wait_for_selector('[data-creator-import-job="import-partial"]')
+        assert "全量入库作业" in page.locator(".creator-import-panel").inner_text()
+        page.click('[data-creator-import-action="retry-failed"]')
+        page.wait_for_function(
+            "() => document.querySelector('[data-creator-import-job=\"import-partial\"]')?.textContent.includes('等待中')"
+        )
+        assert import_actions == ["retry-failed"]
         page.evaluate(
             """() => {
               window.__taskCardRefs = {

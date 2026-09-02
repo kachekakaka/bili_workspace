@@ -65,8 +65,12 @@ export function metric(label, value, foot = '') {
   return `<section class="card metric-card"><span class="metric-label">${esc(label)}</span><strong class="metric-value">${esc(value)}</strong><span class="metric-foot">${esc(foot)}</span></section>`;
 }
 
-export function mediaCard(item) {
-  return `<article class="media-card"><div class="cover-wrap"><img data-cover-img src="${esc(coverUrl(item.cover))}" alt="${esc(item.title || '')}" loading="lazy" referrerpolicy="no-referrer"><div class="cover-badges"><span class="badge brand">${esc(item.selected_quality || item.selected_resolution || '媒体')}</span></div></div><div class="media-body"><div class="media-title">${esc(item.title || item.bvid || item.source_key)}</div><div class="media-meta"><span>${esc(item.author || '-')}</span><span>${esc(item.bvid || item.source_key || '')}</span></div><div class="media-meta"><span>${esc(item.group_name || '未分组')}</span><span>${formatBytes(item.total_size)}</span></div></div></article>`;
+export function mediaCard(item, { interactive = false } = {}) {
+  const title = item.title || item.bvid || item.source_key;
+  const interaction = interactive
+    ? ` role="button" tabindex="0" data-dashboard-media="${esc(item.id)}" aria-label="打开作品：${esc(title)}"`
+    : '';
+  return `<article class="media-card"${interaction}><div class="cover-wrap"><img data-cover-img src="${esc(coverUrl(item.cover))}" alt="${esc(item.title || '')}" loading="lazy" referrerpolicy="no-referrer"><div class="cover-badges"><span class="badge brand">${esc(item.selected_quality || item.selected_resolution || '媒体')}</span></div></div><div class="media-body"><div class="media-title">${esc(title)}</div><div class="media-meta"><span>${esc(item.author || '-')}</span><span>${esc(item.bvid || item.source_key || '')}</span></div><div class="media-meta"><span>${esc(item.group_name || '未分组')}</span><span>${formatBytes(item.total_size)}</span></div></div></article>`;
 }
 
 export function modalActions(label) {

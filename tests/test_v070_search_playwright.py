@@ -209,6 +209,9 @@ def test_creator_name_selection_scans_on_demand_and_preserves_conflicted_batch(
 ) -> None:
     submission_pages: list[int] = []
     selection_requests: list[dict] = []
+    import_requests: list[dict] = []
+    import_jobs: list[dict] = []
+    cover_requests: list[str] = []
 
     def submission_item(bvid: str, status: str, title: str) -> dict:
         return {
@@ -219,7 +222,7 @@ def test_creator_name_selection_scans_on_demand_and_preserves_conflicted_batch(
             "duration": "00:10",
             "duration_seconds": 10,
             "pubdate": 1_700_000_000,
-            "cover": "",
+            "cover": "https://i0.hdslb.com/bfs/cover/test.jpg",
             "url": f"https://www.bilibili.com/video/{bvid}",
             "local_status": status,
             "local_status_label": {
@@ -236,6 +239,14 @@ def test_creator_name_selection_scans_on_demand_and_preserves_conflicted_batch(
         parsed = urlparse(route.request.url)
         path = parsed.path
         query = dict(item.split("=", 1) for item in parsed.query.split("&") if "=" in item)
+        if path == "/api/cover":
+            cover_requests.append(route.request.url)
+            route.fulfill(
+                status=200,
+                content_type="image/svg+xml",
+                body='<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>',
+            )
+            return
         if path == "/api/bilibili/creators/search":
             payload = envelope(
                 {
@@ -312,6 +323,28 @@ def test_creator_name_selection_scans_on_demand_and_preserves_conflicted_batch(
                     },
                 }
             )
+        elif path == "/api/bilibili/creator-imports" and route.request.method == "GET":
+            payload = envelope({"items": list(import_jobs)})
+        elif path == "/api/bilibili/creator-imports" and route.request.method == "POST":
+            import_requests.append(route.request.post_data_json)
+            job = {
+                "id": "creator-import-1",
+                "uid": "123456",
+                "creator_name": "测试UP",
+                "group_name": "未分组",
+                "min_height": 1080,
+                "status": "discovering",
+                "phase": "discovering",
+                "created_at": 1_700_000_000,
+                "current_page": 1,
+                "total_pages": 3,
+                "discovered": 20,
+                "processed": 0,
+                "queued": 0,
+                "can_cancel": True,
+            }
+            import_jobs[:] = [job]
+            payload = envelope({"job": job, "created": True})
         elif path == "/api/download/selection":
             selection_requests.append(route.request.post_data_json)
             if len(selection_requests) == 1:
@@ -365,6 +398,27 @@ def test_creator_name_selection_scans_on_demand_and_preserves_conflicted_batch(
 
         assert submission_pages == [2]
         assert "第 1–2 页" in page.locator("[data-submission-results] .notice").first.inner_text()
+        cover_src = page.locator('[data-submission-key="BV1CREATOR03"] img[data-cover-img]').get_attribute("src")
+        assert cover_src and cover_src.startswith("/api/cover?url=https%3A")
+        assert any("https%3A%2F%2Fi0.hdslb.com" in url for url in cover_requests)
+
+        page.select_option('[data-submission-destination]', "device")
+        page.wait_for_function(
+            "() => document.querySelector('.creator-import-panel')?.classList.contains('hidden')"
+        )
+        page.select_option('[data-submission-destination]', "library")
+        page.wait_for_selector('[data-creator-import-start]:not([disabled])')
+        page.click('[data-creator-import-start]')
+        page.wait_for_selector('[data-confirm-message]')
+        confirmation = page.locator('[data-confirm-message]').inner_text()
+        assert "忽略当前标题筛选和页面排序" in confirmation
+        assert "删除历史" in confirmation
+        page.click('[data-confirm-accept]')
+        page.wait_for_selector('[data-creator-import-job="creator-import-1"]')
+        assert import_requests == [
+            {"uid": "123456", "group_id": "", "min_height": 1080}
+        ]
+
         page.check('[data-submission-select="BV1CREATOR03"]')
         page.click('[data-submission-download-selected]')
         page.wait_for_selector('[data-submission-key="BV1CREATOR03"] .notice.bad')
@@ -378,5 +432,5 @@ def test_creator_name_selection_scans_on_demand_and_preserves_conflicted_batch(
         assert len(selection_requests) == 2
         assert selection_requests[1]["items"][0]["bvid"] == "BV1CREATOR03"
         assert selection_requests[1]["destination"] == "library"
-        assert submission_pages == [2]
+        assert submission_pages == [2, 2]
         page.close()

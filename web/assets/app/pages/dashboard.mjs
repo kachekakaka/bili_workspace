@@ -1,4 +1,5 @@
 import { once } from '../core/lifecycle.mjs';
+import { storeLibraryOpenRequest } from '../core/library-navigation.mjs';
 import { resourceKey } from '../core/resource-cache.mjs';
 import { bindCoverFallback, formatBytes, mediaCard, metric } from './shared.mjs';
 
@@ -41,7 +42,7 @@ export async function mount(root, context) {
 
     const recentNode = host.querySelector('#dashboardRecent');
     recentNode.innerHTML = recent.length
-      ? recent.map(mediaCard).join('')
+      ? recent.map(item => mediaCard(item, { interactive: true })).join('')
       : '<div class="empty">作品库还是空的</div>';
     bindCoverFallback(recentNode, context.signal);
 
@@ -103,9 +104,27 @@ export async function mount(root, context) {
   }, { immediate: true, mode: 'summary' });
   const releaseStream = context.taskStream.acquire('summary', { signal: context.signal });
 
+  const openLibraryMedia = mediaId => {
+    if (!mediaId) return;
+    try {
+      storeLibraryOpenRequest(sessionStorage, mediaId);
+    } catch {
+      context.toast.show('浏览器无法保存跳转目标，请从作品库打开', 'warn');
+    }
+    context.navigate('library');
+  };
+
   host.addEventListener('click', event => {
-    if (event.target.closest('[data-go="library"]')) context.navigate('library');
+    const media = event.target.closest('[data-dashboard-media]');
+    if (media) openLibraryMedia(media.dataset.dashboardMedia);
+    else if (event.target.closest('[data-go="library"]')) context.navigate('library');
     else if (event.target.closest('[data-dashboard-retry]')) void refresh();
+  }, { signal: context.signal });
+  host.addEventListener('keydown', event => {
+    const media = event.target.closest('[data-dashboard-media]');
+    if (!media || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    openLibraryMedia(media.dataset.dashboardMedia);
   }, { signal: context.signal });
   render();
   void refresh();

@@ -109,6 +109,22 @@ def test_frozen_search_cache_constants() -> None:
     assert SEARCH_PAGE_CACHE_SECONDS == 180
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("//i0.hdslb.com/a.jpg", "https://i0.hdslb.com/a.jpg"),
+        ("http://i0.hdslb.com/a.jpg", "https://i0.hdslb.com/a.jpg"),
+        ("HTTP://i0.hdslb.com/a.jpg", "https://i0.hdslb.com/a.jpg"),
+        ("https://i0.hdslb.com/a.jpg", "https://i0.hdslb.com/a.jpg"),
+        ("javascript:alert(1)", "javascript:alert(1)"),
+    ],
+)
+def test_bilibili_image_urls_are_normalized_without_bypassing_route_filter(
+    source: str, expected: str
+) -> None:
+    assert search_module._https_image(source) == expected
+
+
 def test_search_uses_wbi_cache_and_raw_page_cache(tmp_env) -> None:
     fake = FakeSearchClient()
 
@@ -404,7 +420,7 @@ def test_creator_name_profile_and_submission_discovery_share_wbi_safely(tmp_env)
                                         "play": 123,
                                         "length": "02:03",
                                         "created": 1_700_000_000,
-                                        "pic": "//i0.hdslb.com/bfs/cover/test.jpg",
+                                        "pic": "http://i0.hdslb.com/bfs/cover/test.jpg",
                                     }
                                 ]
                             },
@@ -444,6 +460,7 @@ def test_creator_name_profile_and_submission_discovery_share_wbi_safely(tmp_env)
     assert submissions["pages"] == 3
     assert submissions["items"][0]["bvid"] == "BV1CREATOR01"
     assert submissions["items"][0]["duration_seconds"] == 123
+    assert submissions["items"][0]["cover"] == "https://i0.hdslb.com/bfs/cover/test.jpg"
     assert _url_counts(fake) == Counter(
         {
             SEARCH_URL: 1,

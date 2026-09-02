@@ -12,6 +12,7 @@ from app.catalog_store import CatalogStore
 from app.config import ConfigStore
 from app.cover_cache import CoverCache
 from app.cookie import CookieChecker
+from app.creator_imports import CreatorImportManager
 from app.database import Database
 from app.deletion_store import DeletionStore
 from app.index_store import IndexStore
@@ -57,6 +58,7 @@ class AppState:
     cover_cache: CoverCache
     qr_login: QrLoginManager
     cookie_checker: CookieChecker
+    creator_imports: CreatorImportManager
     tool_integrity: IntegrityStatus
 
     @classmethod
@@ -235,6 +237,27 @@ class AppState:
         checker = cookie_checker or CookieChecker(lambda: runtime.bbdown_credentials_dir)
         cover_cache = CoverCache(runtime.cache_dir / "covers")
         qr = QrLoginManager(lambda: runtime.bbdown_credentials_dir)
+
+        def audit_creator_import(user_id: str, action: str, detail: str) -> None:
+            auth_store.audit(
+                user_id,
+                action,
+                detail,
+                "",
+                target_user_id=user_id,
+            )
+
+        creator_imports = CreatorImportManager(
+            queue=queue,
+            index=index,
+            deletion_store=deletion_store,
+            catalog_store=catalog_store,
+            task_store=task_store,
+            config_store=store,
+            bbdown_dir=runtime.bbdown_credentials_dir,
+            worker_window=runtime.download_concurrency,
+            audit_callback=audit_creator_import,
+        )
         return cls(
             runtime=runtime,
             config_store=store,
@@ -253,10 +276,12 @@ class AppState:
             cover_cache=cover_cache,
             qr_login=qr,
             cookie_checker=checker,
+            creator_imports=creator_imports,
             tool_integrity=integrity,
         )
 
     def stop(self) -> None:
+        self.creator_imports.stop()
         self.queue.stop()
         self.export_queue.stop()
         self.qr_login.stop()

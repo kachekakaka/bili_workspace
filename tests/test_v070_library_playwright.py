@@ -55,6 +55,71 @@ def library_item() -> dict:
     }
 
 
+def test_dashboard_card_opens_exact_library_item_outside_current_page(
+    library_browser: Browser,
+) -> None:
+    item = library_item()
+    detail_calls = 0
+
+    def route_api(route: Route) -> None:
+        nonlocal detail_calls
+        path = urlparse(route.request.url).path
+        if path == "/api/library/summary":
+            payload = envelope({"media_count": 1, "total_size": 1024})
+        elif path == "/api/library":
+            payload = envelope({"items": [dict(item)], "page": 1, "pages": 1, "total": 1})
+        elif path == "/api/enhancements/library":
+            # The requested item deliberately is not present on the current library page.
+            payload = envelope({"items": [], "page": 1, "pages": 1, "total": 0})
+        elif path == "/api/enhancements/tags":
+            payload = envelope({"items": []})
+        elif path == "/api/library/media-1":
+            detail_calls += 1
+            payload = envelope(
+                {
+                    **item,
+                    "source_url": "https://www.bilibili.com/video/BV1LIBRARY01",
+                    "files": [
+                        {
+                            "id": "file-1",
+                            "filename": "main.mp4",
+                            "kind": "media",
+                            "size": 1024,
+                            "is_primary": True,
+                            "watch_position": 0,
+                        }
+                    ],
+                }
+            )
+        elif path == "/api/media/file-1/stream":
+            route.fulfill(status=204, body="")
+            return
+        else:
+            mock_api(route)
+            return
+        route.fulfill(
+            status=200,
+            content_type="application/json; charset=utf-8",
+            body=json.dumps(payload, ensure_ascii=False),
+        )
+
+    with static_site() as base_url:
+        page = library_browser.new_page(viewport={"width": 1024, "height": 768})
+        page.route("**/api/**", route_api)
+        page.goto(f"{base_url}/#/dashboard", wait_until="domcontentloaded")
+        card = page.locator('[data-dashboard-media="media-1"]')
+        card.wait_for()
+        assert card.get_attribute("role") == "button"
+        assert card.get_attribute("tabindex") == "0"
+
+        card.click()
+        page.wait_for_url("**/#/library")
+        page.wait_for_selector("#enhMediaPlayer")
+        assert detail_calls == 1
+        assert page.locator('[data-library-id="media-1"]').count() == 0
+        page.close()
+
+
 def test_library_module_filters_moves_and_does_not_duplicate_actions(
     library_browser: Browser,
 ) -> None:

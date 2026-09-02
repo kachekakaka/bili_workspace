@@ -1,4 +1,5 @@
 import { once } from '../core/lifecycle.mjs';
+import { takeLibraryOpenRequest } from '../core/library-navigation.mjs';
 import { resourceKey } from '../core/resource-cache.mjs';
 import {
   bindCoverFallback,
@@ -208,6 +209,12 @@ export async function mount(root, context) {
   const groups = context.shared.get().groups || [];
   const tags = context.shared.get().tags || [];
   const requested = requestedQuery();
+  let requestedMedia = '';
+  try {
+    requestedMedia = takeLibraryOpenRequest(sessionStorage);
+  } catch {
+    requestedMedia = '';
+  }
   if (requested) {
     libraryState.q = requested;
     libraryState.page = 1;
@@ -695,7 +702,12 @@ export async function mount(root, context) {
     }
   }, { signal: context.signal });
 
-  void loadLibrary();
+  void loadLibrary().then(() => {
+    if (requestedMedia && context.isCurrent()) return openMedia(requestedMedia);
+    return undefined;
+  }).catch(error => {
+    if (error?.name !== 'AbortError') context.toast.show(error.message, 'bad');
+  });
   return Object.freeze({
     dispose: once(() => {
       if (ownsModal) context.modal.close('route');

@@ -3,6 +3,11 @@
 .media-card:hover .cover-wrap img[data-cover-img]{transform:none!important}
 .enh-dashboard-stack{display:grid!important;grid-template-columns:minmax(0,1fr)!important;gap:18px;align-items:start}
 .enh-dashboard-stack>.card{min-height:0;align-self:start}
+.media-card[data-dashboard-media]{cursor:pointer}
+.media-card[data-dashboard-media]:focus-visible{outline:3px solid rgba(37,99,235,.35);outline-offset:3px}
+.creator-import-panel{margin-top:16px}
+.creator-import-list{display:grid;gap:12px}
+.creator-import-job{margin:0}
 .enh-tag-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:7px}
 .enh-tag-chip{border:1px solid var(--line);background:#fff;color:var(--muted);border-radius:999px;padding:4px 8px;font-size:11px;font-weight:750;cursor:pointer;line-height:1.2}
 .enh-tag-chip.active{color:#fff;border-color:transparent;background:var(--tag-color,#475569)}

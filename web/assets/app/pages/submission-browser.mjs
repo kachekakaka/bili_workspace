@@ -15,6 +15,12 @@ import {
   groupOptions,
   qualityOptions,
 } from './shared.mjs';
+import {
+  createCreatorImportPoller,
+  creatorImportConfirmMessage,
+  creatorImportListMarkup,
+  runCreatorImportAction,
+} from './creator-imports.mjs';
 
 const FILTER_MODES = new Set(['raw', 'all', 'any']);
 const browserStates = new Map();
@@ -187,7 +193,28 @@ export async function mountSubmissionBrowser(root, context, {
   const candidatesRoot = root.querySelector('[data-creator-candidates]');
   const profileRoot = root.querySelector('[data-creator-profile]');
   const resultsRoot = root.querySelector('[data-submission-results]');
+  const importRoot = normalUser ? null : document.createElement('section');
+  if (importRoot) {
+    importRoot.className = 'card creator-import-panel';
+    importRoot.dataset.creatorImportPanel = '';
+    profileRoot.after(importRoot);
+  }
   let ownsModal = false;
+  let importJobs = [];
+
+  const renderImportPanel = () => {
+    if (!importRoot) return;
+    const available = Boolean(state.uid && state.destination === 'library');
+    importRoot.classList.toggle('hidden', state.destination !== 'library');
+    importRoot.innerHTML = `<div class="card-head"><div><h3>UP 主全量入库</h3><p>后台按发布时间遍历全部公开视频；作业完成只表示投稿已入队或被明确跳过。</p></div><button type="button" class="btn primary" data-creator-import-start ${available ? '' : 'disabled'}>全部加入媒体库</button></div><div data-creator-import-current>${creatorImportListMarkup(importJobs, { uid: state.uid })}</div>`;
+  };
+
+  const importPoller = importRoot
+    ? createCreatorImportPoller(context, jobs => {
+      importJobs = jobs;
+      renderImportPanel();
+    })
+    : null;
 
   const assignTags = async (item, values) => {
     const response = await context.api('/api/enhancements/tags', {
@@ -222,6 +249,7 @@ export async function mountSubmissionBrowser(root, context, {
     const quality = root.querySelector('[data-submission-quality]');
     if (quality) quality.value = String(state.minHeight || 0);
     root.querySelector('[data-submission-group-field]')?.classList.toggle('hidden', state.destination === 'device');
+    renderImportPanel();
   };
 
   const renderCandidates = () => {
@@ -591,6 +619,78 @@ export async function mountSubmissionBrowser(root, context, {
     }
   };
 
+  const rememberImportJob = job => {
+    if (!job?.id) return;
+    const remaining = importJobs.filter(item => String(item.id) !== String(job.id));
+    importJobs = [job, ...remaining];
+    renderImportPanel();
+  };
+
+  const startCreatorImport = async button => {
+    if (!importRoot || !state.uid || state.destination !== 'library') return;
+    const group = groups.find(item => String(item.id) === String(state.groupId));
+    const accepted = await context.confirm({
+      title: '开始 UP 主全量入库',
+      message: creatorImportConfirmMessage({
+        creator: state.creator || { uid: state.uid },
+        total: state.total,
+        groupName: group?.display_name || '默认分组',
+        minHeight: state.minHeight,
+      }),
+      confirmLabel: '开始后台遍历',
+    });
+    if (!accepted) return;
+    button.disabled = true;
+    try {
+      const response = await context.api('/api/bilibili/creator-imports', {
+        method: 'POST',
+        body: {
+          uid: state.uid,
+          group_id: state.groupId || '',
+          min_height: Number(state.minHeight || 0),
+        },
+        signal: context.signal,
+      });
+      const job = response.data?.job;
+      rememberImportJob(job);
+      context.toast.show(
+        response.data?.created ? '全量入库作业已开始' : '这个 UP 主已有活动作业，已显示现有进度',
+        response.data?.created ? 'good' : 'warn',
+      );
+      await importPoller?.refresh({ quiet: true });
+    } catch (error) {
+      if (error?.name !== 'AbortError') context.toast.show(error.message, 'bad');
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  };
+
+  const handleCreatorImportAction = async button => {
+    const action = button.dataset.creatorImportAction || '';
+    const jobId = button.dataset.creatorImportId || '';
+    if (!action || !jobId) return;
+    if (action === 'cancel') {
+      const accepted = await context.confirm({
+        title: '取消全量入库作业',
+        message: '只停止后续投稿发现和入队；已经创建的下载任务会继续执行。确认取消？',
+        confirmLabel: '取消后续入队',
+        danger: true,
+      });
+      if (!accepted) return;
+    }
+    button.disabled = true;
+    try {
+      const response = await runCreatorImportAction(context, jobId, action);
+      rememberImportJob(response.data);
+      context.toast.show(action === 'cancel' ? '已请求停止后续入队' : '作业已重新进入等待队列', 'good');
+      await importPoller?.refresh({ quiet: true });
+    } catch (error) {
+      if (error?.name !== 'AbortError') context.toast.show(error.message, 'bad');
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  };
+
   root.addEventListener('change', event => {
     const select = event.target.closest('[data-submission-select]');
     if (select) {
@@ -663,6 +763,10 @@ export async function mountSubmissionBrowser(root, context, {
       root.querySelector('[data-creator-input-label]').textContent = state.locatorMode === 'name' ? 'UP 主名称' : '精确 UID 或主页';
       syncStaticControls();
       renderCandidates();
+    } else if (button.dataset.creatorImportStart !== undefined) {
+      await startCreatorImport(button);
+    } else if (button.dataset.creatorImportAction !== undefined) {
+      await handleCreatorImportAction(button);
     } else if (button.dataset.creatorStart !== undefined) {
       if (state.locatorMode === 'name') await searchNames(1);
       else await resolveCreator();
@@ -777,6 +881,7 @@ export async function mountSubmissionBrowser(root, context, {
   syncStaticControls();
   renderCandidates();
   renderResults();
+  void importPoller?.refresh();
 
   return Object.freeze({
     selectionCount: () => state.selected.size,
@@ -787,6 +892,7 @@ export async function mountSubmissionBrowser(root, context, {
     },
     dispose: once(() => {
       abortCurrent();
+      importPoller?.stop();
       if (ownsModal) context.modal.close('route');
     }),
   });

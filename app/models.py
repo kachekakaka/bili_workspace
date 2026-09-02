@@ -68,6 +68,21 @@ class DownloadRequest(BaseModel):
         return self
 
 
+class CreatorImportStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uid: InputText
+    group_id: ShortText = ""
+    min_height: int | None = None
+
+    @model_validator(mode="after")
+    def validate_quality(self) -> "CreatorImportStartRequest":
+        if self.min_height is not None and self.min_height not in ALLOWED_MIN_HEIGHTS:
+            allowed = ", ".join(str(item) for item in sorted(ALLOWED_MIN_HEIGHTS))
+            raise ValueError(f"最低清晰度只支持: {allowed}")
+        return self
+
+
 class PreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

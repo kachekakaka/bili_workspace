@@ -7,6 +7,11 @@ import {
   modalActions,
   qualityOptions,
 } from './shared.mjs';
+import {
+  createCreatorImportPoller,
+  creatorImportListMarkup,
+  runCreatorImportAction,
+} from './creator-imports.mjs';
 
 const TASK_STATUSES = new Set(['queued', 'running', 'success', 'skipped', 'failed', 'cancelled']);
 const TASK_SORTS = new Set(['created_at', 'finished_at', 'user', 'status', 'destination']);
@@ -207,6 +212,24 @@ export async function mount(root, context) {
 
   const results = host.querySelector('#enhTaskResults');
   const summaryNode = host.querySelector('#enhTaskSummary');
+  const importRoot = admin ? document.createElement('section') : null;
+  let importJobs = [];
+  if (importRoot) {
+    importRoot.className = 'card creator-import-panel';
+    importRoot.style.marginTop = '16px';
+    results.before(importRoot);
+  }
+  const renderImports = () => {
+    if (!importRoot || !context.isCurrent()) return;
+    importRoot.innerHTML = `<div class="card-head"><div><h2>全量入库作业</h2><p>这里只显示当前服务运行期的后台遍历；已创建的下载任务仍在下方管理。</p></div><span class="badge brand">管理员</span></div>${creatorImportListMarkup(importJobs)}`;
+  };
+  const importPoller = importRoot
+    ? createCreatorImportPoller(context, jobs => {
+      importJobs = jobs;
+      renderImports();
+    })
+    : null;
+  renderImports();
   const visibleTasks = () => filterAndSortTasks(viewState.data, viewState, admin);
   const renderResults = () => {
     if (!context.isCurrent()) return;
@@ -457,6 +480,34 @@ export async function mount(root, context) {
     }
   };
 
+  const handleCreatorImportAction = async button => {
+    const action = button.dataset.creatorImportAction || '';
+    const jobId = button.dataset.creatorImportId || '';
+    if (!action || !jobId) return;
+    if (action === 'cancel') {
+      const accepted = await context.confirm({
+        title: '取消全量入库作业',
+        message: '只停止后续投稿发现和入队；已经创建的下载任务会继续执行。确认取消？',
+        confirmLabel: '取消后续入队',
+        danger: true,
+      });
+      if (!accepted) return;
+    }
+    button.disabled = true;
+    try {
+      const response = await runCreatorImportAction(context, jobId, action);
+      const job = response.data;
+      importJobs = [job, ...importJobs.filter(item => String(item.id) !== String(job?.id))];
+      renderImports();
+      context.toast.show(action === 'cancel' ? '已请求停止后续入队' : '作业已重新进入等待队列', 'good');
+      await importPoller?.refresh({ quiet: true });
+    } catch (error) {
+      if (error?.name !== 'AbortError') context.toast.show(error.message, 'bad');
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  };
+
   host.addEventListener('change', event => {
     const input = event.target.closest('[data-task-select]');
     if (!input) return;
@@ -468,7 +519,9 @@ export async function mount(root, context) {
   host.addEventListener('click', async event => {
     const button = event.target.closest('button');
     if (!button) return;
-    if (button.id === 'enhTaskSelectVisible') {
+    if (button.dataset.creatorImportAction !== undefined) {
+      await handleCreatorImportAction(button);
+    } else if (button.id === 'enhTaskSelectVisible') {
       for (const task of visibleTasks()) viewState.selected.add(task.id);
       renderResults();
     } else if (button.id === 'enhTaskSelectFailed') {
@@ -529,11 +582,13 @@ export async function mount(root, context) {
   }, { immediate: true });
 
   await reload();
+  void importPoller?.refresh();
   return Object.freeze({
     dispose: once(() => {
       unsubscribeTasks();
       unsubscribeConnection();
       releaseStream();
+      importPoller?.stop();
     }),
   });
 }
