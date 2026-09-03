@@ -17,7 +17,8 @@
 - “确认”“接受”“按推荐”“就这样”等回复只确认当前问题明确展示的语义结果；当前问题未明确询问写入、待办、方案、状态转换或实施时，不产生相应动作授权，较早授权不得扩展到后来需求。
 - commit（含 amend）、push、PR、发布、安装，以及会覆盖工作区、丢失修改、改写历史或改变远端状态的 Git 操作必须明确授权。commit 授权包含确定变更的必要暂存；未请求 Git 交付时不主动改变索引、分支或历史。
 - 需要认证或访问私有资源、上传本地或非公开内容、改变外部状态、产生费用、明显大规模或长时间下载，以及产品进程、真实数据、全量测试和正式认证必须明确授权。
-- `T-BILIBILI-LIVE` 是上述规则的唯一持续窄例外：维护者明确要求在某一凭据源数据根创建有效 `.bili-workspace-live-test.json` 后，该标记在被删除前持续授权按 [T-BILIBILI-LIVE 合同](SoftwareTesting/bilibili_live/README.md)读取固定标记和 `config/bbdown/BBDown.data`、复制到新建隔离 run、访问真实 Bilibili、启动该 run 内产品并尝试固定 8 项有界下载。运行器不得创建标记、扫描数据根或读取其他真实文件；候选构建、完整测试、fixture 写回、仓库外删除及 Git 操作仍须分别明确授权。
+- `T-BILIBILI-LIVE` 是上述规则的唯一持续窄例外：维护者明确要求创建且仍有效的 Git common directory 本地文件 `bili-workspace/automatic-live-test.json`，持续授权当前仓库按 [T-BILIBILI-LIVE 合同](SoftwareTesting/bilibili_live/README.md)使用其中绑定的凭据源和隔离测试根，无需逐任务重复请求真实环境权限。该文件只对共享同一 Git common directory 的 worktree 生效，不随 clone、commit 或 push 传播。
+- 数据根内 `.bili-workspace-live-test.json` 只提供固定 UID/BV 场景，不单独构成仓库长期授权。自动入口只能读取仓库本地授权中绑定的数据根身份标记、该场景文件和 `config/bbdown/BBDown.data`，不得创建场景文件、扫描数据根或读取其他真实文件；候选构建、完整测试、fixture 写回、仓库外删除及 Git 操作仍须分别明确授权。
 - 普通验证是默认验证层级，只运行能够证明当前影响范围的最小测试集合；全量测试与正式认证仍须明确授权。
 - 已确认方案列明的仓库内精确删除，以及本任务创建且所有权可验证的精确临时产物清理，随实施授权覆盖；方案未列明、超出确定范围、使用宽泛匹配或未解析路径、仓库外非任务产物、所有权不明或涉及真实数据的删除必须取得精确授权。
 - 项目停止未来正式发布，不创建新的版本 tag、GitHub Release 或 GHCR 正式镜像；恢复发布能力必须先形成新的显式决策并另行取得修改与发布授权。

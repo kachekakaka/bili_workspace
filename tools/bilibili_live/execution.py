@@ -229,7 +229,7 @@ def execute_bounded_download(
     progress_callback: Callable[[dict[str, int]], None] | None = None,
 ) -> DownloadResult:
     if len(items) != 8:
-        raise LiveFailedError("有界下载必须恰好接收标记中的 8 个作品")
+        raise LiveFailedError("有界下载必须恰好接收固定场景中的 8 个作品")
     if shutil.disk_usage(run_root).free < MIN_DOWNLOAD_FREE_BYTES:
         raise LiveBlockedError("真链运行开始下载前可用空间少于 5 GiB")
     prepared, predicted_total = _prepare_bounded_items(

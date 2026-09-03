@@ -1,7 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$DataRoot,
+    [string]$DataRoot = '',
 
     [Parameter(Mandatory = $true)]
     [ValidateSet('discovery', 'download', 'browser', 'playback')]
@@ -21,8 +20,11 @@ if ($PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion.Major -lt
     throw 'T-BILIBILI-LIVE 只支持 PATH 中的 PowerShell 7。'
 }
 
-if ([string]::IsNullOrWhiteSpace($env:BILI_TEST_ROOT)) {
-    throw '运行前必须显式设置绝对 BILI_TEST_ROOT；不会回退到系统临时目录。'
+if (
+    -not [string]::IsNullOrWhiteSpace($DataRoot) -and
+    [string]::IsNullOrWhiteSpace($env:BILI_TEST_ROOT)
+) {
+    throw '显式 DataRoot 模式必须设置绝对 BILI_TEST_ROOT；不会回退到系统临时目录。'
 }
 
 $workspaceRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
@@ -37,13 +39,15 @@ $arguments = @(
     '-m',
     'tools.bilibili_live',
     'run',
-    '--data-root',
-    $DataRoot,
     '--impact',
     $Impact,
     '--target',
     $Target
 )
+
+if (-not [string]::IsNullOrWhiteSpace($DataRoot)) {
+    $arguments += @('--data-root', $DataRoot)
+}
 
 if ($Target -eq 'candidate') {
     if ([string]::IsNullOrWhiteSpace($CandidateRecord)) {

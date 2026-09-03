@@ -126,7 +126,7 @@ def discover_marker_targets(
                     fresh=True,
                 )
                 if str(profile.get("uid") or "") != marker.creator_uid:
-                    raise LiveFailedError("真实 UP 主资料 UID 与授权标记不一致")
+                    raise LiveFailedError("真实 UP 主资料 UID 与固定场景不一致")
                 profile_name = str(profile.get("name") or "").strip()
                 if not profile_name:
                     raise LiveBlockedError("真实 UP 主资料当前缺少可搜索名称")
@@ -186,7 +186,7 @@ def discover_marker_targets(
                         break
                     page += 1
                 if remaining:
-                    raise LiveBlockedError("标记中的作品不再出现在指定 UP 主投稿中")
+                    raise LiveBlockedError("固定场景中的作品不再出现在指定 UP 主投稿中")
 
                 cover_client = httpx.Client(timeout=30, trust_env=False, follow_redirects=False)
                 try:

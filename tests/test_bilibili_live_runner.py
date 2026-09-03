@@ -290,5 +290,5 @@ def test_unexpected_error_still_detects_credential_source_change(
     assert run is not None
     summary = read_summary(run, workspace)
     assert summary["status"] == "failed"
-    assert summary["reason"] == "凭据源授权文件在运行期间发生变化"
+    assert summary["reason"] == "凭据源固定输入在运行期间发生变化"
     assert "private unexpected detail" not in json.dumps(summary, ensure_ascii=False)

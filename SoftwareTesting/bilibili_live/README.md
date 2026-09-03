@@ -4,13 +4,22 @@
 
 ## 授权和准备
 
-运行器只接受显式 `-DataRoot`。该凭据源根必须已有用户明确要求创建的 `.bili-workspace-live-test.json`，以及普通文件 `config/bbdown/BBDown.data`；运行器不会创建标记、发现数据根或读取其他文件。标记格式见[字段契约](../../docs/字段契约.md#t-bilibili-live-短期字段)。
+仓库长期真测授权位于当前 Git common directory 的 `bili-workspace/automatic-live-test.json`。它严格绑定 `project_id=bili_workspace`、凭据源和隔离测试根；同仓库 worktree 共享，clone、commit 和 push 不携带。只有维护者明确要求创建该文件才形成持续授权，删除文件即撤销。格式见[字段契约](../../docs/字段契约.md#t-bilibili-live-短期字段)。
 
-调用前还必须显式设置绝对 `BILI_TEST_ROOT`。它应是专用仓库外目录，不得位于 `%LOCALAPPDATA%`，也不得与仓库或凭据源互相包含。每次运行会在其下新增唯一 run；产品、工具与浏览器子进程的 `HOME`、`USERPROFILE`、`LOCALAPPDATA`、`APPDATA`、临时目录和 .NET 缓存均重定向到该 run。非通过结果会保留整个 run，成功结果只删除其中全部 `BBDown.data` 副本。
+授权绑定的凭据源还必须已有 `.bili-workspace-data-root.json`、普通文件 `config/bbdown/BBDown.data`，以及提供固定 UID/八个 BV 的 `.bili-workspace-live-test.json` 场景文件。场景文件不再单独代表仓库授权；运行器不会创建它、扫描数据根或读取其他业务文件。自动入口从仓库本地授权取得两个根，显式入口仍要求调用者同时提供 `-DataRoot` 和绝对 `BILI_TEST_ROOT`。
+
+隔离测试根必须是专用仓库外目录，不得位于 `%LOCALAPPDATA%`，也不得与仓库或凭据源互相包含。每次运行会在其下新增唯一 run；产品、工具与浏览器子进程的 `HOME`、`USERPROFILE`、`LOCALAPPDATA`、`APPDATA`、临时目录和 .NET 缓存均重定向到该 run。非通过结果会保留整个 run，成功结果只删除其中全部 `BBDown.data` 副本。
 
 ## 入口和影响域
 
-从 PATH 中的 PowerShell 7 运行：
+当前仓库已经具有本地授权时，从 PATH 中的 PowerShell 7 直接运行：
+
+```powershell
+pwsh -File scripts/windows/run-bilibili-live.ps1 `
+  -Impact discovery
+```
+
+需要绕过仓库本地默认值进行一次显式运行时，仍可使用：
 
 ```powershell
 $env:BILI_TEST_ROOT = 'E:\bili-workspace-live-runs'
@@ -40,7 +49,7 @@ pwsh -File scripts/windows/run-bilibili-live.ps1 `
 
 ## 上限、结果和清理
 
-下载固定并发 1，最多尝试标记中的 8 项；总运行 15 分钟、run 增长 2 GiB、开始下载前至少 5 GiB 可用空间。提交前会依据 BBDown 返回的共同画质、大小或码率，在剩余预算内为每项选择明确档位；完成后核对实际画质。上限到达时只通过 API 取消本次任务并等待本次拥有的进程；已有至少一项完整成功时可以通过，否则为 `inconclusive`。真实产品合同错误为 `failed`，登录、网络、风控、工具、磁盘或浏览器环境不足为 `blocked`。
+下载固定并发 1，最多尝试固定场景中的 8 项；总运行 15 分钟、run 增长 2 GiB、开始下载前至少 5 GiB 可用空间。提交前会依据 BBDown 返回的共同画质、大小或码率，在剩余预算内为每项选择明确档位；完成后核对实际画质。上限到达时只通过 API 取消本次任务并等待本次拥有的进程；已有至少一项完整成功时可以通过，否则为 `inconclusive`。真实产品合同错误为 `failed`，登录、网络、风控、工具、磁盘或浏览器环境不足为 `blocked`。
 
 只读列举满 72 小时的自有真链 run：
 
@@ -61,4 +70,4 @@ pwsh -File scripts/windows/run-bilibili-live.ps1 `
 
 ## 真实响应边界
 
-允许保留公开的名称搜索、UP 主资料、投稿和作品详情 JSON、下载结果与进程日志。禁止记录请求 header、Cookie、二维码载荷、原始 `/nav` 账号响应、WBI 签名查询值、响应 header、HAR 或完整网络流量。结构候选会替换全部真实值；若公开响应把真实动态值用作 JSON 字段名，则安全停止而不生成可写回候选。原始响应、授权标记和整个真链 run 均不得进入 Git。
+允许保留公开的名称搜索、UP 主资料、投稿和作品详情 JSON、下载结果与进程日志。禁止记录请求 header、Cookie、二维码载荷、原始 `/nav` 账号响应、WBI 签名查询值、响应 header、HAR 或完整网络流量。结构候选会替换全部真实值；若公开响应把真实动态值用作 JSON 字段名，则安全停止而不生成可写回候选。原始响应、固定场景和整个真链 run 均不得进入 Git；仓库本地授权只保存在 Git common directory。

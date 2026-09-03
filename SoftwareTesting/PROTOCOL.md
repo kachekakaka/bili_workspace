@@ -25,7 +25,7 @@
 
 Registry 只登记真正独立的套件、触发条件和入口，不登记 CI 并行阶段或每次运行。T-DOC 与 T-PROJECT 是 `full`；T-ARCHIVE、T-DOCKER、T-LAUNCHER 和 T-BILIBILI-LIVE 在其输入受影响时选择。T-PROJECT 不重复运行 T-DOC，Playwright 是其 full 的必需阶段。
 
-`T-BILIBILI-LIVE` 在有效授权标记和安全本地环境存在时先运行快速运行器检查，再运行本次影响域的真实成功链，最后才运行相关模拟测试。真实链的 `failed`、`blocked` 或 `inconclusive` 会停止后续昂贵阶段；外部登录、网络、风控、浏览器、工具或磁盘不足为 `blocked`，产品合同错误为 `failed`，兼容结构漂移或上限前无下载完成为 `inconclusive`。普通 pytest、T-PROJECT 与 CI 永不自动选择它。
+`T-BILIBILI-LIVE` 在有效仓库本地授权（或逐次显式授权）、固定场景和安全本地环境存在时先运行快速运行器检查，再运行本次影响域的真实成功链，最后才运行相关模拟测试。真实链的 `failed`、`blocked` 或 `inconclusive` 会停止后续昂贵阶段；外部登录、网络、风控、浏览器、工具或磁盘不足为 `blocked`，产品合同错误为 `failed`，兼容结构漂移或上限前无下载完成为 `inconclusive`。普通 pytest、T-PROJECT 与 CI 永不自动选择它。
 
 - `passed`：所有必需阶段均执行并得到可判定成功结果。
 - `failed`：测试已进入可判定阶段，断言、收集、静态检查或产品行为失败。

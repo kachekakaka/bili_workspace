@@ -149,33 +149,33 @@ def load_live_marker(credential_source: Path | str) -> LiveMarker:
     source = resolve_credential_source(credential_source)
     marker_path = _regular_file(
         source / LIVE_MARKER_NAME,
-        "真链授权标记",
+        "真链固定场景",
         max_bytes=MAX_MARKER_BYTES,
     )
     try:
         raw = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LiveBlockedError("真链授权标记不是有效 UTF-8 JSON") from exc
+        raise LiveBlockedError("真链固定场景不是有效 UTF-8 JSON") from exc
     allowed = {"schema_version", "kind", "creator_uid", "download_bvids"}
     if not isinstance(raw, dict) or set(raw) != allowed:
-        raise LiveBlockedError("真链授权标记字段集合无效")
+        raise LiveBlockedError("真链固定场景字段集合无效")
     if (
         isinstance(raw.get("schema_version"), bool)
         or raw.get("schema_version") != 1
         or raw.get("kind") != LIVE_MARKER_KIND
     ):
-        raise LiveBlockedError("真链授权标记 schema 或 kind 无效")
+        raise LiveBlockedError("真链固定场景 schema 或 kind 无效")
     uid = raw.get("creator_uid")
     if not isinstance(uid, str) or not uid.isdigit() or int(uid) <= 0:
-        raise LiveBlockedError("真链授权标记 creator_uid 必须是正整数字符串")
+        raise LiveBlockedError("真链固定场景 creator_uid 必须是正整数字符串")
     canonical_uid = str(int(uid))
     values = raw.get("download_bvids")
     if not isinstance(values, list) or len(values) != 8:
-        raise LiveBlockedError("真链授权标记必须恰好包含 8 个 BV")
+        raise LiveBlockedError("真链固定场景必须恰好包含 8 个 BV")
     if any(not isinstance(value, str) or not _BVID_RE.fullmatch(value) for value in values):
-        raise LiveBlockedError("真链授权标记包含非法 BV")
+        raise LiveBlockedError("真链固定场景包含非法 BV")
     if len(set(values)) != len(values):
-        raise LiveBlockedError("真链授权标记包含重复 BV")
+        raise LiveBlockedError("真链固定场景包含重复 BV")
     return LiveMarker(canonical_uid, tuple(values))
 
 

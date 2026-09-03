@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+from tools.bilibili_live.authorization import load_repository_live_authorization
 from tools.bilibili_live.contracts import LiveTestError, read_summary
 from tools.bilibili_live.maintenance import (
     cleanup_stale_run,
@@ -23,7 +25,11 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run = subparsers.add_parser("run", help="运行真实 Bilibili 影响域验证")
-    run.add_argument("--data-root", type=Path, required=True)
+    run.add_argument(
+        "--data-root",
+        type=Path,
+        help="显式凭据源；省略时读取当前仓库 Git common directory 中的长期授权",
+    )
     run.add_argument("--impact", choices=sorted(VALID_IMPACTS), required=True)
     run.add_argument("--target", choices=sorted(VALID_TARGETS), default="source")
     run.add_argument("--candidate-record", type=Path)
@@ -52,13 +58,23 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("source 目标不接受 --candidate-record")
             if arguments.target == "candidate" and arguments.tool_provider_record is not None:
                 raise ValueError("candidate 目标不接受 --tool-provider-record")
+            selected_environment = None
+            credential_source = arguments.data_root
+            if credential_source is None:
+                authorization = load_repository_live_authorization(ROOT)
+                credential_source = authorization.credential_source
+                selected_environment = dict(os.environ)
+                selected_environment["BILI_TEST_ROOT"] = str(
+                    authorization.test_root
+                )
             code, run = run_live_test(
                 workspace_root=ROOT,
-                credential_source=arguments.data_root,
+                credential_source=credential_source,
                 impact=arguments.impact,
                 target=arguments.target,
                 candidate_record=arguments.candidate_record,
                 tool_provider_record=arguments.tool_provider_record,
+                environ=selected_environment,
             )
             if run is not None:
                 print(f"真链运行目录：{run}")

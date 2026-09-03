@@ -296,7 +296,7 @@ def run_live_test(
     marker_path = source / LIVE_MARKER_NAME
     marker_snapshot = snapshot_file(
         marker_path,
-        label="真链授权标记",
+        label="真链固定场景",
         max_bytes=MAX_MARKER_BYTES,
     )
     credential_snapshot = None
@@ -334,7 +334,7 @@ def run_live_test(
             assert_source_unchanged(
                 marker_path,
                 marker_snapshot,
-                label="真链授权标记",
+                label="真链固定场景",
                 max_bytes=MAX_MARKER_BYTES,
             )
             assert_source_unchanged(credential, credential_snapshot)
@@ -368,7 +368,7 @@ def run_live_test(
         assert_source_unchanged(
             marker_path,
             marker_snapshot,
-            label="真链授权标记",
+            label="真链固定场景",
             max_bytes=MAX_MARKER_BYTES,
         )
         assert_source_unchanged(credential, credential_snapshot)
@@ -401,11 +401,11 @@ def run_live_test(
                 assert_source_unchanged(
                     marker_path,
                     marker_snapshot,
-                    label="真链授权标记",
+                    label="真链固定场景",
                     max_bytes=MAX_MARKER_BYTES,
                 )
             except LiveTestError:
-                failure = LiveFailedError("凭据源授权文件在运行期间发生变化")
+                failure = LiveFailedError("凭据源固定输入在运行期间发生变化")
         _finalize_summary(
             run=run,
             workspace=workspace,
@@ -426,13 +426,13 @@ def run_live_test(
                 assert_source_unchanged(
                     marker_path,
                     marker_snapshot,
-                    label="真链授权标记",
+                    label="真链固定场景",
                     max_bytes=MAX_MARKER_BYTES,
                 )
             except LiveTestError:
                 status = "failed"
                 error_category = "LiveFailedError"
-                reason = "凭据源授权文件在运行期间发生变化"
+                reason = "凭据源固定输入在运行期间发生变化"
         _finalize_summary(
             run=run,
             workspace=workspace,
