@@ -22,6 +22,10 @@ Thumbs.db
 config.json.bak
 bootstrap-token.txt
 **/BBDown.data
+**/.bili-workspace-live-test.json
+**/.bili-workspace-test-run.json
+**/raw-public/
+**/fixture-candidate/
 
 # Runtime state
 downloads/*

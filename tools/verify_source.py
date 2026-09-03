@@ -14,6 +14,8 @@ MAX_TRACKED_LAUNCHER = 100 * 1024 * 1024
 FORBIDDEN_NAMES = {
     ".env",
     "BBDown.data",
+    ".bili-workspace-live-test.json",
+    ".bili-workspace-test-run.json",
     "bootstrap-token.txt",
     "RELEASE_MANIFEST.sha256",
 }
@@ -26,6 +28,8 @@ FORBIDDEN_DIRS = {
     ".mypy_cache",
     ".ruff_cache",
     "bootstrap",
+    "fixture-candidate",
+    "raw-public",
     "wheelhouse",
 }
 FORBIDDEN_RELATIVE = {

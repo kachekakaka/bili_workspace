@@ -8,4 +8,5 @@
 - [T-PROJECT 项目完整自检](project/README.md)
 - [T-DOCKER Docker 镜像构建验证](docker/README.md)
 - [T-LAUNCHER Windows 启动器测试](launcher/README.md)
+- [T-BILIBILI-LIVE 真实 Bilibili 影响域验证](bilibili_live/README.md)
 - [历史测试文档归档](../archive/SoftwareTesting/README.md)

@@ -172,6 +172,7 @@ _LAUNCHER_MODULE_NAMES = {
     "constants.py",
     "docker_jobs.py",
     "gui.py",
+    "live_session.py",
     "paths.py",
     "ports.py",
     "resources.py",

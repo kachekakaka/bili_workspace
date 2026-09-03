@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing
+import os
 import re
 import sys
 from pathlib import Path, PurePosixPath
@@ -37,6 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     operation.add_argument("--self-check", action="store_true", help=argparse.SUPPRESS)
     operation.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     operation.add_argument("--runtime-smoke", action="store_true", help=argparse.SUPPRESS)
+    operation.add_argument("--live-session", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-check-report", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--session-journal", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--stop-file", type=Path, help=argparse.SUPPRESS)
@@ -44,6 +46,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--expected-build-id", help=argparse.SUPPRESS)
     parser.add_argument("--runtime-smoke-report", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--live-session-ready", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--live-session-result", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--live-session-stop", type=Path, help=argparse.SUPPRESS)
     return parser
 
 
@@ -330,11 +335,20 @@ def main(argv: list[str] | None = None) -> int:
         "expected-build-id": arguments.expected_build_id,
         "runtime-smoke-report": arguments.runtime_smoke_report,
     }
+    live_internal = {
+        "live-session-ready": arguments.live_session_ready,
+        "live-session-result": arguments.live_session_result,
+        "live-session-stop": arguments.live_session_stop,
+    }
     self_check_internal = {"self-check-report": arguments.self_check_report}
     if arguments.self_check:
         unexpected = [
             name
-            for name, value in {**backend_internal, **runtime_internal}.items()
+            for name, value in {
+                **backend_internal,
+                **runtime_internal,
+                **live_internal,
+            }.items()
             if value is not None
         ]
         if unexpected:
@@ -374,7 +388,11 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.runtime_smoke:
         unexpected = [
             name
-            for name, value in {**backend_internal, **self_check_internal}.items()
+            for name, value in {
+                **backend_internal,
+                **self_check_internal,
+                **live_internal,
+            }.items()
             if value is not None
         ]
         if unexpected:
@@ -420,10 +438,83 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         write_report(safe_report, result)
         return 0
+    if arguments.live_session:
+        unexpected = [
+            name
+            for name, value in {
+                **backend_internal,
+                **self_check_internal,
+                "runtime-smoke-report": arguments.runtime_smoke_report,
+            }.items()
+            if value is not None
+        ]
+        if unexpected:
+            raise RuntimeError(
+                "候选 live-session 不接受其他内部参数：" + ", ".join(unexpected)
+            )
+        required = {
+            "data-root": arguments.data_root,
+            "expected-build-id": arguments.expected_build_id,
+            **live_internal,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise RuntimeError("候选 live-session 缺少参数：" + ", ".join(missing))
+        from .live_session import (
+            live_session_token_sha256,
+            run_live_session,
+            validate_live_session_inputs,
+            write_live_record,
+        )
+
+        assert arguments.data_root is not None
+        assert arguments.expected_build_id is not None
+        assert arguments.live_session_ready is not None
+        assert arguments.live_session_result is not None
+        assert arguments.live_session_stop is not None
+        session_token = os.environ.pop("BILI_LIVE_SESSION_TOKEN", "")
+        try:
+            inputs = validate_live_session_inputs(
+                data_root=arguments.data_root,
+                ready_path=arguments.live_session_ready,
+                result_path=arguments.live_session_result,
+                stop_path=arguments.live_session_stop,
+            )
+        except Exception:
+            return 1
+        try:
+            run_live_session(
+                data_root=inputs.data_root,
+                expected_build_id=arguments.expected_build_id,
+                ready_path=inputs.ready_path,
+                result_path=inputs.result_path,
+                stop_path=inputs.stop_path,
+                session_token=session_token,
+            )
+        except Exception as exc:
+            try:
+                write_live_record(
+                    inputs.result_path,
+                    {
+                        "schema_version": 1,
+                        "kind": "bili-workspace-live-candidate-result",
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "token_sha256": live_session_token_sha256(session_token),
+                    },
+                )
+            except Exception:
+                pass
+            return 1
+        return 0
     if arguments.run_backend:
         unexpected = [
             name
-            for name, value in {**runtime_internal, **self_check_internal}.items()
+            for name, value in {
+                **runtime_internal,
+                **self_check_internal,
+                **live_internal,
+            }.items()
             if value is not None
         ]
         if unexpected:
@@ -440,7 +531,12 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             record_backend_child_failure(arguments.session_journal, exc)
             return 1
-    unused_internal = {**backend_internal, **runtime_internal, **self_check_internal}
+    unused_internal = {
+        **backend_internal,
+        **runtime_internal,
+        **self_check_internal,
+        **live_internal,
+    }
     unexpected = [name for name, value in unused_internal.items() if value is not None]
     if unexpected:
         raise RuntimeError("内部参数缺少对应操作：" + ", ".join(unexpected))
